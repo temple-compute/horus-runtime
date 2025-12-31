@@ -1,0 +1,266 @@
+name: Python CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  lint-and-test:
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    permissions:
+      pull-requests: write
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check code formatting with Black
+        id: black
+        run: |
+          echo "## Black Code Formatting" >> results.md
+          if make black-check 2>&1 | tee black_output.txt; then
+            echo "✅ Code is properly formatted" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Code formatting issues found:" >> results.md
+            echo '```diff' >> results.md
+            cat black_output.txt >> results.md
+            echo '```' >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Check import sorting with isort
+        id: isort
+        run: |
+          echo "" >> results.md
+          echo "## Import Sorting (isort)" >> results.md
+          if make isort-check 2>&1 | tee isort_output.txt; then
+            echo "✅ Imports are properly sorted" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Import sorting issues found:" >> results.md
+            echo '```diff' >> results.md
+            cat isort_output.txt >> results.md
+            echo '```' >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Lint with Pylint
+        id: pylint
+        run: |
+          echo "" >> results.md
+          echo "## Pylint Analysis" >> results.md
+          if make pylint-check 2>&1 | tee pylint_output.txt; then
+            echo "✅ No pylint issues found" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Pylint issues found:" >> results.md
+            echo '```' >> results.md
+            tail -20 pylint_output.txt >> results.md
+            echo '```' >> results.md
+            # Extract rating if available
+            if grep -E "Your code has been rated at" pylint_output.txt; then
+              echo "" >> results.md
+              grep -E "Your code has been rated at" pylint_output.txt >> results.md
+            fi
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Lint with Flake8
+        id: flake8
+        run: |
+          echo "" >> results.md
+          echo "## Flake8 Analysis" >> results.md
+          if make flake8-check 2>&1 | tee flake8_output.txt; then
+            if [ ! -s flake8_output.txt ]; then
+              echo "✅ No flake8 issues found" >> results.md
+              echo "status=passed" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Flake8 issues found:" >> results.md
+              echo '```' >> results.md
+              cat flake8_output.txt >> results.md
+              echo '```' >> results.md
+              echo "status=failed" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Flake8 analysis failed" >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Type check with Pyright
+        id: pyright
+        run: |
+          echo "" >> results.md
+          echo "## Type Checking (Pyright)" >> results.md
+          if make type-check 2>&1 | tee pyright_output.txt; then
+            echo "✅ No type checking issues found" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Type checking issues found:" >> results.md
+            echo '```' >> results.md
+            cat pyright_output.txt >> results.md
+            echo '```' >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Run tests with coverage
+        id: tests
+        run: |
+          echo "" >> results.md
+          echo "## Test Results" >> results.md
+          if make test 2>&1 | tee test_output.txt; then
+            echo "✅ All tests passed" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Some tests failed" >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+          # Add test summary
+          if [ -f test_output.txt ]; then
+            echo '```' >> results.md
+            grep -E "(FAILED|ERROR|passed|failed|===)" test_output.txt | tail -10 >> results.md
+            echo '```' >> results.md
+          fi
+
+          # Add coverage summary
+          if grep -q "TOTAL" test_output.txt; then
+            echo "" >> results.md
+            echo "**Coverage Summary:**" >> results.md
+            echo '```' >> results.md
+            grep "TOTAL" test_output.txt >> results.md
+            echo '```' >> results.md
+          fi
+        continue-on-error: true
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-html-report-python-${{ matrix.python-version }}
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Comment PR with code quality results
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the results file
+            let resultsContent = '';
+            try {
+              resultsContent = fs.readFileSync('results.md', 'utf8');
+            } catch (error) {
+              resultsContent = '❌ Unable to read code quality results';
+            }
+
+            // Create summary header
+            const blackStatus = '${{ steps.black.outputs.status }}';
+            const isortStatus = '${{ steps.isort.outputs.status }}';
+            const pylintStatus = '${{ steps.pylint.outputs.status }}';
+            const flake8Status = '${{ steps.flake8.outputs.status }}';
+            const pyrightStatus = '${{ steps.pyright.outputs.status }}';
+            const testsStatus = '${{ steps.tests.outputs.status }}';
+
+            const getStatusIcon = (status) => status === 'passed' ? '✅' : '❌';
+
+            const summary = `
+            ## 📊 Code Quality Report
+
+            | Tool | Status |
+            |------|--------|
+            | Black (Formatting) | ${getStatusIcon(blackStatus)} ${blackStatus || 'unknown'} |
+            | isort (Import Sorting) | ${getStatusIcon(isortStatus)} ${isortStatus || 'unknown'} |
+            | Pylint (Linting) | ${getStatusIcon(pylintStatus)} ${pylintStatus || 'unknown'} |
+            | Flake8 (Style Guide) | ${getStatusIcon(flake8Status)} ${flake8Status || 'unknown'} |
+            | Pyright (Type Checking) | ${getStatusIcon(pyrightStatus)} ${pyrightStatus || 'unknown'} |
+            | Tests | ${getStatusIcon(testsStatus)} ${testsStatus || 'unknown'} |
+
+            ---
+
+            ${resultsContent}
+
+            <details>
+            <summary>💡 How to fix these issues</summary>
+
+            **Formatting Issues (Black):**
+            \`\`\`bash
+            black .
+            \`\`\`
+
+            **Import Sorting (isort):**
+            \`\`\`bash
+            isort .
+            \`\`\`
+
+            **Linting Issues:**
+            - Review Pylint suggestions and update code accordingly
+            - Check Flake8 output for style guide violations
+
+            **Type Issues:**
+            - Add proper type hints where indicated by Pyright
+            - Fix type inconsistencies
+
+            **Test Issues:**
+            \`\`\`bash
+            pytest -v  # Run tests with verbose output
+            pytest tests/unit  # Run only unit tests
+            pytest tests/integration  # Run only integration tests
+            \`\`\`
+
+            </details>
+            `;
+
+            // Check for existing comments
+            const comments = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            const botComment = comments.data.find(
+              comment => comment.user.type === 'Bot' && comment.body.includes('📊 Code Quality Report')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                comment_id: botComment.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }

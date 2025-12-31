@@ -1,0 +1,56 @@
+[tool.black]
+line-length = 79
+target-version = ['py39','py310','py311','py312','py313','py314']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.git
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 79
+multi_line_output = 3
+include_trailing_comma = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = """
+    --verbose
+    --cov=src
+    --cov-report=html
+    --cov-report=term-missing
+    --cov-fail-under=80
+"""
+
+[tool.pylint.messages_control]
+max-line-length = 79
+disable = [
+    "E0401", # Unable to import 'foo'. Pylance is who reports missing imports
+]
+
+[tool.pyright]
+include = ["."]
+exclude = ["**/__pycache__", "build", "dist"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+
+[tool.flake8]
+max-line-length = 79
+extend-ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+]
