@@ -16,7 +16,7 @@ horus-runtime is the command-line engine for the Horus platform, a free, multi-p
 
 ## Components
 
-![horus-runtime components](https://i.ibb.co/m5J0j2ZJ/531204675-95555200-e1ea-4684-9922-949cb34742e2.png)
+<img width="3640" height="4052" alt="horus-runtime components" src="https://github.com/user-attachments/assets/9195410f-74b3-44d8-bd8a-99a5f8124b03" />
 
 ## Development
 
@@ -56,8 +56,8 @@ See `make help` for all available commands.
 
 ## Funding & Credits
 
-- Developed by the [Barcelona Supercomputing Center](https://www.bsc.es/)
-- © BSC. All rights reserved.
+- Developed by [@chdominguez](https://github.com/chdominguez)
+- © All rights reserved.
 
 ## License
 
