@@ -56,7 +56,7 @@ pylint-check:
 	$(PYLINT_CMD)
 
 flake8-check:
-	$(FLAKE8_CMD)
+	@$(FLAKE8_CMD)
 
 lint:
 	$(BLACK_CHECK_CMD)
