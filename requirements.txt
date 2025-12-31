@@ -1,0 +1,10 @@
+# Base requirements for all Python projects
+black
+isort
+pylint
+flake8
+pytest
+pytest-cov
+pyright
+mypy
+flake8-pyproject

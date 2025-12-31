@@ -1,0 +1,8 @@
+# Source - https://stackoverflow.com/a/75459447
+# Posted by tmt, modified by community. See post 'Timeline' for change history
+# Retrieved 2025-12-31, License - CC BY-SA 4.0
+
+[report]
+
+exclude_lines =
+    if __name__\s*==\s*['"]__main__['"]\s*:
