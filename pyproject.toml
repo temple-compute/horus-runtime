@@ -1,3 +1,13 @@
+[project]
+name = "horus-runtime"
+description = "The horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
+version = "0.0.1"
+license = {file = "LICENSE"}
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
+    "Programming Language :: Python :: 3",
+]
+
 [tool.black]
 line-length = 79
 target-version = ['py39','py310','py311','py312','py313','py314']

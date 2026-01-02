@@ -8,3 +8,5 @@ pytest-cov
 pyright
 mypy
 flake8-pyproject
+pre-commit
+licenseheaders
