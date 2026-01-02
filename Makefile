@@ -9,7 +9,7 @@ FLAKE8_CMD = flake8 src/
 PYRIGHT_CMD = pyright
 BLACK_FORMAT_CMD = black .
 ISORT_FORMAT_CMD = isort .
-ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -y 2026 -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es
+ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -cy -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es
 
 .PHONY: install test lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers
 
