@@ -9,8 +9,9 @@ FLAKE8_CMD = flake8 src/
 PYRIGHT_CMD = pyright
 BLACK_FORMAT_CMD = black .
 ISORT_FORMAT_CMD = isort .
+ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -y 2026 -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es 
 
-.PHONY: install test lint format type-check clean help black-check isort-check pylint-check flake8-check
+.PHONY: install test lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers
 
 help:
 	@echo "Available commands:"
@@ -26,6 +27,7 @@ help:
 	@echo "  flake8-check Check with flake8 (used by CI)"
 	@echo "  format       Format code with black and isort"
 	@echo "  type-check   Run type checking"
+	@echo "  add-license-headers  Add license headers to source files"
 	@echo "  clean        Remove cache files"
 
 install:
@@ -71,6 +73,10 @@ format:
 
 type-check:
 	$(PYRIGHT_CMD)
+
+add-license-headers:
+	$(ADD_LICENSE_HEADERS_CMD) -d src
+	$(ADD_LICENSE_HEADERS_CMD) -d tests
 
 clean:
 	find . -type d -name "__pycache__" -delete

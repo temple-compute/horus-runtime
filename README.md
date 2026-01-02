@@ -61,4 +61,7 @@ See `make help` for all available commands.
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+`horus-runtime` is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See the [LICENSE](LICENSE) file for details.
+
+For commercial licensing and support, please contact us at [cdominguezdalmases@gmail.com](mailto://cdominguezdalmases@gmail.com)

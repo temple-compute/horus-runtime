@@ -126,6 +126,46 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Check license headers
+        id: license_headers
+        run: |
+          echo "" >> results.md
+          echo "## License Header Check" >> results.md
+
+          # Check if all Python files have license headers
+          missing_headers=()
+
+          # Function to check if file has license header
+          check_license_header() {
+            local file="$1"
+            if ! head -5 "$file" | grep -q "Copyright (C)"; then
+              missing_headers+=("$file")
+              return 1
+            fi
+            return 0
+          }
+
+          # Check all Python files in src and tests
+          while IFS= read -r -d '' file; do
+            check_license_header "$file" || true
+          done < <(find src tests -name "*.py" -print0 2>/dev/null)
+
+          if [ ${#missing_headers[@]} -eq 0 ]; then
+            echo "✅ All Python files have proper license headers" >> results.md
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ The following Python files are missing license headers:" >> results.md
+            echo '```' >> results.md
+            for file in "${missing_headers[@]}"; do
+              echo "- $file" >> results.md
+            done
+            echo '```' >> results.md
+            echo "" >> results.md
+            echo "**Fix:** Run \`make add-license-headers\` to add missing headers" >> results.md
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
       - name: Run tests with coverage
         id: tests
         run: |
@@ -185,6 +225,7 @@ jobs:
             const pylintStatus = '${{ steps.pylint.outputs.status }}';
             const flake8Status = '${{ steps.flake8.outputs.status }}';
             const pyrightStatus = '${{ steps.pyright.outputs.status }}';
+            const licenseHeadersStatus = '${{ steps.license_headers.outputs.status }}';
             const testsStatus = '${{ steps.tests.outputs.status }}';
 
             const getStatusIcon = (status) => status === 'passed' ? '✅' : '❌';
@@ -199,6 +240,7 @@ jobs:
             | Pylint (Linting) | ${getStatusIcon(pylintStatus)} ${pylintStatus || 'unknown'} |
             | Flake8 (Style Guide) | ${getStatusIcon(flake8Status)} ${flake8Status || 'unknown'} |
             | Pyright (Type Checking) | ${getStatusIcon(pyrightStatus)} ${pyrightStatus || 'unknown'} |
+            | License Headers | ${getStatusIcon(licenseHeadersStatus)} ${licenseHeadersStatus || 'unknown'} |
             | Tests | ${getStatusIcon(testsStatus)} ${testsStatus || 'unknown'} |
 
             ---
@@ -225,6 +267,11 @@ jobs:
             **Type Issues:**
             - Add proper type hints where indicated by Pyright
             - Fix type inconsistencies
+
+            **License Header Issues:**
+            \`\`\`bash
+            make add-license-headers
+            \`\`\`
 
             **Test Issues:**
             \`\`\`bash
