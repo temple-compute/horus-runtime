@@ -19,6 +19,8 @@
 Entrypoint for horus-runtime
 """
 
+import sys
+
 
 def main():
     """
@@ -29,4 +31,9 @@ def main():
 
 
 if __name__ == "__main__":
+
+    # Call the main function to start the runtime
     main()
+
+    # Exit the program with success status
+    sys.exit(0)
