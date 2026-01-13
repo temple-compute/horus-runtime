@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pytest
 
-import src.main as main
+from horus_runtime.cli import main as horus_runtime
 
 
 @pytest.mark.unit
@@ -39,7 +39,7 @@ class TestMain:
         """
 
         # Call the main function directly
-        main.main()
+        horus_runtime()
 
         # Verify the print was called with expected message
         mock_print.assert_called_with("Horus Runtime is starting...")
@@ -49,12 +49,11 @@ class TestMain:
         Test that main module can be imported
         """
 
-        assert main is not None
+        assert horus_runtime is not None
 
-    def test_main_function_exists(self):
+    def test_main_function_callable(self):
         """
-        Test that main function exists and is callable
+        Test that main function is callable
         """
 
-        assert hasattr(main, "main")
-        assert callable(main.main)
+        assert callable(horus_runtime)
