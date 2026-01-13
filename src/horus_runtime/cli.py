@@ -19,8 +19,6 @@
 Entrypoint for horus-runtime
 """
 
-import sys
-
 
 def main():
     """
