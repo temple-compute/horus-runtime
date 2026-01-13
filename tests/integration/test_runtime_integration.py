@@ -36,7 +36,7 @@ class TestHorusRuntimeIntegration:
         """
 
         result = subprocess.run(
-            ["horus-runtime"],
+            ["horus"],
             capture_output=True,
             text=True,
             check=False,

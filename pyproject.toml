@@ -9,7 +9,7 @@ classifiers = [
 ]
 
 [project.scripts]
-horus-runtime = "horus_runtime.cli:main"
+horus = "horus_runtime.cli:main"
 
 [tool.black]
 line-length = 79
