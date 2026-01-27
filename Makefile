@@ -34,6 +34,7 @@ install:
 	micromamba create -y -n horus_runtime python=3.14
 	micromamba activate horus_runtime
 	pip install -r requirements.txt
+	pip install -e .
 
 test:
 	$(PYTEST_CMD)
