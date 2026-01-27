@@ -1,6 +1,9 @@
 # horus-runtime
 
-horus-runtime is the command-line engine for the Horus platform, a free, multi-platform workflow manager designed for developers and scientists. It enables the creation, management, and execution of complex workflows, especially in biomolecular modeling and scientific computing, without any GUI dependencies.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%20%E2%80%94%203.14-blue.svg)](https://www.python.org/downloads/)
+
+horus-runtime is the command-line engine for the Horus platform, a free, multi-platform workflow manager designed for developers and scientists. It enables the creation, management, and execution of complex workflows, especially scientific computing, without any GUI dependencies.
 
 - **No GUI:** This package is the runtime/engine only. For the full graphical experience, see the main Horus project.
 - **Modular & Extensible:** Designed for integration, automation, and extension via Python.
