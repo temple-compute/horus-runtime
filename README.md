@@ -36,6 +36,12 @@ micromamba activate horus_runtime
 pip install -r requirements.txt
 ```
 
+Install the package in editable (development) mode to enable local development:
+
+```bash
+pip install -e .
+```
+
 ### Command Shortcuts
 
 - **Run all tests:**
