@@ -67,15 +67,17 @@ class _HorusTranslationManager:
         gettext.NullTranslations | gettext.GNUTranslations
     ) = gettext.NullTranslations()
 
-    def __init__(self) -> None:
+    def __init__(
+        self, lang: _HorusLocales = _LocaleUtils.get_default_locale()
+    ) -> None:
         """
         Initialize the translation manager with the default locale.
         """
-        self._setup_locale()
+        self._setup_locale(lang)
 
     def _setup_locale(
         self,
-        lang: _HorusLocales = _LocaleUtils.get_default_locale(),
+        lang: _HorusLocales,
     ) -> None:
         """
         Initialize the localization system.
