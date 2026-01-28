@@ -34,15 +34,12 @@ horus-runtime is the command-line engine for the Horus platform, a free, multi-p
 # Create and activate environment (recommended)
 micromamba create -y -n horus_runtime python=3.14
 micromamba activate horus_runtime
-
-# Install dependencies
-pip install -r requirements.txt
 ```
 
-Install the package in editable (development) mode to enable local development:
+Install the package in editable (development) mode to enable local development alongside dependencies:
 
 ```bash
-pip install -e .
+pip install -e .[dev]
 ```
 
 ### Command Shortcuts

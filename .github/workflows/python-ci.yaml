@@ -18,8 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install -e .
+          pip install -e .[dev]
 
       - name: Check code formatting with Black
         run: make black-check
@@ -63,8 +62,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install -e .
+          pip install -e .[dev]
 
       - name: Run tests with coverage
         run: make test
