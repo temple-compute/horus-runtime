@@ -29,6 +29,9 @@ dev = [
 [project.scripts]
 horus = "horus_runtime.cli:main"
 
+[tool.setuptools.package-data]
+horus_runtime = ["py.typed"]
+
 [tool.black]
 line-length = 79
 target-version = ['py310','py311','py312','py313','py314']
