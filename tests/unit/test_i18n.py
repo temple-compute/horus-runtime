@@ -15,12 +15,13 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-# We disable protected-access warnings for testing private members
-# pyright: reportPrivateUsage=false
-# pylint: disable=protected-access
 """
 Unit tests for i18n module
 """
+
+# We disable protected-access warnings for testing private members
+# pyright: reportPrivateUsage=false
+# pylint: disable=protected-access
 
 import gettext
 import os
