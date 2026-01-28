@@ -19,7 +19,7 @@
 Unit tests for main module
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -33,7 +33,7 @@ class TestMain:
     """
 
     @patch("builtins.print")
-    def test_main_execution(self, mock_print):
+    def test_main_execution(self, mock_print: MagicMock):
         """
         Test that main execution prints expected message
         """

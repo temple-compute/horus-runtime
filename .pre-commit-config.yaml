@@ -1,26 +1,38 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
 
-  # Cannot use local hooks for black, isort, pylint, flake8, pyright (make lint) because
-  # they do not support staged-only files. Those community hooks do automatically.
-  - repo: https://github.com/psf/black
-    rev: 24.1.1
-    hooks:
-      - id: black
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-
   - repo: local
     hooks:
+      - id: black
+        name: black
+        entry: black
+        language: system
+        types: [python]
+
+      - id: pyright
+        name: pyright
+        entry: pyright
+        language: system
+        types: [python]
+
+      - id: isort
+        name: isort
+        entry: isort
+        language: system
+        types: [python]
+
+      - id: flake8
+        name: flake8
+        entry: flake8
+        language: system
+        types: [python]
+
       - id: pylint
         name: pylint
         entry: pylint
@@ -31,13 +43,3 @@ repos:
             "-rn", # Only display messages
             "-sn", # Don't display the score
           ]
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
-    hooks:
-      - id: flake8
-
-  - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.408
-    hooks:
-      - id: pyright

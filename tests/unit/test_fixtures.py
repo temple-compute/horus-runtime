@@ -19,11 +19,13 @@
 Test fixtures and configuration functionality
 """
 
+from typing import Any
+
 import pytest
 
 
 @pytest.mark.unit
-def test_sample_fixture(sample_data):
+def test_sample_fixture(sample_data: dict[str, Any]):
     """
     Test using the sample fixture from conftest
     """
