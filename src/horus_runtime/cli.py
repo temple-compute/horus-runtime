@@ -19,13 +19,15 @@
 Entrypoint for horus-runtime
 """
 
+from horus_runtime.i18n import tr as _
+
 
 def main():
     """
     Main function for horus-runtime
     """
 
-    print("Horus Runtime is starting...")
+    print(_("Horus Runtime is starting..."))
 
 
 if __name__ == "__main__":

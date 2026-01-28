@@ -44,3 +44,6 @@ htmlcov/
 Thumbs.db
 
 *.xml
+
+# i18n
+*.mo

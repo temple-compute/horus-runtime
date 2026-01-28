@@ -30,7 +30,7 @@ dev = [
 horus = "horus_runtime.cli:main"
 
 [tool.setuptools.package-data]
-horus_runtime = ["py.typed"]
+horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 
 [tool.black]
 line-length = 79

@@ -60,6 +60,81 @@ pip install -e .[dev]
 
 See `make help` for all available commands.
 
+## Internationalization (i18n)
+
+Horus Runtime supports multiple languages through a comprehensive i18n system. Translations are managed using Babel and GNU gettext.
+
+### Using Translations in Your Code
+
+Import the translation function in your plugins:
+
+```python
+from horus_runtime.i18n import tr as _
+
+# Use it in your code
+message = _("Hello, world!")
+
+# Supports plurals and text substitution
+message = _("{n} notification", "{n} notifications", n=2)
+```
+
+### Babel Configuration
+
+If you need to regenerate the main `messages.po` file:
+
+1. Ensure the `src/horus_runtime/locale/` directory exists:
+
+```bash
+mkdir -p src/horus_runtime/locale/
+```
+
+2. Extract translatable strings:
+
+```bash
+make babel-extract
+```
+
+### Adding a New Language
+
+1. **Create language files:**
+
+   ```bash
+   make babel-add LANG=es  # Replace 'es' with your language code
+   ```
+
+2. **Edit translations:**
+   Edit the generated `.po` file at `src/horus_runtime/locale/LANG/LC_MESSAGES/horus_runtime.po`
+
+3. **Validate translations:**
+   ```bash
+   make babel-check
+   ```
+
+### Updating Existing Translations
+
+When translatable strings change in the source code:
+
+1. **Extract and update:**
+
+   ```bash
+   make babel-refresh
+   ```
+
+2. **Review changes:**
+   Look for "fuzzy" and new strings in `.po` files and update them
+
+3. **Compile:**
+   ```bash
+   make babel-check
+   ```
+
+### Translation Management Commands
+
+- `make babel-stats` - Show translation completion statistics
+- `make babel-check` - Verify translations are up to date
+- `make babel-extract` - Extract translatable strings only
+- `make babel-compile` - Compile `.po` files to `.mo` files only
+
 ## Funding & Credits
 
 - Developed by the [Barcelona Supercomputing Center](https://www.bsc.es/)

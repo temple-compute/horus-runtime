@@ -43,3 +43,10 @@ repos:
         entry: pyright
         language: system
         types: [python]
+
+      # If the commit includes changes in translation files,
+      # check that all translations are complete.
+      - id: babel-check
+        name: babel-check
+        entry: make babel-check
+        language: system

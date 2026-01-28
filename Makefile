@@ -11,7 +11,18 @@ BLACK_FORMAT_CMD = black .
 ISORT_FORMAT_CMD = isort .
 ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -cy -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es
 
-.PHONY: install test lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers
+# i18n settings (babel)
+BABEL_CFG = babel.cfg
+LOCALE_DIR = src/horus_runtime/locale
+MESSAGES_POT = $(LOCALE_DIR)/messages.pot
+DOMAIN = horus_runtime
+SOURCE_DIR = src/horus_runtime
+
+# Variables used for babel metadata
+PROJECT_NAME = horus-runtime
+ORGANIZATION = Temple Compute
+
+.PHONY: install test test-unit test-simple lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers babel-update babel-check babel-add babel-extract
 
 help:
 	@echo "Available commands:"
@@ -28,6 +39,10 @@ help:
 	@echo "  format       Format code with black and isort"
 	@echo "  type-check   Run type checking"
 	@echo "  add-license-headers  Add license headers to source files"
+	@echo "  babel-update  Update Babel translations"
+	@echo "  babel-check   Check Babel translations (used by CI)"
+	@echo "  babel-add     Add a new language (usage: make babel-add LANG=es)"
+	@echo "  babel-extract Extract translatable strings to messages.pot"
 	@echo "  clean        Remove cache files"
 
 install:
@@ -83,3 +98,30 @@ clean:
 	find . -type f -name "*.pyc" -delete
 	rm -rf .coverage htmlcov/ .pytest_cache/
 	rm -rf *.egg-info/ build/ dist/
+
+babel-extract:
+	pybabel extract -F $(BABEL_CFG) \
+		--project=$(PROJECT_NAME) \
+		--copyright-holder="$(ORGANIZATION)" \
+		-o $(MESSAGES_POT) $(SOURCE_DIR)
+
+babel-update:
+	pybabel update -i $(MESSAGES_POT) -d $(LOCALE_DIR) -D $(DOMAIN) --no-fuzzy-matching
+
+babel-refresh: babel-extract babel-update
+
+babel-check:
+	@echo "Checking for missing or fuzzy translations..."
+	@for file in $(shell find $(LOCALE_DIR) -name "*.po"); do \
+		RESULT=$$(msgfmt --statistics -c -o /dev/null $$file 2>&1); \
+		echo "$$RESULT"; \
+		if echo "$$RESULT" | grep -E "untranslated|fuzzy" > /dev/null; then \
+			echo "ERROR: $$file has missing or fuzzy strings!"; \
+			exit 1; \
+		fi; \
+	done
+	@echo "Success: All strings are translated."
+	pybabel compile -d $(LOCALE_DIR) -D $(DOMAIN) --statistics
+
+babel-add:
+	pybabel init -i $(MESSAGES_POT) -d $(LOCALE_DIR) -l $(LANG) -D $(DOMAIN)

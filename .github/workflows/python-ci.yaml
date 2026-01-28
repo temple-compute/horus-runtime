@@ -44,6 +44,9 @@ jobs:
             exit 1;
           fi
 
+      - name: Check translations
+        run: make babel-check
+
   test:
     runs-on: ubuntu-latest
     strategy:
