@@ -1,6 +1,6 @@
 [project]
 name = "horus-runtime"
-description = "The horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
+description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
 version = "0.0.1"
 license = {file = "LICENSE"}
 classifiers = [
@@ -13,7 +13,7 @@ horus = "horus_runtime.cli:main"
 
 [tool.black]
 line-length = 79
-target-version = ['py39','py310','py311','py312','py313','py314']
+target-version = ['py310','py311','py312','py313','py314']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -48,13 +48,14 @@ addopts = """
 max-line-length = 79
 disable = [
     "E0401", # Unable to import 'foo'. Pylance is who reports missing imports
+    "R0903", # Too few public methods
 ]
 
 [tool.pyright]
 include = ["."]
 exclude = ["**/__pycache__", "build", "dist"]
-pythonVersion = "3.9"
-typeCheckingMode = "basic"
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
 reportMissingImports = true
 reportMissingTypeStubs = false
 

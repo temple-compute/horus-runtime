@@ -1,7 +1,7 @@
 # horus-runtime
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%20%E2%80%94%203.14-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%E2%80%94%203.14-blue.svg)](https://www.python.org/downloads/)
 
 horus-runtime is the command-line engine for the Horus platform, a free, multi-platform workflow manager designed for developers and scientists. It enables the creation, management, and execution of complex workflows, especially scientific computing, without any GUI dependencies.
 
@@ -25,7 +25,7 @@ horus-runtime is the command-line engine for the Horus platform, a free, multi-p
 
 ### Requirements
 
-- Python 3.9–3.14 (recommended: 3.14)
+- Python 3.10–3.14 (recommended: 3.14)
 - [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html) (for environment management, optional but recommended)
 
 ### Environment
