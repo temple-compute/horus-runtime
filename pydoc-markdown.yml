@@ -1,0 +1,9 @@
+loaders:
+  - type: python
+
+renderer:
+  type: docusaurus
+  docs_base_path: docs
+  sidebar_top_level_module_label: Runtime Reference
+  sidebar_top_level_label: Runtime Reference
+  relative_output_path: .
