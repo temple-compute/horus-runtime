@@ -1,0 +1,34 @@
+name: Docs reference check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check changed files
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            runtime:
+              - 'src/**'
+
+      - name: Enforce docs reference if required
+        if: steps.changes.outputs.runtime == 'true'
+        run: |
+          BODY="${{ github.event.pull_request.body }}"
+
+          # If author explicitly says docs are NOT required -> allow
+          echo "$BODY" | grep -q "\[x\] No documentation update required" && exit 0
+
+          # Otherwise, docs ARE required -> enforce horus-docs PR link
+          echo "$BODY" | grep -E "github.com/temple-compute/horus-docs/pull/[0-9]+" \
+            && exit 0
+
+          echo "❌ Runtime code changed and documentation is required, but no horus-docs PR was linked."
+          exit 1

@@ -22,7 +22,7 @@ SOURCE_DIR = src/horus_runtime
 PROJECT_NAME = horus-runtime
 ORGANIZATION = Temple Compute
 
-.PHONY: install test test-unit test-simple docs lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers babel-update babel-check babel-add babel-extract
+.PHONY: install test test-unit test-simple lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers babel-update babel-check babel-add babel-extract
 
 help:
 	@echo "Available commands:"
@@ -31,7 +31,6 @@ help:
 	@echo "  test-unit    Run unit tests only"
 	@echo "  test-int     Run integration tests only"
 	@echo "  test-simple  Run tests without coverage"
-	@echo "  docs         Generate documentation with pdoc"
 	@echo "  lint         Run all linting tools (same as CI)"
 	@echo "  black-check  Check code formatting (used by CI)"
 	@echo "  isort-check  Check import sorting (used by CI)"
@@ -49,7 +48,7 @@ help:
 install:
 	micromamba create -y -n horus_runtime python=3.11
 	micromamba activate horus_runtime
-	pip install -e ".[dev,docs]"
+	pip install -e ".[dev]"
 
 test:
 	$(PYTEST_CMD)
@@ -62,13 +61,6 @@ test-int:
 
 test-simple:
 	pytest
-
-# This will generate a "preview" version of the docs by default.
-# To generate a different version, pass the version as an argument, e.g.:
-# make docs VERSION=beta
-docs:
-	rm -rf docs/
-	pydoc-markdown
 
 # Individual check commands (used by CI)
 black-check:
