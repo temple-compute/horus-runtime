@@ -46,9 +46,9 @@ help:
 	@echo "  clean        Remove cache files"
 
 install:
-	micromamba create -y -n horus_runtime python=3.14
+	micromamba create -y -n horus_runtime python=3.11
 	micromamba activate horus_runtime
-	pip install -e .[dev]
+	pip install -e ".[dev]"
 
 test:
 	$(PYTEST_CMD)
