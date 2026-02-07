@@ -16,19 +16,21 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Defines the IArtifact interface, which represents an artifact in the Horus
+Defines the Artifact base class, which represents an artifact in the Horus
 runtime. An artifact is a piece of data that is produced or consumed by a task.
 """
 
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
+from horus_runtime.core.registry.auto_registry import AutoRegistry
 
-class Artifact(BaseModel, ABC):
+
+class BaseArtifact(BaseModel, ABC, AutoRegistry):
     """
     Represents an artifact in the Horus runtime. An artifact is a piece of data
     that is produced or consumed by a task. It can be a file, a dataset,
@@ -48,6 +50,10 @@ class Artifact(BaseModel, ABC):
     relies on the existence and integrity of artifacts to determine the state
     of tasks and the overall workflow.
     """
+
+    # The 'registry_key' class variable is used by the AutoRegistry base class
+    # to determine how to register subclasses of Artifact in the registry.
+    registry_key: ClassVar[str] = "kind"
 
     id: uuid.UUID = Field(
         default_factory=uuid.uuid4,
@@ -103,7 +109,7 @@ class Artifact(BaseModel, ABC):
         """
 
     @model_validator(mode="after")
-    def validate_kind(self) -> "Artifact":
+    def validate_kind(self) -> "BaseArtifact":
         """
         Validates that the kind field is set to a specific value in subclasses.
         This ensures that each subclass of Artifact has a unique kind value for

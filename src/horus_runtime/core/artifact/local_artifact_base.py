@@ -21,24 +21,25 @@ Base definition for local file or folder artifacts in the Horus Runtime
 
 import hashlib
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from typing_extensions import Self
 
-from horus_runtime.core.interfaces.artifact import Artifact
+from horus_runtime.core.artifact.base import BaseArtifact
 
 
-class LocalPathArtifactBase(Artifact):
+class LocalPathArtifactBase(BaseArtifact):
     """
     Common base class for local file or folder artifacts in the Horus runtime.
     """
 
-    path: Annotated[Path, Field(default=Path(), validation_alias="uri")]
+    path: Path = Path()
     """
     Path to the local File
     """
+
+    add_to_registry = False
 
     @model_validator(mode="after")
     def _update_uri(self) -> Self:

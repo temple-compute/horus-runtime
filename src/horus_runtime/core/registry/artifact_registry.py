@@ -27,20 +27,36 @@ storage service, depending on the requirements of the runtime and the scale of
 the artifacts being managed.
 """
 
-from typing import Annotated, Union
+from typing import Annotated, Any, TypeAlias, Union
 
 from pydantic import Field
 
-from horus_runtime.core.base.file_artifact import FileArtifact
-from horus_runtime.core.base.folder_artifact import FolderArtifact
+import horus_runtime.core.artifact as core_artifacts
+from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.registry.auto_registry import AutoRegistry
+from horus_runtime.core.registry.registry_scan import scan_package
 
-ArtifactRegistry = Annotated[
-    Union[FileArtifact, FolderArtifact],
-    Field(
-        description=(
-            "Type of the artifact, such as 'file', 'folder', 'dataset',"
-            " 'model', etc."
-        ),
-        discriminator="kind",
-    ),
-]
+# Typed alias for better readability.
+RegistryUnion: TypeAlias = Any
+
+
+def init_registry(
+    base_cls: type[AutoRegistry],
+) -> RegistryUnion:
+    """
+    Generic function to build a Union type for all registered subclasses
+    of a given base class.
+    """
+
+    # Scan the package containing the core artifacts to ensure that all core
+    scan_package(core_artifacts)
+
+    # Scan plugins...
+
+    return Annotated[
+        Union[tuple(base_cls.registry.values())],
+        Field(discriminator=base_cls.registry_key),
+    ]
+
+
+ArtifactRegistry = init_registry(BaseArtifact)

@@ -22,13 +22,17 @@ file artifact in the Horus runtime.
 
 from typing import Literal
 
-from horus_runtime.core.base.local_artifact_base import LocalPathArtifactBase
+from horus_runtime.core.artifact.local_artifact_base import (
+    LocalPathArtifactBase,
+)
 
 
 class FileArtifact(LocalPathArtifactBase):
     """
     Represents a local file artifact.
     """
+
+    add_to_registry = True
 
     kind: Literal["file"] = "file"
 

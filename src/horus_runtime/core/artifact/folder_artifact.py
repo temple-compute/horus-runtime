@@ -23,13 +23,17 @@ folder/directory artifact in the Horus runtime.
 import hashlib
 from typing import Literal
 
-from horus_runtime.core.base.local_artifact_base import LocalPathArtifactBase
+from horus_runtime.core.artifact.local_artifact_base import (
+    LocalPathArtifactBase,
+)
 
 
 class FolderArtifact(LocalPathArtifactBase):
     """
     Represents a local folder artifact.
     """
+
+    add_to_registry = True
 
     kind: Literal["folder"] = "folder"
 
