@@ -21,7 +21,9 @@ jobs:
       - name: Enforce docs reference if required
         if: steps.changes.outputs.runtime == 'true'
         run: |
-          BODY="${{ github.event.pull_request.body }}"
+          BODY<<'EOF'
+          ${{ github.event.pull_request.body }}
+          EOF
 
           # If author explicitly says docs are NOT required -> allow
           echo "$BODY" | grep -q "\[x\] No documentation update required" && exit 0
