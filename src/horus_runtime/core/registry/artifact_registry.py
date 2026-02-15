@@ -27,36 +27,17 @@ storage service, depending on the requirements of the runtime and the scale of
 the artifacts being managed.
 """
 
-from typing import Annotated, Any, TypeAlias, Union
+from typing import TYPE_CHECKING, TypeAlias
 
-from pydantic import Field
-
-import horus_runtime.core.artifact as core_artifacts
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.registry.auto_registry import AutoRegistry
-from horus_runtime.core.registry.registry_scan import scan_package
+from horus_runtime.core.registry.auto_registry import init_registry
 
-# Typed alias for better readability.
-RegistryUnion: TypeAlias = Any
-
-
-def init_registry(
-    base_cls: type[AutoRegistry],
-) -> RegistryUnion:
-    """
-    Generic function to build a Union type for all registered subclasses
-    of a given base class.
-    """
-
-    # Scan the package containing the core artifacts to ensure that all core
-    scan_package(core_artifacts)
-
-    # Scan plugins...
-
-    return Annotated[
-        Union[tuple(base_cls.registry.values())],
-        Field(discriminator=base_cls.registry_key),
-    ]
-
-
-ArtifactRegistry = init_registry(BaseArtifact)
+# We define a type alias for the registry union type to make it easier to use
+# in type annotations throughout the codebase. We need to "trick" the type
+# checker here because the registry union type is dynamically generated at
+# runtime and can't be easily expressed as a static type annotation, so we
+# assign BaseArtifact during development
+if TYPE_CHECKING:
+    ArtifactUnion: TypeAlias = BaseArtifact
+else:
+    ArtifactUnion = init_registry(BaseArtifact, "horus.artifacts")

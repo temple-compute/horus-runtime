@@ -23,9 +23,7 @@ folder/directory artifact in the Horus runtime.
 import hashlib
 from typing import Literal
 
-from horus_runtime.core.artifact.local_artifact_base import (
-    LocalPathArtifactBase,
-)
+from horus_builtin.artifacts.local_base import LocalPathArtifactBase
 
 
 class FolderArtifact(LocalPathArtifactBase):

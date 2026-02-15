@@ -29,6 +29,12 @@ dev = [
 [project.scripts]
 horus = "horus_runtime.cli:main"
 
+# Buildt-in plugins
+[project.entry-points."horus.artifacts"]
+file = "horus_builtin.artifacts.file"
+folder = "horus_builtin.artifacts.folder"
+
+
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 
@@ -68,8 +74,10 @@ addopts = """
 [tool.pylint.messages_control]
 max-line-length = 79
 disable = [
-    "E0401", # Unable to import 'foo'. Pylance is who reports missing imports
-    "R0903", # Too few public methods
+    "E0401", # Unable to import 'foo'. Pyright is who reports missing imports
+    "R0903", # Too few public methods - we have a lot of small classes that are just data containers
+    "C0301", # Line too long - we use flake8 to enforce line length, so we disable this in pylint
+    "W0612", # Unused variable - Pyright is who reports unused variables, and we want to avoid duplicate warnings
 ]
 
 [tool.pyright]
@@ -79,10 +87,14 @@ pythonVersion = "3.10"
 typeCheckingMode = "strict"
 reportMissingImports = true
 reportMissingTypeStubs = false
+reportUnusedImport = false
 
 [tool.flake8]
 max-line-length = 79
-extend-ignore = ["E203", "W503"]
+extend-ignore = [
+    "E203", # Whitespace before ':', conflicts with black
+    "W503", # Line break before binary operator, conflicts with black
+]
 exclude = [
     ".git",
     "__pycache__",

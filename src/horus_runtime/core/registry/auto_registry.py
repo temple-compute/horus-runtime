@@ -22,8 +22,37 @@ new module types (such as artifacts) without needing to manually add the
 new type to a central registry.
 """
 
+from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Any, ClassVar, Dict, Type
+from typing import Annotated, Any, ClassVar, Dict, Type, TypeVar, Union
+
+from pydantic import Field
+
+from horus_runtime.i18n import tr as _
+
+
+class RegistryError(Exception):
+    """
+    Base exception for registry-related errors.
+    """
+
+
+class RegistryKeyAttributeNotDefined(RegistryError):
+    """
+    Exception raised when a subclass is missing a required registry key.
+    """
+
+
+class RegistryKeyIsNoneError(RegistryError):
+    """
+    Exception raised when a subclass has a registry key set to None.
+    """
+
+
+class NoSubclassesRegisteredError(RegistryError):
+    """
+    Exception raised when no subclasses are registered for a given base class.
+    """
 
 
 class AutoRegistry:
@@ -75,13 +104,88 @@ class AutoRegistry:
         # raise an error. It's not possible to use a subclass without a
         # 'registry_key' field, since the 'registry_key' field is used for
         # discriminating between different types in the instantiation process.
+
+        # First we check if the 'registry_key' attribute is defined in the
+        # first "base" class that has it defined inheriting from AutoRegistry
+        has_key = hasattr(cls, "registry_key")
+
+        if not has_key:
+            raise RegistryKeyAttributeNotDefined(
+                _(
+                    "%(cls)s must define a class property named 'registry_key'"
+                    " with a non-empty value to allow the auto-registration"
+                    " mechanism to register subclasses in the corresponding"
+                    " registry."
+                )
+                % {"cls": cls.__name__}
+            )
+
+        # Then we check if the value of the 'registry_key' attribute is not
+        # None or empty
         key_value = getattr(cls, cls.registry_key, None)
         if not key_value:
-            raise ValueError(
-                f"{cls.__name__} must have a value for the registry key "
-                f"'{cls.registry_key}' to be registered in the registry"
+            raise RegistryKeyIsNoneError(
+                _(
+                    "%(cls)s must define a class property named '%(key)s' with"
+                    " a non-empty value to be registered in the corresponding"
+                    " registry."
+                )
+                % {"cls": cls.__name__, "key": cls.registry_key}
             )
 
         # Register the subclass in the registry using the value of the
         # 'registry_key' field as the key.
         cls.registry[key_value] = cls
+
+
+T = TypeVar("T", bound=AutoRegistry)
+
+
+def init_registry(
+    base_cls: type[T],
+    entry_point_group: str,
+) -> Any:
+    """
+    Generic function to build a Union type for all registered subclasses
+    of a given base class.
+    """
+
+    print(
+        _("Initializing %(group)s registry for %(cls)s")
+        % {"group": entry_point_group, "cls": base_cls.__name__}
+    )
+
+    # Import plugins from metadata
+    entries = entry_points(group=entry_point_group)
+    for ep in entries:
+        print(_(f"- {ep.value}"))
+        ep.load()
+
+    # If the registry is empty, raise an error
+    # Hours could not work properly without implementations
+    if not base_cls.registry:
+        raise NoSubclassesRegisteredError(
+            _(
+                "No subclasses registered for %(cls)s. Ensure that there"
+                " are subclasses of this base class with add_to_registry=True."
+            )
+            % {"cls": base_cls.__name__}
+        )
+
+    # If there is only one registered subclass, return it directly instead of
+    # a Union
+    def build_registry_union(
+        base_cls: type[T],
+    ):
+        if len(base_cls.registry) == 1:
+            return Annotated[
+                next(iter(base_cls.registry.values())),
+                Field(discriminator=base_cls.registry_key),
+            ]
+
+        return Annotated[
+            Union[tuple(base_cls.registry.values())],
+            Field(discriminator=base_cls.registry_key),
+        ]
+
+    return build_registry_union(base_cls)

@@ -27,6 +27,7 @@ from pydantic import model_validator
 from typing_extensions import Self
 
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.i18n import tr as _
 
 
 class LocalPathArtifactBase(BaseArtifact):
@@ -54,9 +55,11 @@ class LocalPathArtifactBase(BaseArtifact):
         parsed = urlparse(self.uri)
         if parsed.scheme not in ("file", ""):
             raise ValueError(
-                f"Unsupported URI scheme {parsed.scheme!r} for"
-                f" {type(self).__name__}. Only 'file' scheme or plain paths"
-                " without a scheme are supported."
+                _(
+                    "Unsupported URI scheme %r for %s. Only 'file' scheme or"
+                    " plain paths without a scheme are supported."
+                )
+                % (parsed.scheme, type(self).__name__)
             )
 
         self.path = Path(parsed.path)

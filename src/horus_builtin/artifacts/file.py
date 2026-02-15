@@ -16,5 +16,26 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Integration tests package
+Implementation of the FileArtifact class, which represents a local
+file artifact in the Horus runtime.
 """
+
+from typing import Literal
+
+from horus_builtin.artifacts.local_base import LocalPathArtifactBase
+
+
+class FileArtifact(LocalPathArtifactBase):
+    """
+    Represents a local file artifact.
+    """
+
+    add_to_registry = True
+
+    kind: Literal["file"] = "file"
+
+    @property
+    def hash(self) -> str | None:
+        # For file artifacts, the hash is computed based on the file contents.
+        # Convert using hex to ensure it's a string representation of the hash.
+        return self.hash_file(self.path).hex() if self.exists() else None
