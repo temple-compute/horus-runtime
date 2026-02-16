@@ -50,6 +50,15 @@ class LocalExecutor(BaseExecutor):
             int: The return code of the executed command.
         """
 
+        # Security Warning:
+        # This method uses `shell=True` with `subprocess.run`, which poses a
+        # security risk if `cmd` contains untrusted input. Shell injection
+        # attacks are possible if user-supplied data is passed directly to this
+        # method. It is the caller's responsibility to ensure that `cmd` is
+        # properly sanitized and does not contain malicious content.
+        # The local runtime intentionally allows this "free for all" for
+        # maximum flexibility, assuming the user is executing commands on
+        # their own machine.
         return subprocess.run(
             cmd, shell=True, check=False, text=True
         ).returncode
