@@ -46,7 +46,7 @@ class BaseArtifact(BaseModel, ABC, AutoRegistry):
 
 
     In summary, the artifact is the fundamental unit of data in the Horus
-    runtime,     and main source of truth for workflow execution. The workflow
+    runtime, and main source of truth for workflow execution. The workflow
     relies on the existence and integrity of artifacts to determine the state
     of tasks and the overall workflow.
     """
@@ -77,7 +77,7 @@ class BaseArtifact(BaseModel, ABC, AutoRegistry):
     """
     Type of the artifact, such as 'file', 'folder', 'dataset', 'model', etc.
 
-    Subclasses of Artifact must set this field to a specific value to unique
+    Subclasses of Artifact must set this field to a specific value to uniquely
     identify the type of artifact. This field is used for discriminating
     between different types of artifacts when they are stored in the artifact
     registry.

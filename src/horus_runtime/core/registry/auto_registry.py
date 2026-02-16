@@ -158,11 +158,11 @@ def init_registry(
     # Import plugins from metadata
     entries = entry_points(group=entry_point_group)
     for ep in entries:
-        print(_(f"- {ep.value}"))
+        print(_("- %(entry_point)s") % {"entry_point": ep.value})
         ep.load()
 
     # If the registry is empty, raise an error
-    # Hours could not work properly without implementations
+    # horus could not work properly without implementations
     if not base_cls.registry:
         raise NoSubclassesRegisteredError(
             _(

@@ -17,7 +17,7 @@
 #
 
 # pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
-# pylint: disable=missing-class-docstring, missing-function-docstring,
+# pylint: disable=missing-class-docstring, missing-function-docstring
 # pylint: disable=reimported
 """
 Unit tests for artifact_registry module
