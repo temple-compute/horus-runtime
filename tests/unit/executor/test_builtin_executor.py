@@ -23,7 +23,6 @@
 Unit tests for LocalExecutor and related builtin executors
 """
 
-import subprocess
 from unittest.mock import Mock, patch
 
 import pytest
@@ -178,7 +177,7 @@ class TestLocalExecutor:
 
         assert result == 0
         mock_run.assert_called_once_with(
-            "echo 'Hello World'", shell=True, check=True, text=True
+            "echo 'Hello World'", shell=True, check=False, text=True
         )
 
 
@@ -207,10 +206,10 @@ class TestLocalExecutorIntegration:
         executor = LocalExecutor()
 
         # Use a command that should fail (exit with non-zero code)
-        with pytest.raises(subprocess.CalledProcessError):
-            # This command should fail since "nonexistent_command_xyz" doesn't
-            # exist
-            executor.execute("nonexistent_command_xyz_that_should_not_exist")
+        result = executor.execute(
+            "nonexistent_command_xyz_that_should_not_exist"
+        )
+        assert result != 0
 
     def test_execute_real_command_with_exit_code(self) -> None:
         """

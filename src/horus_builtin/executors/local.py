@@ -51,5 +51,5 @@ class LocalExecutor(BaseExecutor):
         """
 
         return subprocess.run(
-            cmd, shell=True, check=True, text=True
+            cmd, shell=True, check=False, text=True
         ).returncode
