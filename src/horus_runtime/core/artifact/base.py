@@ -25,7 +25,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from horus_runtime.core.registry.auto_registry import AutoRegistry
 
@@ -73,7 +73,7 @@ class BaseArtifact(BaseModel, ABC, AutoRegistry):
     reference to an artifact in a registry.
     """
 
-    kind: Any | None = None
+    kind: Any = None
     """
     Type of the artifact, such as 'file', 'folder', 'dataset', 'model', etc.
 
@@ -107,16 +107,3 @@ class BaseArtifact(BaseModel, ABC, AutoRegistry):
         This method should be implemented to compute the hash based on the
         actual content of the artifact.
         """
-
-    @model_validator(mode="after")
-    def validate_kind(self) -> "BaseArtifact":
-        """
-        Validates that the kind field is set to a specific value in subclasses.
-        This ensures that each subclass of Artifact has a unique kind value for
-        proper discrimination in the artifact registry.
-        """
-        if self.kind is None:
-            raise ValueError(
-                "The 'kind' field must be set in subclasses of Artifact."
-            )
-        return self
