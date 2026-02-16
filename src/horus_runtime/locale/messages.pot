@@ -9,15 +9,42 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-28 17:02+0100\n"
+"POT-Creation-Date: 2026-02-15 19:05+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.17.0\n"
+"Generated-By: Babel 2.18.0\n"
 
 #: src/horus_runtime/cli.py:30
 msgid "Horus Runtime is starting..."
+msgstr ""
+
+#: src/horus_runtime/core/registry/auto_registry.py:115
+#, python-format
+msgid ""
+"%(cls)s must define a class property named 'registry_key' with a non-"
+"empty value to allow the auto-registration mechanism to register "
+"subclasses in the corresponding registry."
+msgstr ""
+
+#: src/horus_runtime/core/registry/auto_registry.py:129
+#, python-format
+msgid ""
+"%(cls)s must define a class property named '%(key)s' with a non-empty "
+"value to be registered in the corresponding registry."
+msgstr ""
+
+#: src/horus_runtime/core/registry/auto_registry.py:154
+#, python-format
+msgid "Initializing %(group)s registry for %(cls)s"
+msgstr ""
+
+#: src/horus_runtime/core/registry/auto_registry.py:169
+#, python-format
+msgid ""
+"No subclasses registered for %(cls)s. Ensure that there are subclasses of"
+" this base class with add_to_registry=True."
 msgstr ""
