@@ -42,6 +42,12 @@ Install the package in editable (development) mode to enable local development a
 pip install -e .[dev]
 ```
 
+To commit to the repo, you'll need the pre-commit package:
+
+```bash
+pip install pre-commit
+```
+
 ### Command Shortcuts
 
 - **Run all tests:**
