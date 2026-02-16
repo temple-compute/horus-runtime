@@ -29,7 +29,7 @@ dev = [
 [project.scripts]
 horus = "horus_runtime.cli:main"
 
-# Buildt-in plugins
+# Built-in plugins
 [project.entry-points."horus.artifacts"]
 file = "horus_builtin.artifacts.file"
 folder = "horus_builtin.artifacts.folder"
