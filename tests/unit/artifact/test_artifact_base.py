@@ -28,7 +28,10 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.registry.auto_registry import AutoRegistry
+from horus_runtime.core.registry.auto_registry import (
+    AutoRegistry,
+    RegistryKeyIsNoneError,
+)
 
 
 class ConcreteTestArtifact(BaseArtifact):
@@ -179,24 +182,6 @@ class TestBaseArtifact:
         assert artifact.kind == "test"
 
 
-class InvalidArtifactNoKind(BaseArtifact):
-    """
-    Invalid artifact implementation without kind field for testing
-    """
-
-    add_to_registry = False
-
-    def exists(self) -> bool:
-        return False
-
-    def materialize(self) -> Path:
-        return Path("/tmp")
-
-    @property
-    def hash(self) -> str | None:
-        return None
-
-
 @pytest.mark.unit
 class TestBaseArtifactValidation:
     """
@@ -208,8 +193,29 @@ class TestBaseArtifactValidation:
         Test that subclasses must set the kind field
         """
         # This artifact doesn't set kind, so validation should fail
-        with pytest.raises(ValidationError, match="'kind' field must be set"):
-            InvalidArtifactNoKind(uri="test://uri")
+        with pytest.raises(
+            RegistryKeyIsNoneError,
+            match="must define a class property named 'kind'",
+        ):
+
+            class InvalidArtifactNoKind(  # pyright: ignore[reportUnusedClass]
+                BaseArtifact
+            ):
+                """
+                Invalid artifact implementation without kind field for testing
+                """
+
+                add_to_registry = True
+
+                def exists(self) -> bool:
+                    return False
+
+                def materialize(self) -> Path:
+                    return Path("/tmp")
+
+                @property
+                def hash(self) -> str | None:
+                    return None
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """
