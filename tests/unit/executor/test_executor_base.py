@@ -21,7 +21,7 @@ Unit tests for BaseExecutor class
 
 import inspect
 from abc import ABC
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -32,6 +32,9 @@ from horus_runtime.core.registry.auto_registry import (
     RegistryKeyIsNoneError,
 )
 
+if TYPE_CHECKING:
+    from horus_runtime.core.task.base import BaseTask
+
 
 class ConcreteTestExecutor(BaseExecutor):
     """
@@ -41,11 +44,11 @@ class ConcreteTestExecutor(BaseExecutor):
     add_to_registry = False  # Prevent registry pollution in tests
     kind: Literal["test"] = "test"
 
-    def execute(self, cmd: str) -> int:
+    def execute(self, task: Union["BaseTask", str]) -> int:
         """
         Simple test implementation that returns success for non-empty commands.
         """
-        return 0 if cmd.strip() else 1
+        return 0 if task else 1
 
 
 @pytest.mark.unit
@@ -99,10 +102,11 @@ class TestBaseExecutor:
         """
         Test that concrete implementation works correctly
         """
+
         executor = ConcreteTestExecutor()
 
         # Test successful execution
-        result = executor.execute("echo test")
+        result = executor.execute("some task")
         assert result == 0
 
         # Test failure case
@@ -144,13 +148,13 @@ class TestBaseExecutor:
 
         sig = inspect.signature(BaseExecutor.execute)
 
-        # Should have 'self' and 'cmd' parameters
+        # Should have 'self' and 'task' parameters
         params = list(sig.parameters.keys())
-        assert params == ["self", "cmd"]
+        assert params == ["self", "task"]
 
         # Check parameter types
-        cmd_param = sig.parameters["cmd"]
-        assert cmd_param.annotation == str
+        cmd_param = sig.parameters["task"]
+        assert cmd_param.annotation == "BaseTask"
 
         # Check return type
         assert sig.return_annotation == int
@@ -181,7 +185,7 @@ class TestBaseExecutorValidation:
 
                 add_to_registry = True
 
-                def execute(self, cmd: str) -> int:
+                def execute(self, task: "BaseTask") -> int:
                     return 0
 
     def test_model_validation_preserves_type_safety(self) -> None:

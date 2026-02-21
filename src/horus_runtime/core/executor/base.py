@@ -24,11 +24,14 @@ a command or running it inside a SLURM job, either remote or locally.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
 from horus_runtime.core.registry.auto_registry import AutoRegistry
+
+if TYPE_CHECKING:
+    from horus_runtime.core.task.base import BaseTask
 
 
 class BaseExecutor(BaseModel, ABC, AutoRegistry):
@@ -46,14 +49,14 @@ class BaseExecutor(BaseModel, ABC, AutoRegistry):
     """
 
     @abstractmethod
-    def execute(self, cmd: str) -> int:
+    def execute(self, task: "BaseTask") -> int:
         """
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific
         execution logic for different types of executors.
 
         Args:
-            cmd (str): The command to execute.
+            task (BaseTask): The task to execute.
 
         Returns:
             int: The return code of the execution.

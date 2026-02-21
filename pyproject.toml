@@ -35,8 +35,13 @@ file = "horus_builtin.artifacts.file"
 folder = "horus_builtin.artifacts.folder"
 
 [project.entry-points."horus.executors"]
-local = "horus_builtin.executors.local"
+shell = "horus_builtin.executors.shell"
 
+[project.entry-points."horus.runtimes"]
+command = "horus_builtin.runtimes.command"
+
+[project.entry-points."horus.tasks"]
+horus_task = "horus_builtin.tasks.horus_task"
 
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]

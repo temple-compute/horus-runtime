@@ -20,17 +20,36 @@
 # pylint: disable=missing-class-docstring, missing-function-docstring
 # pylint: disable=reimported
 """
-Unit tests for LocalExecutor and related builtin executors
+Unit tests for ShellExecutor and related builtin executors
 """
 
+from typing import Callable
 from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.executors.local import LocalExecutor
+from horus_builtin.executors.shell import ShellExecutor
+from horus_builtin.runtimes.command import CommandRuntime
+from horus_builtin.tasks.horus_task import HorusTask
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.registry.auto_registry import init_registry
+
+MakeTaskType = Callable[[str], HorusTask]
+
+
+@pytest.fixture
+def make_task() -> MakeTaskType:
+
+    def _make_task(cmd: str = "echo 'Hello World'") -> HorusTask:
+
+        runtime = CommandRuntime(command=cmd)
+
+        return HorusTask(
+            inputs={}, outputs={}, runtime=runtime, executor=ShellExecutor()
+        )
+
+    return _make_task
 
 
 @pytest.mark.unit
@@ -47,9 +66,9 @@ class TestInitRegistry:
         init_registry(BaseExecutor, "horus.executors")
 
         # Should have scanned the core executors package
-        assert "local" in BaseExecutor.registry
+        assert "shell" in BaseExecutor.registry
 
-        assert BaseExecutor.registry["local"] is LocalExecutor
+        assert BaseExecutor.registry["shell"] is ShellExecutor
 
     def test_init_registry_returns_union_type(self) -> None:
         """
@@ -77,9 +96,9 @@ class TestExecutorRegistry:
 
     def test_executor_union_can_validate_union_executor(self) -> None:
         """
-        Test that ExecutorUnion can validate LocalExecutor data
+        Test that ExecutorUnion can validate ShellExecutor data
         """
-        data = {"kind": "local"}
+        data = {"kind": "shell"}
 
         from horus_runtime.core.registry.executor_registry import ExecutorUnion
 
@@ -89,9 +108,9 @@ class TestExecutorRegistry:
         # This should work with the discriminated union
         result = TestModel.model_validate({"executor": data})
 
-        # Check LocalExecutor
-        assert isinstance(result.executor, LocalExecutor)
-        assert result.executor.kind == "local"
+        # Check ShellExecutor
+        assert isinstance(result.executor, ShellExecutor)
+        assert result.executor.kind == "shell"
 
     def test_executor_registry_invalid_kind_handling(self) -> None:
         """
@@ -131,39 +150,41 @@ class TestExecutorRegistryIntegration:
 
         # Registry should contain local executor
         assert hasattr(BaseExecutor, "registry")
-        assert "local" in BaseExecutor.registry
+        assert "shell" in BaseExecutor.registry
 
 
 @pytest.mark.unit
-class TestLocalExecutor:
+class TestShellExecutor:
     """
-    Test cases for LocalExecutor class
+    Test cases for ShellExecutor class
     """
 
-    def test_local_executor_inherits_from_base(self) -> None:
+    def test_shell_executor_inherits_from_base(self) -> None:
         """
-        Test that LocalExecutor inherits from BaseExecutor
+        Test that ShellExecutor inherits from BaseExecutor
         """
-        assert issubclass(LocalExecutor, BaseExecutor)
+        assert issubclass(ShellExecutor, BaseExecutor)
 
-    def test_local_executor_kind_is_local(self) -> None:
+    def test_shell_executor_kind_is_shell(self) -> None:
         """
-        Test that LocalExecutor has correct kind value
+        Test that ShellExecutor has correct kind value
         """
-        executor = LocalExecutor()
-        assert executor.kind == "local"
+        executor = ShellExecutor()
+        assert executor.kind == "shell"
 
-    def test_local_executor_deserialization(self) -> None:
+    def test_shell_executor_deserialization(self) -> None:
         """
-        Test that LocalExecutor can be deserialized
+        Test that ShellExecutor can be deserialized
         """
-        data = {"kind": "local"}
-        executor = LocalExecutor.model_validate(data)
+        data = {"kind": "shell"}
+        executor = ShellExecutor.model_validate(data)
 
-        assert executor.kind == "local"
+        assert executor.kind == "shell"
 
     @patch("subprocess.run")
-    def test_execute_successful_command(self, mock_run: Mock) -> None:
+    def test_execute_successful_command(
+        self, mock_run: Mock, make_task: MakeTaskType
+    ) -> None:
         """
         Test executing a successful command returns correct exit code
         """
@@ -172,8 +193,10 @@ class TestLocalExecutor:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
 
-        executor = LocalExecutor()
-        result = executor.execute("echo 'Hello World'")
+        hello_world_task = make_task("echo 'Hello World'")
+
+        executor = ShellExecutor()
+        result = executor.execute(hello_world_task)
 
         assert result == 0
         mock_run.assert_called_once_with(
@@ -182,41 +205,49 @@ class TestLocalExecutor:
 
 
 @pytest.mark.unit
-class TestLocalExecutorIntegration:
+class TestShellExecutorIntegration:
     """
-    Integration tests for LocalExecutor with real subprocess calls
+    Integration tests for ShellExecutor with real subprocess calls
     """
 
-    def test_execute_real_successful_command(self) -> None:
+    def test_execute_real_successful_command(
+        self, make_task: MakeTaskType
+    ) -> None:
         """
         Test executing a real successful command (echo)
         """
-        executor = LocalExecutor()
+        executor = ShellExecutor()
 
         # Use a simple, cross-platform command that should always work
-        result = executor.execute("echo test")
+        hello_world_task = make_task("echo 'Hello World'")
+        result = executor.execute(hello_world_task)
 
         # Echo should return 0 on success
         assert result == 0
 
-    def test_execute_real_failed_command(self) -> None:
+    def test_execute_real_failed_command(
+        self, make_task: MakeTaskType
+    ) -> None:
         """
         Test executing a real command that fails
         """
-        executor = LocalExecutor()
+        executor = ShellExecutor()
+
+        task = make_task("nonexistent_command_xyz_that_should_not_exist")
 
         # Use a command that should fail (exit with non-zero code)
-        result = executor.execute(
-            "nonexistent_command_xyz_that_should_not_exist"
-        )
+        result = executor.execute(task)
         assert result != 0
 
-    def test_execute_real_command_with_exit_code(self) -> None:
+    def test_execute_real_command_with_exit_code(
+        self, make_task: MakeTaskType
+    ) -> None:
         """
         Test executing a real command with specific exit code
         """
-        executor = LocalExecutor()
+        executor = ShellExecutor()
 
         # Use 'true' command which should always exit with 0
-        result = executor.execute("true")
+        task = make_task("true")
+        result = executor.execute(task)
         assert result == 0
