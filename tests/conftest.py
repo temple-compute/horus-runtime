@@ -19,7 +19,14 @@
 Test configuration for pytest
 """
 
+from typing import Protocol
+
 import pytest
+
+from horus_builtin.executors.shell import ShellExecutor
+from horus_builtin.runtimes.command import CommandRuntime
+from horus_builtin.tasks.horus_task import HorusTask
+from horus_runtime.core.artifact.base import BaseArtifact
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -29,3 +36,40 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "unit: Unit tests")
     config.addinivalue_line("markers", "integration: Integration tests")
     config.addinivalue_line("markers", "slow: Slow running tests")
+
+
+class MakeTaskType(Protocol):
+    """
+    Protocol for a factory function that creates HorusTask instances for
+    testing
+    """
+
+    def __call__(
+        self,
+        cmd: str = ...,
+        inputs: dict[str, BaseArtifact] | None = None,
+    ) -> HorusTask: ...
+
+
+@pytest.fixture
+def make_task() -> MakeTaskType:
+    """
+    Fixture to create HorusTask instances with CommandRuntime for testing
+    """
+
+    # Factory function to create a HorusTask with a given command
+    def _make_task(
+        cmd: str = "echo 'Hello World'",
+        inputs: dict[str, BaseArtifact] | None = None,
+    ) -> HorusTask:
+
+        runtime = CommandRuntime(command=cmd)
+
+        return HorusTask(
+            inputs=inputs or {},
+            outputs={},
+            runtime=runtime,
+            executor=ShellExecutor(),
+        )
+
+    return _make_task

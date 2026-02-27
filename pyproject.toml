@@ -35,8 +35,13 @@ file = "horus_builtin.artifacts.file"
 folder = "horus_builtin.artifacts.folder"
 
 [project.entry-points."horus.executors"]
-local = "horus_builtin.executors.local"
+shell = "horus_builtin.executors.shell"
 
+[project.entry-points."horus.runtimes"]
+command = "horus_builtin.runtimes.command"
+
+[project.entry-points."horus.tasks"]
+horus_task = "horus_builtin.tasks.horus_task"
 
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
@@ -85,12 +90,15 @@ disable = [
 
 [tool.pyright]
 include = ["."]
-exclude = ["**/__pycache__", "build", "dist"]
+exclude = ["**/__pycache__", "build", "dist", "**/node_modules/**", "**/.*"]
 pythonVersion = "3.10"
 typeCheckingMode = "strict"
+
+# Here we disable checks that are already handled by pylint or flake8 to avoid duplicate warnings
 reportMissingImports = true
 reportMissingTypeStubs = false
 reportUnusedImport = false
+reportPrivateUsage = false
 
 [tool.flake8]
 max-line-length = 79

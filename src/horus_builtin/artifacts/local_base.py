@@ -21,6 +21,7 @@ Base definition for local file or folder artifacts in the Horus Runtime
 
 import hashlib
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import model_validator
@@ -37,33 +38,55 @@ class LocalPathArtifactBase(BaseArtifact):
 
     path: Path = Path()
     """
-    Path to the local File
+    Path to the local file or folder.
+    """
+
+    uri: str = ""
+    """
+    URI can be optionally provided instead of path. If path is provided,
+    the URI will be derived from it automatically.
     """
 
     add_to_registry = False
 
-    @model_validator(mode="after")
-    def _update_uri(self) -> Self:
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_path_from_uri(cls, data: dict[str, Any]) -> dict[str, Any]:
         """
-        After the model is initialized, update the uri field to match the path.
-        This ensures that the uri field is always consistent with the path
-        field.
+        Before the model is initialized, if no path is provided, derive it
+        from the URI. This ensures that path is always set after construction.
         """
+        # If path is not provided, attempt to derive it from the URI
+        if "path" not in data or data["path"] is None:
 
-        # If the path is a URI, remove the URI scheme and convert it to a Path
-        # object
-        parsed = urlparse(self.uri)
-        if parsed.scheme not in ("file", ""):
-            raise ValueError(
-                _(
-                    "Unsupported URI scheme %r for %s. Only 'file' scheme or"
-                    " plain paths without a scheme are supported."
+            # "" evaluates to False if uri is None or not provided
+            uri = str(data.get("uri", ""))
+            if not uri:
+                raise ValueError("Either 'path' or 'uri' must be provided.")
+
+            # Validate the URI scheme before extracting the path
+            parsed = urlparse(uri)
+            if parsed.scheme not in ("file", ""):
+                raise ValueError(
+                    _(
+                        "Unsupported URI scheme %r for %s. Only 'file' scheme"
+                        " or plain paths without a scheme are supported."
+                    )
+                    % (parsed.scheme, cls.__name__)
                 )
-                % (parsed.scheme, type(self).__name__)
-            )
 
-        self.path = Path(parsed.path)
+            # Extract the path from the URI and convert it to a Path object
+            data["path"] = Path(parsed.path)
 
+        return data
+
+    @model_validator(mode="after")
+    def _resolve_and_sync(self) -> Self:
+        """
+        After the model is initialized, resolve the path to an absolute path
+        and sync the URI to match. This ensures path and URI are always
+        consistent with each other.
+        """
         # Resolve the path to an absolute path and convert it back to
         # the correct URI.
         self.path = self.path.resolve()

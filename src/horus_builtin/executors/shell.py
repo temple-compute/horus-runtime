@@ -16,39 +16,38 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Defines the LocalExecutor class, which represents an executor that runs a
+Defines the ShellExecutor class, which represents an executor that runs a
 task locally in the Horus runtime.
 """
 
 import subprocess
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from horus_runtime.core.executor.base import BaseExecutor
 
-
-class ExecutionError(Exception):
-    """
-    Custom exception for errors that occur during task execution.
-    """
+if TYPE_CHECKING:
+    from horus_runtime.core.task.base import BaseTask
 
 
-class LocalExecutor(BaseExecutor):
+class ShellExecutor(BaseExecutor):
     """
     Run the tasks locally in the host machine.
     """
 
-    kind: Literal["local"] = "local"
+    kind: Literal["shell"] = "shell"
 
-    def execute(self, cmd: str) -> int:
+    def execute(self, task: "BaseTask") -> int:
         """
         Runs the task locally in the host machine.
 
         Args:
-            cmd (str): The command to execute.
+            task (BaseTask): The task to execute.
 
         Returns:
             int: The return code of the executed command.
         """
+
+        prepared_command = task.runtime.format_runtime(task)
 
         # Security Warning:
         # This method uses `shell=True` with `subprocess.run`, which poses a
@@ -60,5 +59,5 @@ class LocalExecutor(BaseExecutor):
         # maximum flexibility, assuming the user is executing commands on
         # their own machine.
         return subprocess.run(
-            cmd, shell=True, check=False, text=True
+            prepared_command, shell=True, check=False, text=True
         ).returncode
