@@ -90,12 +90,15 @@ disable = [
 
 [tool.pyright]
 include = ["."]
-exclude = ["**/__pycache__", "build", "dist"]
+exclude = ["**/__pycache__", "build", "dist", "**/node_modules/**", "**/.*"]
 pythonVersion = "3.10"
 typeCheckingMode = "strict"
+
+# Here we disable checks that are already handled by pylint or flake8 to avoid duplicate warnings
 reportMissingImports = true
 reportMissingTypeStubs = false
 reportUnusedImport = false
+reportPrivateUsage = false
 
 [tool.flake8]
 max-line-length = 79

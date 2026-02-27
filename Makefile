@@ -51,16 +51,8 @@ install:
 	pip install -e ".[dev]"
 
 test:
-	$(PYTEST_CMD)
-
-test-unit:
-	pytest tests/unit -m unit
-
-test-int:
-	pytest tests/integration -m integration
-
-test-simple:
-	pytest
+	# Set PYTHONPATH to current directory to ensure tests can find other test modules
+	PYTHONPATH=. $(PYTEST_CMD)
 
 # Individual check commands (used by CI)
 black-check:

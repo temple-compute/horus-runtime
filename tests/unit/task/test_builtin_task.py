@@ -1,0 +1,318 @@
+#
+# horus-runtime
+# Copyright (C) 2026 Temple Compute
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+# pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
+# pylint: disable=missing-class-docstring, missing-function-docstring
+"""
+Unit tests for HorusTask builtin task
+"""
+
+from unittest.mock import Mock, patch
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from horus_builtin.artifacts.file import FileArtifact
+from horus_builtin.executors.shell import ShellExecutor
+from horus_builtin.runtimes.command import CommandRuntime
+from horus_builtin.tasks.horus_task import HorusTask
+from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.registry.auto_registry import init_registry
+from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.exceptions import TaskExecutionError
+
+
+@pytest.mark.unit
+class TestInitRegistry:
+    """
+    Test that the builtin horus tasks are properly registered
+    """
+
+    def test_init_registry_scans_builtin_tasks(self):
+        """
+        Test that init_registry properly scans the horus.tasks module
+        """
+        init_registry(BaseTask, "horus.tasks")
+
+        assert "horus_task" in BaseTask.registry
+        assert BaseTask.registry["horus_task"] is not None
+
+    def test_init_registry_returns_union_type(self):
+        """
+        Test that init_registry returns a Union type of all registered tasks
+        """
+        registry_union = init_registry(BaseTask, "horus.tasks")
+
+        assert registry_union is not None
+
+
+@pytest.mark.unit
+class TestTaskRegistry:
+    """
+    Test cases for task registry functionality
+    """
+
+    def test_task_union_is_defined(self):
+        """
+        Test that the task union type is defined after registry
+        initialization
+        """
+        from horus_runtime.core.registry.task_registry import TaskUnion
+
+        assert TaskUnion is not None
+
+    def test_task_union_can_validate_horus_task(self):
+        """
+        Test TaskUnion can validate HorusTask data
+        """
+        data = {
+            "kind": "horus_task",
+            "executor": {"kind": "shell"},
+            "runtime": {"kind": "command", "command": "echo 'Hello World'"},
+        }
+
+        from horus_runtime.core.registry.task_registry import TaskUnion
+
+        class TestModel(BaseModel):
+            task: TaskUnion
+
+        result = TestModel.model_validate({"task": data})
+
+        assert isinstance(result.task, HorusTask)
+        assert result.task.kind == "horus_task"
+
+    def test_task_registry_invalid_kind_handling(self):
+        """
+        Test that the task registry properly handles invalid kinds
+        """
+        data = {
+            "kind": "invalid_task_kind",
+            "executor": {"kind": "shell"},
+            "runtime": {"kind": "command", "command": "echo 'Hello World'"},
+        }
+
+        from horus_runtime.core.registry.task_registry import TaskUnion
+
+        class TestModel(BaseModel):
+            task: TaskUnion
+
+        with pytest.raises(ValidationError):
+            TestModel.model_validate({"task": data})
+
+
+@pytest.mark.unit
+class TestHorusTask:
+    """
+    Test cases for HorusTask functionality
+    """
+
+    def test_horus_task_inherits_from_base(self):
+        """
+        Test that HorusTask properly inherits from BaseTask
+        """
+        assert issubclass(HorusTask, BaseTask)
+
+    def test_horus_task_kind_is_horus_task(self):
+        """
+        Test that HorusTask has the correct kind field
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+        )
+
+        assert task.kind == "horus_task"
+
+    def test_horus_task_run_method_exists(self):
+        """
+        Test that HorusTask implements the run method
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+        )
+
+        # Should not raise NotImplementedError
+        assert callable(task.run)
+
+    def test_horus_task_creation_with_minimal_fields(self):
+        """
+        Test that HorusTask can be created with minimal required fields
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+        )
+
+        assert task.kind == "horus_task"
+        assert not task.inputs
+        assert not task.outputs
+        assert not task.variables
+
+    def test_horus_task_creation_with_all_fields(self):
+        """
+        Test that HorusTask can be created with all fields specified
+        """
+        input_artifact = FileArtifact(uri="input.txt")
+        output_artifact = FileArtifact(uri="output.txt")
+
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={"input1": input_artifact},
+            outputs={"output1": output_artifact},
+            variables={"var1": "value1"},
+        )
+
+        assert task.kind == "horus_task"
+        assert "input1" in task.inputs
+        assert "output1" in task.outputs
+        assert task.variables["var1"] == "value1"
+
+
+@pytest.mark.unit
+class TestHorusTaskExecution:
+    """
+    Test cases for HorusTask execution functionality
+    """
+
+    def test_horus_task_run_checks_input_artifacts_exist(self):
+        """
+        Test that HorusTask.run() checks if input artifacts exist
+        """
+        # Use a path that definitely doesn't exist
+        input_artifact = FileArtifact(
+            uri="/definitely/nonexistent/path/file.txt"
+        )
+
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={"input1": input_artifact},
+        )
+
+        with pytest.raises(ArtifactDoesNotExistError):
+            task.run()
+
+    def test_horus_task_run_executes_via_executor(self):
+        """
+        Test that HorusTask.run() executes the task via the executor
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={},  # No inputs to avoid file existence issues
+        )
+
+        # Mock subprocess.run to return success
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+
+            # Should not raise an exception
+            task.run()
+
+            # Verify that subprocess.run was called
+            mock_run.assert_called_once()
+
+    def test_horus_task_run_raises_error_on_execution_failure(self):
+        """
+        Test that HorusTask.run() raises TaskExecutionError when executor
+        returns non-zero
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+        )
+
+        # Mock subprocess.run to return failure
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1  # Non-zero return code
+
+            with pytest.raises(TaskExecutionError):
+                task.run()
+
+    def test_horus_task_run_with_no_inputs(self):
+        """
+        Test that HorusTask.run() works correctly with no inputs
+        """
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={},  # No inputs
+        )
+
+        # Mock subprocess.run to return success
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+
+            # Should not raise an exception
+            task.run()
+
+            # Verify that subprocess.run was called
+            mock_run.assert_called_once()
+
+    @patch("builtins.print")
+    def test_horus_task_run_prints_input_artifacts(self, mock_print: Mock):
+        """
+        Test that HorusTask.run() prints input artifacts for debugging
+        """
+        # Create an artifact with a specific path for testing
+        input_artifact = FileArtifact(uri="test.txt")
+
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={"input1": input_artifact},
+        )
+
+        # Mock to make the artifact appear to exist and the executor succeed
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value.returncode = 0
+            task.run()
+
+        # Verify that print was called - we can't predict exact format
+        # so just verify it was called with input1 in the message
+        mock_print.assert_called()
+        call_args = mock_print.call_args[0][0]
+        assert "Input input1:" in call_args
+
+    def test_horus_task_run_with_multiple_inputs_one_missing(self):
+        """
+        Test that HorusTask.run() stops on first missing artifact
+        """
+        # Use paths that definitely don't exist
+        input_artifact1 = FileArtifact(
+            uri="/definitely/nonexistent/path/file1.txt"
+        )
+        input_artifact2 = FileArtifact(
+            uri="/definitely/nonexistent/path/file2.txt"
+        )
+
+        task = HorusTask(
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            inputs={"input1": input_artifact1, "input2": input_artifact2},
+        )
+
+        # Should raise error when processing the inputs
+        with pytest.raises(ArtifactDoesNotExistError):
+            task.run()
+            task.run()

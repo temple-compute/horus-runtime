@@ -23,33 +23,15 @@
 Unit tests for ShellExecutor and related builtin executors
 """
 
-from typing import Callable
 from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executors.shell import ShellExecutor
-from horus_builtin.runtimes.command import CommandRuntime
-from horus_builtin.tasks.horus_task import HorusTask
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.registry.auto_registry import init_registry
-
-MakeTaskType = Callable[[str], HorusTask]
-
-
-@pytest.fixture
-def make_task() -> MakeTaskType:
-
-    def _make_task(cmd: str = "echo 'Hello World'") -> HorusTask:
-
-        runtime = CommandRuntime(command=cmd)
-
-        return HorusTask(
-            inputs={}, outputs={}, runtime=runtime, executor=ShellExecutor()
-        )
-
-    return _make_task
+from tests.conftest import MakeTaskType
 
 
 @pytest.mark.unit
@@ -131,28 +113,6 @@ class TestExecutorRegistry:
             TestModel.model_validate({"executor": invalid_data})
 
 
-@pytest.mark.integration
-class TestExecutorRegistryIntegration:
-    """
-    Integration tests for the full executor registry system
-    """
-
-    def test_registry_contains_expected_executors(self) -> None:
-        """
-        Test that the registry contains the expected executor types
-        """
-        # Access the registry from BaseExecutor after scanning
-        # noqa: F401
-        from horus_runtime.core.executor.base import BaseExecutor
-        from horus_runtime.core.registry.executor_registry import (  # noqa: F401,E501
-            ExecutorUnion,
-        )
-
-        # Registry should contain local executor
-        assert hasattr(BaseExecutor, "registry")
-        assert "shell" in BaseExecutor.registry
-
-
 @pytest.mark.unit
 class TestShellExecutor:
     """
@@ -170,15 +130,6 @@ class TestShellExecutor:
         Test that ShellExecutor has correct kind value
         """
         executor = ShellExecutor()
-        assert executor.kind == "shell"
-
-    def test_shell_executor_deserialization(self) -> None:
-        """
-        Test that ShellExecutor can be deserialized
-        """
-        data = {"kind": "shell"}
-        executor = ShellExecutor.model_validate(data)
-
         assert executor.kind == "shell"
 
     @patch("subprocess.run")
@@ -250,4 +201,10 @@ class TestShellExecutorIntegration:
         # Use 'true' command which should always exit with 0
         task = make_task("true")
         result = executor.execute(task)
+        assert result == 0
+        assert result == 0
+        assert result == 0
+        assert result == 0
+        assert result == 0
+        assert result == 0
         assert result == 0

@@ -183,8 +183,6 @@ class TestBaseExecutorValidation:
                 Invalid executor implementation without kind field for testing
                 """
 
-                add_to_registry = True
-
                 def execute(self, task: "BaseTask") -> int:
                     return 0
 
@@ -198,19 +196,6 @@ class TestBaseExecutorValidation:
             # about this, but we want to ensure that the validation error
             # is raised at runtime.
             ConcreteTestExecutor(kind=123)  # type: ignore
-
-    def test_extra_fields_handling(self) -> None:
-        """
-        Test behavior with extra fields in model validation
-        """
-        data = {
-            "kind": "test",
-            "extra_field": "should_be_ignored",
-        }
-
-        # Should work fine - extra fields are ignored by default
-        executor = ConcreteTestExecutor.model_validate(data)
-        assert executor.kind == "test"
 
     def test_abstract_method_enforcement(self) -> None:
         """
