@@ -24,7 +24,7 @@ executing tasks, and should be ingested by the executor.
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from horus_runtime.core.registry.artifact_registry import ArtifactUnion
 from horus_runtime.core.registry.auto_registry import AutoRegistry
@@ -48,11 +48,11 @@ class BaseTask(BaseModel, ABC, AutoRegistry):
     The 'kind' field is used to identify the specific type of task.
     """
 
-    inputs: dict[str, ArtifactUnion] = {}
+    inputs: dict[str, ArtifactUnion] = Field(default_factory=dict)
 
-    outputs: dict[str, ArtifactUnion] = {}
+    outputs: dict[str, ArtifactUnion] = Field(default_factory=dict)
 
-    variables: dict[str, Any] = {}
+    variables: dict[str, Any] = Field(default_factory=dict)
 
     executor: ExecutorUnion
 

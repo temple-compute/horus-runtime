@@ -202,9 +202,3 @@ class TestShellExecutorIntegration:
         task = make_task("true")
         result = executor.execute(task)
         assert result == 0
-        assert result == 0
-        assert result == 0
-        assert result == 0
-        assert result == 0
-        assert result == 0
-        assert result == 0

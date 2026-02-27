@@ -28,9 +28,7 @@ from horus_runtime.core.task.exceptions import TaskExecutionError
 
 class HorusTask(BaseTask):
     """
-    The HorusTask represents a basic task in the Horus runtime. This task is
-    designed to be executed by the CommandExecutor, and simply runs the command
-    specified in the runtime.
+    The HorusTask represents a basic task in the Horus runtime.
     """
 
     kind: Literal["horus_task"] = "horus_task"
@@ -41,10 +39,12 @@ class HorusTask(BaseTask):
         already specified in the runtime and will be executed by the executor.
         """
 
-        # Gather inputs
-        for input_name, artifact in self.inputs.items():
-            print(f"Input {input_name}: {artifact}")
-
+        # Gather inputs, pylint bug on the inputs field from BaseTask, so
+        # we disable the no-member warning here
+        for (
+            input_name,
+            artifact,
+        ) in self.inputs.items():  # pylint: disable=no-member
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
                     f"Input artifact {input_name} does not exist"

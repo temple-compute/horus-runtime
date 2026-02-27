@@ -22,7 +22,7 @@
 Unit tests for HorusTask builtin task
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -266,34 +266,6 @@ class TestHorusTaskExecution:
             # Verify that subprocess.run was called
             mock_run.assert_called_once()
 
-    @patch("builtins.print")
-    def test_horus_task_run_prints_input_artifacts(self, mock_print: Mock):
-        """
-        Test that HorusTask.run() prints input artifacts for debugging
-        """
-        # Create an artifact with a specific path for testing
-        input_artifact = FileArtifact(uri="test.txt")
-
-        task = HorusTask(
-            executor=ShellExecutor(),
-            runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={"input1": input_artifact},
-        )
-
-        # Mock to make the artifact appear to exist and the executor succeed
-        with (
-            patch("pathlib.Path.exists", return_value=True),
-            patch("subprocess.run") as mock_run,
-        ):
-            mock_run.return_value.returncode = 0
-            task.run()
-
-        # Verify that print was called - we can't predict exact format
-        # so just verify it was called with input1 in the message
-        mock_print.assert_called()
-        call_args = mock_print.call_args[0][0]
-        assert "Input input1:" in call_args
-
     def test_horus_task_run_with_multiple_inputs_one_missing(self):
         """
         Test that HorusTask.run() stops on first missing artifact
@@ -314,5 +286,4 @@ class TestHorusTaskExecution:
 
         # Should raise error when processing the inputs
         with pytest.raises(ArtifactDoesNotExistError):
-            task.run()
             task.run()

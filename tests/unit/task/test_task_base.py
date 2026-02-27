@@ -243,4 +243,3 @@ class TestBaseTaskValidation:
         assert "output1" in task.outputs
         assert isinstance(task.inputs["input1"], FileArtifact)
         assert isinstance(task.outputs["output1"], FileArtifact)
-        assert isinstance(task.outputs["output1"], FileArtifact)
