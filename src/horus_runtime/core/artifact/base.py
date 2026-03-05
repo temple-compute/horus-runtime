@@ -107,3 +107,9 @@ class BaseArtifact(BaseModel, ABC, AutoRegistry):
         This method should be implemented to compute the hash based on the
         actual content of the artifact.
         """
+
+    @abstractmethod
+    def delete(self) -> None:
+        """
+        Deletes the artifact from its location.
+        """

@@ -58,7 +58,6 @@ class LocalPathArtifactBase(BaseArtifact):
         """
         # If path is not provided, attempt to derive it from the URI
         if "path" not in data or data["path"] is None:
-
             # "" evaluates to False if uri is None or not provided
             uri = str(data.get("uri", ""))
             if not uri:

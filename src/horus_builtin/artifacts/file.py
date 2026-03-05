@@ -39,3 +39,11 @@ class FileArtifact(LocalPathArtifactBase):
         # For file artifacts, the hash is computed based on the file contents.
         # Convert using hex to ensure it's a string representation of the hash.
         return self.hash_file(self.path).hex() if self.exists() else None
+
+    def delete(self) -> None:
+        """
+        Deletes the artifact from its location by deleting the file at the
+        specified path.
+        """
+
+        self.path.unlink()
