@@ -16,9 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
-# pylint: disable=missing-class-docstring, missing-function-docstring
-# pylint: disable=reimported
+# ruff: noqa: PLC0415
 """
 Unit tests for ShellExecutor and related builtin executors
 """

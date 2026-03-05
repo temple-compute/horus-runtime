@@ -104,7 +104,7 @@ class TestBaseRuntime:
         assert task_param.annotation == "BaseTask"
 
         # Check return type
-        assert sig.return_annotation == str
+        assert sig.return_annotation is str
 
 
 @pytest.mark.unit
@@ -136,7 +136,6 @@ class TestBaseRuntimeValidation:
         """
 
         with pytest.raises(ValidationError):
-
             ConcreteTestRuntime(kind=123)  # type: ignore
 
     def test_abstract_method_enforcement(self) -> None:

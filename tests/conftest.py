@@ -19,6 +19,7 @@
 Test configuration for pytest
 """
 
+from pathlib import Path
 from typing import Protocol
 
 import pytest
@@ -48,6 +49,7 @@ class MakeTaskType(Protocol):
         self,
         cmd: str = ...,
         inputs: dict[str, BaseArtifact] | None = None,
+        task_class: type[HorusTask] = HorusTask,
     ) -> HorusTask: ...
 
 
@@ -61,11 +63,13 @@ def make_task() -> MakeTaskType:
     def _make_task(
         cmd: str = "echo 'Hello World'",
         inputs: dict[str, BaseArtifact] | None = None,
+        task_class: type[HorusTask] = HorusTask,
     ) -> HorusTask:
 
         runtime = CommandRuntime(command=cmd)
 
-        return HorusTask(
+        return task_class(
+            name="test_task",
             inputs=inputs or {},
             outputs={},
             runtime=runtime,
@@ -73,3 +77,26 @@ def make_task() -> MakeTaskType:
         )
 
     return _make_task
+
+
+class MakeWorkflowFileType(Protocol):
+    """
+    Protocol for a factory function that creates temporary workflow YAML files
+    for testing
+    """
+
+    def __call__(self, tmp_path: Path, content: str) -> Path: ...
+
+
+@pytest.fixture
+def make_workflow_file() -> MakeWorkflowFileType:
+    """
+    Fixture to create a temporary workflow YAML file for testing
+    """
+
+    def _make_workflow_file(tmp_path: Path, content: str) -> Path:
+        workflow_file = tmp_path / "workflow.yml"
+        workflow_file.write_text(content)
+        return workflow_file
+
+    return _make_workflow_file

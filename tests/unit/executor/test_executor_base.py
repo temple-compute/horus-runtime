@@ -157,7 +157,7 @@ class TestBaseExecutor:
         assert cmd_param.annotation == "BaseTask"
 
         # Check return type
-        assert sig.return_annotation == int
+        assert sig.return_annotation is int
 
 
 @pytest.mark.unit

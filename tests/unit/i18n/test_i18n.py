@@ -47,13 +47,13 @@ class TestHorusLocales:
         """
         Test English locale constant
         """
-        assert _HorusLocales.ENGLISH == "en"
+        assert _HorusLocales.ENGLISH.value == "en"
 
     def test_spanish_locale(self) -> None:
         """
         Test Spanish locale constant
         """
-        assert _HorusLocales.SPANISH == "es"
+        assert _HorusLocales.SPANISH.value == "es"
 
     def test_locale_is_string(self) -> None:
         """

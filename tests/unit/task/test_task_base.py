@@ -43,10 +43,16 @@ class ConcreteTestTask(BaseTask):
 
     kind: Literal["test_task"] = "test_task"
 
-    def run(self):
+    def run(self) -> None:
         """
         Test implementation of run method
         """
+
+    def is_complete(self) -> bool:
+        return True
+
+    def reset(self) -> None:
+        pass
 
 
 @pytest.mark.unit
@@ -123,6 +129,7 @@ class TestBaseTask:
         """
         # Create a concrete task to test defaults
         task = ConcreteTestTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
         )
@@ -152,7 +159,13 @@ class TestBaseTaskValidation:
                 Invalid task that does not set 'kind' field
                 """
 
-                def run(self):
+                def is_complete(self) -> bool:
+                    return True
+
+                def reset(self) -> None:
+                    pass
+
+                def run(self) -> None:
                     pass
 
     def test_model_validation_preserves_type_safety(self) -> None:
@@ -197,13 +210,15 @@ class TestBaseTaskValidation:
         """
         # Test missing executor
         with pytest.raises(ValidationError):
-            ConcreteTestTask(  # pyright: ignore[reportCallIssue]
+            ConcreteTestTask(  # type: ignore[call-arg]
+                name="test_task",
                 runtime=CommandRuntime(command="echo test"),
             )
 
         # Test missing runtime
         with pytest.raises(ValidationError):
-            ConcreteTestTask(  # pyright: ignore[reportCallIssue]
+            ConcreteTestTask(  # type: ignore[call-arg]
+                name="test_task",
                 executor=ShellExecutor(),
             )
 
@@ -212,6 +227,7 @@ class TestBaseTaskValidation:
         Test that a valid task can be created successfully
         """
         task = ConcreteTestTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
             inputs={},
@@ -233,6 +249,7 @@ class TestBaseTaskValidation:
         output_artifact = FileArtifact(uri="test_output.txt")
 
         task = ConcreteTestTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
             inputs={"input1": input_artifact},

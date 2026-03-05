@@ -74,6 +74,10 @@ class _LocaleUtils:
             return _HorusLocales.ENGLISH
 
 
+# Instantiate the default locale at module load time
+DEFAULT_LOCALE = _LocaleUtils.get_default_locale()
+
+
 class _HorusTranslationManager:
     """
     Sets up and manages the translation system for horus-runtime.
@@ -84,9 +88,7 @@ class _HorusTranslationManager:
         gettext.NullTranslations | gettext.GNUTranslations
     ) = gettext.NullTranslations()
 
-    def __init__(
-        self, lang: _HorusLocales = _LocaleUtils.get_default_locale()
-    ) -> None:
+    def __init__(self, lang: _HorusLocales = DEFAULT_LOCALE) -> None:
         """
         Initialize the translation manager with the default locale.
         """

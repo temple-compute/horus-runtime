@@ -22,7 +22,7 @@ Entrypoint for horus-runtime
 from horus_runtime.i18n import tr as _
 
 
-def main():
+def main() -> None:
     """
     Main function for horus-runtime
     """
@@ -31,6 +31,5 @@ def main():
 
 
 if __name__ == "__main__":
-
     # Call the main function to start the runtime
     main()
