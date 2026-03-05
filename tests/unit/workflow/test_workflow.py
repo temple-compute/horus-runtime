@@ -21,7 +21,7 @@ Unit tests for the Workflow class
 
 import textwrap
 from pathlib import Path
-from typing import ClassVar
+from typing import Literal
 
 import pytest
 import yaml
@@ -32,7 +32,7 @@ from tests.conftest import MakeWorkflowFileType
 
 
 class ConcreteWorkflow(BaseWorkflow):
-    kind: ClassVar[str] = "concrete_workflow"
+    kind: Literal["concrete_workflow"] = "concrete_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ConcreteWorkflow":
