@@ -31,7 +31,7 @@ responsibility when writing the workflow YAML file.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -45,6 +45,11 @@ class BaseWorkflow(BaseModel, ABC, AutoRegistry):
     """
 
     registry_key: ClassVar[str] = "kind"
+
+    kind: Any = None
+    """
+    The 'kind' field is used to identify the specific type of workflow.
+    """
 
     name: str
     """

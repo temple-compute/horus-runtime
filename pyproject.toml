@@ -39,6 +39,9 @@ command = "horus_builtin.runtimes.command"
 [project.entry-points."horus.tasks"]
 horus_task = "horus_builtin.tasks.horus_task"
 
+[project.entry-points."horus.workflows"]
+horus_workflow = "horus_builtin.workflows.horus_workflow"
+
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 

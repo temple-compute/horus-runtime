@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Literal
 
 import yaml
 
@@ -34,7 +34,7 @@ class HorusWorkflow(BaseWorkflow):
     missing.
     """
 
-    kind: ClassVar[Literal["horus_workflow"]] = "horus_workflow"
+    kind: Literal["horus_workflow"] = "horus_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
