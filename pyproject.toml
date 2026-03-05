@@ -2,15 +2,12 @@
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
 version = "0.0.1"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = [
-    "pydantic~=2.0",
-    "pyyaml~=6.0",
-]
+dependencies = ["pydantic~=2.0", "pyyaml~=6.0"]
 
 [project.optional-dependencies]
 dev = [
@@ -21,6 +18,7 @@ dev = [
     "pre_commit~=4.0",
     "licenseheaders~=0.8",
     "babel~=2.0",
+    "types-PyYAML~=6.0",
 ]
 
 
@@ -61,13 +59,7 @@ addopts = """
 [tool.ruff]
 line-length = 79
 target-version = "py310"
-exclude = [
-    ".git",
-    ".venv",
-    "build",
-    "dist",
-    "__pycache__",
-]
+exclude = [".git", ".venv", "build", "dist", "__pycache__"]
 
 [tool.ruff.lint]
 select = [
@@ -83,7 +75,7 @@ select = [
 ]
 
 ignore = [
-    "E203",   # Whitespace before ':', conflicts with formatter
+    "E203", # Whitespace before ':', conflicts with formatter
 ]
 
 [tool.ruff.format]
