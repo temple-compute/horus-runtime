@@ -9,40 +9,26 @@ repos:
 
   - repo: local
     hooks:
-      - id: black
-        name: black
-        entry: black
-        language: system
-        types: [python]
-
-      - id: isort
-        name: isort
-        entry: isort
-        language: system
-        types: [python]
-
-      - id: flake8
-        name: flake8
-        entry: flake8
-        language: system
-        types: [python]
-
-      - id: pylint
-        name: pylint
-        entry: pylint
+      - id: ruff-lint
+        name: ruff lint
+        entry: ruff check --fix
         language: system
         types: [python]
         require_serial: true
-        args: [
-            "-rn", # Only display messages
-            "-sn", # Don't display the score
-          ]
 
-      - id: pyright
-        name: pyright
-        entry: pyright
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format
         language: system
         types: [python]
+
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        types: [python]
+        require_serial: true
+        args: ["--ignore-missing-imports"]
 
       # If the commit includes changes in translation files,
       # check that all translations are complete.
