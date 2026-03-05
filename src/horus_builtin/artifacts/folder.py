@@ -76,4 +76,5 @@ class FolderArtifact(LocalPathArtifactBase):
         specified path.
         """
 
-        shutil.rmtree(self.path)
+        if self.exists():
+            shutil.rmtree(self.path)

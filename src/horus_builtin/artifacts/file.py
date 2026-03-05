@@ -46,4 +46,5 @@ class FileArtifact(LocalPathArtifactBase):
         specified path.
         """
 
-        self.path.unlink()
+        if self.exists():
+            self.path.unlink()

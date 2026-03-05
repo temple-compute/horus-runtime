@@ -44,11 +44,7 @@ class HorusWorkflow(BaseWorkflow):
     def run(self) -> None:
         """
         Tasks are executed in definition order. A task is skipped when all of
-        its output artifacts exist (see :meth:`_is_task_complete`). If a task
-        raises :class:`~horus_runtime.core.task.exceptions.TaskExecutionError`,
-        execution stops immediately and a
-        :class:`~horus_runtime.core.workflow.exceptions.WorkflowExecutionError`
-        is raised wrapping the original cause.
+        its output artifacts exist (see :meth:`is_complete`).
         """
         for task in self.tasks.values():
             if task.is_complete():

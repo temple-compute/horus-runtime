@@ -324,8 +324,11 @@ class TestHorusTaskExecution:
         """
         task = make_task(cmd="echo 'Hello World'")
 
-        # Simulate running the task a few times
-        task.run()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+
+            # Simulate running the task a few times
+            task.run()
 
         assert task.runs == 1
 

@@ -184,15 +184,17 @@ class TestWorkflowRun:
             add_to_registry = False
 
             def run(self) -> None:
-                super().run()
+                super().run()  # Here it calls +1 run count
                 raise TaskExecutionError("fail")
 
-        task_a = make_task(cmd="echxxo A")
-        task_b = make_task(cmd="echo B", task_class=TaskWithFailure)
+        task_a = make_task(cmd="echo A", task_class=TaskWithFailure)
+        task_b = make_task(cmd="echo B")
 
         wf = HorusWorkflow(name="stop_test", tasks={"a": task_a, "b": task_b})
         with pytest.raises(TaskExecutionError):
-            wf.run()
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = Mock(returncode=0)
+                wf.run()
 
         assert task_a.runs == 1
         assert task_b.runs == 0
