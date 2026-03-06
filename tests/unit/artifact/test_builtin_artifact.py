@@ -16,9 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
-# pylint: disable=missing-class-docstring, missing-function-docstring
-# pylint: disable=reimported
+# ruff: noqa: PLC0415
 """
 Unit tests for artifact_registry module
 """
@@ -36,6 +34,9 @@ from horus_builtin.artifacts.folder import FolderArtifact
 from horus_builtin.artifacts.local_base import LocalPathArtifactBase
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.registry.auto_registry import init_registry
+
+SHA_HEX_LENGTH = 64  # Length of SHA-256 hash in hexadecimal representation
+SHA_HEX_LENGTH_BYTES = 32  # Length of SHA-256 hash in bytes
 
 
 @pytest.mark.unit
@@ -142,9 +143,8 @@ class TestArtifactRegistryIntegration:
         Test that the registry contains the expected artifact types
         """
         # Access the registry from BaseArtifact after scanning
-        # noqa: F401
         from horus_runtime.core.artifact.base import BaseArtifact
-        from horus_runtime.core.registry.artifact_registry import (  # noqa: F401,E501
+        from horus_runtime.core.registry.artifact_registry import (  # noqa: F401
             ArtifactUnion,
         )
 
@@ -249,7 +249,7 @@ class TestFileArtifact:
             file_hash = artifact.hash
             assert file_hash is not None
             assert isinstance(file_hash, str)
-            assert len(file_hash) == 64  # SHA-256 hex string length
+            assert len(file_hash) == SHA_HEX_LENGTH
 
 
 @pytest.mark.unit
@@ -309,7 +309,7 @@ class TestFolderArtifact:
             # Empty folder should have deterministic hash
             assert folder_hash is not None
             assert isinstance(folder_hash, str)
-            assert len(folder_hash) == 64  # SHA-256 hex length
+            assert len(folder_hash) == SHA_HEX_LENGTH
 
     def test_hash_property_nonexistent_folder(self) -> None:
         """
@@ -400,7 +400,7 @@ class TestFolderArtifact:
             # Should complete without error even with many files
             assert folder_hash is not None
             assert isinstance(folder_hash, str)
-            assert len(folder_hash) == 64
+            assert len(folder_hash) == SHA_HEX_LENGTH
 
 
 class ConcreteLocalArtifact(LocalPathArtifactBase):
@@ -414,6 +414,9 @@ class ConcreteLocalArtifact(LocalPathArtifactBase):
     @property
     def hash(self) -> str | None:
         return "test_hash" if self.exists() else None
+
+    def delete(self) -> None:
+        pass
 
 
 @pytest.mark.unit
@@ -530,7 +533,7 @@ class TestLocalPathArtifactBase:
             hash_bytes = LocalPathArtifactBase.hash_file(test_file)
 
             assert isinstance(hash_bytes, bytes)
-            assert len(hash_bytes) == 32  # SHA-256 produces 32 bytes
+            assert len(hash_bytes) == SHA_HEX_LENGTH_BYTES
 
             # Hash should be consistent
             hash_bytes2 = LocalPathArtifactBase.hash_file(test_file)
@@ -566,7 +569,7 @@ class TestLocalPathArtifactBase:
             hash_bytes = LocalPathArtifactBase.hash_file(large_file)
 
             assert isinstance(hash_bytes, bytes)
-            assert len(hash_bytes) == 32
+            assert len(hash_bytes) == SHA_HEX_LENGTH_BYTES
 
     def test_uri_update_on_model_validation(self) -> None:
         """

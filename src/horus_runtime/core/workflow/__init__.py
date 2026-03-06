@@ -15,21 +15,3 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""
-Entrypoint for horus-runtime
-"""
-
-from horus_runtime.i18n import tr as _
-
-
-def main() -> None:
-    """
-    Main function for horus-runtime
-    """
-
-    print(_("Horus Runtime is starting..."))
-
-
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()

@@ -16,20 +16,20 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Entrypoint for horus-runtime
+Definitions of the workflow registry
 """
 
-from horus_runtime.i18n import tr as _
+from typing import TYPE_CHECKING, TypeAlias
 
+from horus_runtime.core.registry.auto_registry import init_registry
+from horus_runtime.core.workflow.base import BaseWorkflow
 
-def main() -> None:
-    """
-    Main function for horus-runtime
-    """
-
-    print(_("Horus Runtime is starting..."))
-
-
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()
+# We define a type alias for the registry union type to make it easier to use
+# in type annotations throughout the codebase. We need to "trick" the type
+# checker here because the registry union type is dynamically generated at
+# runtime and can't be easily expressed as a static type annotation, so we
+# assign BaseWorkflow during development
+if TYPE_CHECKING:
+    WorkflowUnion: TypeAlias = BaseWorkflow
+else:
+    WorkflowUnion = init_registry(BaseWorkflow, "horus.workflows")

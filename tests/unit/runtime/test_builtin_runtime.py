@@ -16,8 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
-# pylint: disable=missing-class-docstring, missing-function-docstring
+# ruff: noqa: PLC0415
 """
 Unit tests for CommandRuntime builtin runtime
 """
@@ -38,7 +37,7 @@ class TestInitRegistry:
     Test that the builtin horus runtimes are properly registered
     """
 
-    def test_init_registry_scans_builtin_runtimes(self):
+    def test_init_registry_scans_builtin_runtimes(self) -> None:
         """
         Test that init_registry properly scans the horus.runtimes module
         """
@@ -49,7 +48,7 @@ class TestInitRegistry:
 
         assert BaseRuntime.registry["command"] is not None
 
-    def test_init_registry_returns_union_type(self):
+    def test_init_registry_returns_union_type(self) -> None:
         """
         Test that init_registry returns a Union type of all registered runtimes
         """
@@ -64,7 +63,7 @@ class TestRuntimeRegistry:
     Test cases for runtime registry functionality
     """
 
-    def test_runtime_union_is_defined(self):
+    def test_runtime_union_is_defined(self) -> None:
         """
         Test that the runtime union type is defined after registry
         initialization
@@ -73,7 +72,7 @@ class TestRuntimeRegistry:
 
         assert RuntimeUnion is not None
 
-    def test_runtime_union_can_validate_union_runtime(self):
+    def test_runtime_union_can_validate_union_runtime(self) -> None:
         """
         Test RuntimeUnion can validate CommandRuntime data
         """
@@ -93,7 +92,7 @@ class TestRuntimeRegistry:
         assert isinstance(result.runtime, CommandRuntime)
         assert result.runtime.kind == "command"
 
-    def test_runtime_registry_invalid_kind_handling(self):
+    def test_runtime_registry_invalid_kind_handling(self) -> None:
         """
         Test that the runtime registry properly handles invalid kinds
         """
@@ -118,13 +117,13 @@ class TestCommandRuntime:
     Test cases for CommandRuntime functionality
     """
 
-    def test_command_runtime_inherits_from_base(self):
+    def test_command_runtime_inherits_from_base(self) -> None:
         """
         Test that CommandRuntime properly inherits from BaseRuntime
         """
         assert issubclass(CommandRuntime, BaseRuntime)
 
-    def test_command_runtime_kind_is_command(self):
+    def test_command_runtime_kind_is_command(self) -> None:
         """
         Test that CommandRuntime has the correct kind field
         """
@@ -134,7 +133,7 @@ class TestCommandRuntime:
 
     def test_command_runtime_formats_command_with_inputs(
         self, make_task: MakeTaskType
-    ):
+    ) -> None:
         """
         Test that CommandRuntime properly formats commands with task inputs
         """
@@ -150,7 +149,7 @@ class TestCommandRuntime:
 
     def test_command_runtime_formats_command_with_task_variables(
         self, make_task: MakeTaskType
-    ):
+    ) -> None:
         """
         Test that CommandRuntime can access task variables in command
         formatting

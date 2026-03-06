@@ -33,7 +33,7 @@ class TestMain:
     """
 
     @patch("builtins.print")
-    def test_main_execution(self, mock_print: MagicMock):
+    def test_main_execution(self, mock_print: MagicMock) -> None:
         """
         Test that main execution prints expected message
         """
@@ -44,14 +44,14 @@ class TestMain:
         # Verify the print was called with expected message
         mock_print.assert_called_with("Horus Runtime is starting...")
 
-    def test_main_module_exists(self):
+    def test_main_module_exists(self) -> None:
         """
         Test that main module can be imported
         """
 
         assert horus_runtime is not None
 
-    def test_main_function_callable(self):
+    def test_main_function_callable(self) -> None:
         """
         Test that main function is callable
         """

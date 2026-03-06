@@ -2,13 +2,11 @@
 
 # Command definitions (used in CI and locally)
 PYTEST_CMD = pytest --cov --cov-report=xml --cov-report=html --cov-report=term --junitxml=test-results.xml
-BLACK_CHECK_CMD = black --check --diff .
-ISORT_CHECK_CMD = isort --check-only --diff .
-PYLINT_CMD = pylint src/ --output-format=text
-FLAKE8_CMD = flake8 src/
-PYRIGHT_CMD = pyright
-BLACK_FORMAT_CMD = black .
-ISORT_FORMAT_CMD = isort .
+RUFF_LINT_CMD = ruff check src/ tests/
+RUFF_FORMAT_CHECK_CMD = ruff format --check --diff .
+RUFF_FIX_CMD = ruff check --fix src/ tests/
+RUFF_FORMAT_CMD = ruff format .
+MYPY_CMD = mypy src/ tests/
 ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -cy -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es
 
 # i18n settings (babel)
@@ -22,25 +20,24 @@ SOURCE_DIR = src/horus_runtime
 PROJECT_NAME = horus-runtime
 ORGANIZATION = Temple Compute
 
-.PHONY: install test lint format type-check clean help black-check isort-check pylint-check flake8-check add-license-headers babel-update babel-check babel-add babel-extract
+.PHONY: install test lint format type-check clean help ruff-check ruff-format-check mypy-check add-license-headers babel-update babel-check babel-add babel-extract
 
 help:
 	@echo "Available commands:"
-	@echo "  install      Install micromamba horus_runtime environment and dependencies"
-	@echo "  test         Run all tests with coverage (same as CI)"
-	@echo "  lint         Run all linting tools (same as CI)"
-	@echo "  black-check  Check code formatting (used by CI)"
-	@echo "  isort-check  Check import sorting (used by CI)"
-	@echo "  pylint-check Check with pylint (used by CI)"
-	@echo "  flake8-check Check with flake8 (used by CI)"
-	@echo "  format       Format code with black and isort"
-	@echo "  type-check   Run type checking"
-	@echo "  add-license-headers  Add license headers to source files"
-	@echo "  babel-update  Update Babel translations"
-	@echo "  babel-check   Check Babel translations (used by CI)"
-	@echo "  babel-add     Add a new language (usage: make babel-add LANG=es)"
-	@echo "  babel-extract Extract translatable strings to messages.pot"
-	@echo "  clean        Remove cache files"
+	@echo "  install             Install micromamba horus_runtime environment and dependencies"
+	@echo "  test                Run all tests with coverage (same as CI)"
+	@echo "  lint                Run all linting tools (same as CI)"
+	@echo "  ruff-check          Check code with ruff linter (used by CI)"
+	@echo "  ruff-format-check   Check code formatting with ruff (used by CI)"
+	@echo "  mypy-check          Check types with mypy (used by CI)"
+	@echo "  format              Format code with ruff"
+	@echo "  type-check          Run type checking"
+	@echo "  add-license-headers Add license headers to source files"
+	@echo "  babel-update        Update Babel translations"
+	@echo "  babel-check         Check Babel translations (used by CI)"
+	@echo "  babel-add           Add a new language (usage: make babel-add LANG=es)"
+	@echo "  babel-extract       Extract translatable strings to messages.pot"
+	@echo "  clean               Remove cache files"
 
 install:
 	micromamba create -y -n horus_runtime python=3.11
@@ -52,31 +49,26 @@ test:
 	PYTHONPATH=. $(PYTEST_CMD)
 
 # Individual check commands (used by CI)
-black-check:
-	$(BLACK_CHECK_CMD)
+ruff-check:
+	$(RUFF_LINT_CMD)
 
-isort-check:
-	$(ISORT_CHECK_CMD)
+ruff-format-check:
+	$(RUFF_FORMAT_CHECK_CMD)
 
-pylint-check:
-	$(PYLINT_CMD)
-
-flake8-check:
-	@$(FLAKE8_CMD)
+mypy-check:
+	$(MYPY_CMD)
 
 lint:
-	$(BLACK_CHECK_CMD)
-	$(ISORT_CHECK_CMD)
-	$(PYLINT_CMD)
-	$(FLAKE8_CMD)
-	$(PYRIGHT_CMD)
+	$(RUFF_LINT_CMD)
+	$(RUFF_FORMAT_CHECK_CMD)
+	$(MYPY_CMD)
 
 format:
-	$(BLACK_FORMAT_CMD)
-	$(ISORT_FORMAT_CMD)
+	$(RUFF_FIX_CMD)
+	$(RUFF_FORMAT_CMD)
 
 type-check:
-	$(PYRIGHT_CMD)
+	$(MYPY_CMD)
 
 add-license-headers:
 	$(ADD_LICENSE_HEADERS_CMD) -d src

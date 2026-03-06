@@ -16,8 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# pylint: disable=import-outside-toplevel, redefined-outer-name, unused-import
-# pylint: disable=missing-class-docstring, missing-function-docstring
+# ruff: noqa: PLC0415
 """
 Unit tests for HorusTask builtin task
 """
@@ -35,6 +34,7 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.registry.auto_registry import init_registry
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from tests.conftest import MakeTaskType
 
 
 @pytest.mark.unit
@@ -43,7 +43,7 @@ class TestInitRegistry:
     Test that the builtin horus tasks are properly registered
     """
 
-    def test_init_registry_scans_builtin_tasks(self):
+    def test_init_registry_scans_builtin_tasks(self) -> None:
         """
         Test that init_registry properly scans the horus.tasks module
         """
@@ -52,7 +52,7 @@ class TestInitRegistry:
         assert "horus_task" in BaseTask.registry
         assert BaseTask.registry["horus_task"] is not None
 
-    def test_init_registry_returns_union_type(self):
+    def test_init_registry_returns_union_type(self) -> None:
         """
         Test that init_registry returns a Union type of all registered tasks
         """
@@ -67,7 +67,7 @@ class TestTaskRegistry:
     Test cases for task registry functionality
     """
 
-    def test_task_union_is_defined(self):
+    def test_task_union_is_defined(self) -> None:
         """
         Test that the task union type is defined after registry
         initialization
@@ -76,11 +76,12 @@ class TestTaskRegistry:
 
         assert TaskUnion is not None
 
-    def test_task_union_can_validate_horus_task(self):
+    def test_task_union_can_validate_horus_task(self) -> None:
         """
         Test TaskUnion can validate HorusTask data
         """
         data = {
+            "name": "test_task",
             "kind": "horus_task",
             "executor": {"kind": "shell"},
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
@@ -96,7 +97,7 @@ class TestTaskRegistry:
         assert isinstance(result.task, HorusTask)
         assert result.task.kind == "horus_task"
 
-    def test_task_registry_invalid_kind_handling(self):
+    def test_task_registry_invalid_kind_handling(self) -> None:
         """
         Test that the task registry properly handles invalid kinds
         """
@@ -121,28 +122,30 @@ class TestHorusTask:
     Test cases for HorusTask functionality
     """
 
-    def test_horus_task_inherits_from_base(self):
+    def test_horus_task_inherits_from_base(self) -> None:
         """
         Test that HorusTask properly inherits from BaseTask
         """
         assert issubclass(HorusTask, BaseTask)
 
-    def test_horus_task_kind_is_horus_task(self):
+    def test_horus_task_kind_is_horus_task(self) -> None:
         """
         Test that HorusTask has the correct kind field
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
 
         assert task.kind == "horus_task"
 
-    def test_horus_task_run_method_exists(self):
+    def test_horus_task_run_method_exists(self) -> None:
         """
         Test that HorusTask implements the run method
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
@@ -150,11 +153,12 @@ class TestHorusTask:
         # Should not raise NotImplementedError
         assert callable(task.run)
 
-    def test_horus_task_creation_with_minimal_fields(self):
+    def test_horus_task_creation_with_minimal_fields(self) -> None:
         """
         Test that HorusTask can be created with minimal required fields
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
@@ -164,7 +168,7 @@ class TestHorusTask:
         assert not task.outputs
         assert not task.variables
 
-    def test_horus_task_creation_with_all_fields(self):
+    def test_horus_task_creation_with_all_fields(self) -> None:
         """
         Test that HorusTask can be created with all fields specified
         """
@@ -172,6 +176,7 @@ class TestHorusTask:
         output_artifact = FileArtifact(uri="output.txt")
 
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={"input1": input_artifact},
@@ -191,7 +196,7 @@ class TestHorusTaskExecution:
     Test cases for HorusTask execution functionality
     """
 
-    def test_horus_task_run_checks_input_artifacts_exist(self):
+    def test_horus_task_run_checks_input_artifacts_exist(self) -> None:
         """
         Test that HorusTask.run() checks if input artifacts exist
         """
@@ -201,6 +206,7 @@ class TestHorusTaskExecution:
         )
 
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={"input1": input_artifact},
@@ -209,11 +215,12 @@ class TestHorusTaskExecution:
         with pytest.raises(ArtifactDoesNotExistError):
             task.run()
 
-    def test_horus_task_run_executes_via_executor(self):
+    def test_horus_task_run_executes_via_executor(self) -> None:
         """
         Test that HorusTask.run() executes the task via the executor
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={},  # No inputs to avoid file existence issues
@@ -229,12 +236,13 @@ class TestHorusTaskExecution:
             # Verify that subprocess.run was called
             mock_run.assert_called_once()
 
-    def test_horus_task_run_raises_error_on_execution_failure(self):
+    def test_horus_task_run_raises_error_on_execution_failure(self) -> None:
         """
         Test that HorusTask.run() raises TaskExecutionError when executor
         returns non-zero
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
@@ -246,11 +254,12 @@ class TestHorusTaskExecution:
             with pytest.raises(TaskExecutionError):
                 task.run()
 
-    def test_horus_task_run_with_no_inputs(self):
+    def test_horus_task_run_with_no_inputs(self) -> None:
         """
         Test that HorusTask.run() works correctly with no inputs
         """
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={},  # No inputs
@@ -266,7 +275,7 @@ class TestHorusTaskExecution:
             # Verify that subprocess.run was called
             mock_run.assert_called_once()
 
-    def test_horus_task_run_with_multiple_inputs_one_missing(self):
+    def test_horus_task_run_with_multiple_inputs_one_missing(self) -> None:
         """
         Test that HorusTask.run() stops on first missing artifact
         """
@@ -279,6 +288,7 @@ class TestHorusTaskExecution:
         )
 
         task = HorusTask(
+            name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={"input1": input_artifact1, "input2": input_artifact2},
@@ -287,3 +297,42 @@ class TestHorusTaskExecution:
         # Should raise error when processing the inputs
         with pytest.raises(ArtifactDoesNotExistError):
             task.run()
+
+    def test_horus_task_increases_runs_count(
+        self, make_task: MakeTaskType
+    ) -> None:
+        """
+        Test that HorusTask.run() increases the runs count
+        """
+        task = make_task(cmd="echo 'Hello World'")
+
+        initial_runs = task.runs
+
+        # Mock subprocess.run to return success
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+
+            task.run()
+
+            assert task.runs == initial_runs + 1
+
+    def test_horus_task_resets_runs_on_reset(
+        self, make_task: MakeTaskType
+    ) -> None:
+        """
+        Test that HorusTask.reset() resets the runs count
+        """
+        task = make_task(cmd="echo 'Hello World'")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+
+            # Simulate running the task a few times
+            task.run()
+
+        assert task.runs == 1
+
+        # Reset the task
+        task.reset()
+
+        assert task.runs == 0

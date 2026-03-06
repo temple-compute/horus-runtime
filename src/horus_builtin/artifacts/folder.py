@@ -21,6 +21,7 @@ folder/directory artifact in the Horus runtime.
 """
 
 import hashlib
+import shutil
 from typing import Literal
 
 from horus_builtin.artifacts.local_base import LocalPathArtifactBase
@@ -68,3 +69,12 @@ class FolderArtifact(LocalPathArtifactBase):
             sha256.update(self.hash_file(path))
 
         return sha256.hexdigest()
+
+    def delete(self) -> None:
+        """
+        Deletes the artifact from its location by deleting the folder at the
+        specified path.
+        """
+
+        if self.exists():
+            shutil.rmtree(self.path)

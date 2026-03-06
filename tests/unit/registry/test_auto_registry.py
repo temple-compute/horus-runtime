@@ -26,7 +26,7 @@ import pytest
 from horus_runtime.core.registry.auto_registry import (
     AutoRegistry,
     NoSubclassesRegisteredError,
-    RegistryKeyAttributeNotDefined,
+    RegistryKeyAttributeNotDefinedError,
     RegistryKeyIsNoneError,
     init_registry,
 )
@@ -203,7 +203,7 @@ class TestAutoRegistry:
         class attribute is missing
         """
 
-        with pytest.raises(RegistryKeyAttributeNotDefined):
+        with pytest.raises(RegistryKeyAttributeNotDefinedError):
 
             class MissingKeyAttribute(  # pyright: ignore[reportUnusedClass]
                 AutoRegistry

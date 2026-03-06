@@ -22,9 +22,10 @@ new module types (such as artifacts) without needing to manually add the
 new type to a central registry.
 """
 
+from functools import reduce
 from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Annotated, Any, ClassVar, Dict, Type, TypeVar, Union
+from typing import Annotated, Any, ClassVar, cast
 
 from pydantic import Field
 
@@ -37,7 +38,7 @@ class RegistryError(Exception):
     """
 
 
-class RegistryKeyAttributeNotDefined(RegistryError):
+class RegistryKeyAttributeNotDefinedError(RegistryError):
     """
     Exception raised when a subclass is missing a required registry key.
     """
@@ -60,7 +61,7 @@ class AutoRegistry:
     Base class for automatically registering subclasses.
     """
 
-    registry: ClassVar[Dict[str, Type[Any]]]
+    registry: ClassVar[dict[str, type[Any]]]
     """
     A class variable that holds the registry of subclasses.
     """
@@ -77,7 +78,8 @@ class AutoRegistry:
     """
     A class variable that indicates whether the subclass should be added to
     the registry. This can be set to False for subclasses that should not be
-    registered in the registry, such as abstract base classes.
+    registered in the registry. If the class has abstract methods, it will
+    not be registered in the registry regardless of the value of this variable.
     """
 
     # This method is called when a subclass is defined. This allows us to look
@@ -110,7 +112,7 @@ class AutoRegistry:
         has_key = hasattr(cls, "registry_key")
 
         if not has_key:
-            raise RegistryKeyAttributeNotDefined(
+            raise RegistryKeyAttributeNotDefinedError(
                 _(
                     "%(cls)s must define a class property named 'registry_key'"
                     " with a non-empty value to allow the auto-registration"
@@ -138,11 +140,8 @@ class AutoRegistry:
         cls.registry[key_value] = cls
 
 
-T = TypeVar("T", bound=AutoRegistry)
-
-
 def init_registry(
-    base_cls: type[T],
+    base_cls: type[AutoRegistry],
     entry_point_group: str,
 ) -> Any:
     """
@@ -172,20 +171,31 @@ def init_registry(
             % {"cls": base_cls.__name__}
         )
 
-    # If there is only one registered subclass, return it directly instead of
-    # a Union
+    # If there is only one registered subclass, different logic
+    # applies. Moreover, we have to cast the resulting type to Any to avoid
+    # mypy errors about the type being too complex (this is not TypeScript)
     def build_registry_union(
-        base_cls: type[T],
-    ):
+        base_cls: type[AutoRegistry],
+    ) -> Any:
         if len(base_cls.registry) == 1:
-            return Annotated[
-                next(iter(base_cls.registry.values())),
-                Field(discriminator=base_cls.registry_key),
-            ]
+            return cast(
+                Any,
+                Annotated[
+                    next(iter(base_cls.registry.values())),
+                    Field(discriminator=base_cls.registry_key),
+                ],
+            )
 
-        return Annotated[
-            Union[tuple(base_cls.registry.values())],
-            Field(discriminator=base_cls.registry_key),
-        ]
+        # We generate a dynamic Union type at runtime
+        union_type: Any = reduce(
+            lambda a, b: cast(Any, a | b), base_cls.registry.values()
+        )
+        return cast(
+            Any,
+            Annotated[
+                union_type,
+                Field(discriminator=base_cls.registry_key),
+            ],
+        )
 
     return build_registry_union(base_cls)

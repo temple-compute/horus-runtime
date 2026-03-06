@@ -20,20 +20,8 @@ jobs:
         run: |
           pip install -e .[dev]
 
-      - name: Check code formatting with Black
-        run: make black-check
-
-      - name: Check import sorting with isort
-        run: make isort-check
-
-      - name: Lint with Pylint
-        run: make pylint-check
-
-      - name: Lint with Flake8
-        run: make flake8-check
-
-      - name: Type check with Pyright
-        run: make type-check
+      - name: Lint with Ruff
+        run: make lint
 
       - name: Check license headers
         run: |

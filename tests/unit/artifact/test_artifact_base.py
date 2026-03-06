@@ -52,6 +52,9 @@ class ConcreteTestArtifact(BaseArtifact):
     def hash(self) -> str | None:
         return "test_hash"
 
+    def delete(self) -> None:
+        pass
+
 
 @pytest.mark.unit
 class TestBaseArtifact:
@@ -66,7 +69,6 @@ class TestBaseArtifact:
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
         ):
-
             # We use type:ignore because the linter correctly identifies that
             # BaseArtifact is abstract and cannot be instantiated, but we want
             # to test this behavior explicitly at runtime.
@@ -198,9 +200,7 @@ class TestBaseArtifactValidation:
             match="must define a class property named 'kind'",
         ):
 
-            class InvalidArtifactNoKind(  # pyright: ignore[reportUnusedClass]
-                BaseArtifact
-            ):
+            class InvalidArtifactNoKind(BaseArtifact):
                 """
                 Invalid artifact implementation without kind field for testing
                 """
@@ -217,6 +217,9 @@ class TestBaseArtifactValidation:
                 def hash(self) -> str | None:
                     return None
 
+                def delete(self) -> None:
+                    pass
+
     def test_model_validation_preserves_type_safety(self) -> None:
         """
         Test that Pydantic validation maintains type safety
@@ -227,7 +230,8 @@ class TestBaseArtifactValidation:
             # about this, but we want to ensure that the validation error
             # is raised at runtime.
             ConcreteTestArtifact(
-                uri="test://uri", id="not-a-uuid"  # type: ignore
+                uri="test://uri",
+                id="not-a-uuid",  # type: ignore
             )
 
     def test_extra_fields_handling(self) -> None:

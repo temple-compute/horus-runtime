@@ -30,7 +30,7 @@ class TestHorusRuntimeIntegration:
     Integration test cases
     """
 
-    def test_main_script_execution(self):
+    def test_main_script_execution(self) -> None:
         """
         Test that main script can be executed
         """
@@ -46,7 +46,7 @@ class TestHorusRuntimeIntegration:
         assert "Horus Runtime is starting..." in result.stdout
 
     @pytest.mark.slow
-    def test_system_integration(self):
+    def test_system_integration(self) -> None:
         """
         Test basic system integration (placeholder)
         """

@@ -33,18 +33,19 @@ class HorusTask(BaseTask):
 
     kind: Literal["horus_task"] = "horus_task"
 
-    def run(self):
+    def run(self) -> None:
         """
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.
         """
 
-        # Gather inputs, pylint bug on the inputs field from BaseTask, so
-        # we disable the no-member warning here
+        self.runs += 1
+
+        # Gather inputs
         for (
             input_name,
             artifact,
-        ) in self.inputs.items():  # pylint: disable=no-member
+        ) in self.inputs.items():
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
                     f"Input artifact {input_name} does not exist"
@@ -57,3 +58,31 @@ class HorusTask(BaseTask):
             raise TaskExecutionError(
                 f"Task execution failed with return code {return_code}"
             )
+
+    def is_complete(self) -> bool:
+        """
+        A HorusTask is considered complete if all of its output artifacts
+        exist.
+        """
+
+        # If no outputs are declared, we consider the task incomplete and
+        # always run it
+        if not self.outputs:
+            return False
+
+        for artifact in self.outputs.values():
+            if not artifact.exists():
+                return False
+
+        return True
+
+    def reset(self) -> None:
+        """
+        Reset the task by deleting all output artifacts. This allows the task
+        to be re-run from scratch.
+        """
+
+        for artifact in self.outputs.values():
+            artifact.delete()
+
+        self.runs = 0
