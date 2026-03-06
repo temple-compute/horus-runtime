@@ -18,7 +18,7 @@
 
 # ruff: noqa: PLC0415
 """
-Unit tests for artifact_registry module
+Unit tests for artifact_registry module.
 """
 
 import hashlib
@@ -42,14 +42,13 @@ SHA_HEX_LENGTH_BYTES = 32  # Length of SHA-256 hash in bytes
 @pytest.mark.unit
 class TestInitRegistry:
     """
-    Test that the builtin horus artifacts are properly registered
+    Test that the builtin horus artifacts are properly registered.
     """
 
     def test_init_registry_scans_builtin_artifacts(self) -> None:
         """
-        Test that init_registry scans the core artifacts package
+        Test that init_registry scans the core artifacts package.
         """
-
         from horus_builtin.artifacts.file import FileArtifact
         from horus_builtin.artifacts.folder import FolderArtifact
 
@@ -64,7 +63,7 @@ class TestInitRegistry:
 
     def test_init_registry_returns_union_type(self) -> None:
         """
-        Test that init_registry returns a proper Union type annotation
+        Test that init_registry returns a proper Union type annotation.
         """
         registry_union = init_registry(BaseArtifact, "horus.artifacts")
 
@@ -75,12 +74,12 @@ class TestInitRegistry:
 @pytest.mark.unit
 class TestArtifactRegistry:
     """
-    Test cases for ArtifactUnion type alias
+    Test cases for ArtifactUnion type alias.
     """
 
     def test_artifact_union_is_defined(self) -> None:
         """
-        Test that ArtifactUnion type alias is properly defined
+        Test that ArtifactUnion type alias is properly defined.
         """
         from horus_runtime.core.registry.artifact_registry import ArtifactUnion
 
@@ -88,7 +87,7 @@ class TestArtifactRegistry:
 
     def test_artifact_union_can_validate_union_artifact(self) -> None:
         """
-        Test that ArtifactUnion can validate FileArtifact data
+        Test that ArtifactUnion can validate FileArtifact data.
         """
         data = [
             {"uri": "/test/path.txt", "kind": "file"},
@@ -115,9 +114,8 @@ class TestArtifactRegistry:
 
     def test_artifact_registry_invalid_kind_handling(self) -> None:
         """
-        Test handling of invalid kind values
+        Test handling of invalid kind values.
         """
-
         from horus_runtime.core.registry.artifact_registry import ArtifactUnion
 
         invalid_data = [{"uri": "/test/path.txt", "kind": "invalid_type"}]
@@ -135,12 +133,12 @@ class TestArtifactRegistry:
 @pytest.mark.integration
 class TestArtifactRegistryIntegration:
     """
-    Integration tests for the full artifact registry system
+    Integration tests for the full artifact registry system.
     """
 
     def test_registry_contains_expected_artifacts(self) -> None:
         """
-        Test that the registry contains the expected artifact types
+        Test that the registry contains the expected artifact types.
         """
         # Access the registry from BaseArtifact after scanning
         from horus_runtime.core.artifact.base import BaseArtifact
@@ -157,12 +155,12 @@ class TestArtifactRegistryIntegration:
 @pytest.mark.unit
 class TestFileArtifact:
     """
-    Test cases for FileArtifact class
+    Test cases for FileArtifact class.
     """
 
     def test_file_artifact_instantiation(self) -> None:
         """
-        Test FileArtifact can be instantiated
+        Test FileArtifact can be instantiated.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -176,7 +174,7 @@ class TestFileArtifact:
 
     def test_hash_property_existing_file(self) -> None:
         """
-        Test hash property with an existing file
+        Test hash property with an existing file.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -193,14 +191,14 @@ class TestFileArtifact:
 
     def test_hash_property_nonexistent_file(self) -> None:
         """
-        Test hash property returns None for non-existent file
+        Test hash property returns None for non-existent file.
         """
         artifact = FileArtifact(uri="/nonexistent/file.txt")
         assert artifact.hash is None
 
     def test_hash_property_empty_file(self) -> None:
         """
-        Test hash property with empty file
+        Test hash property with empty file.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             empty_file = Path(temp_dir) / "empty.txt"
@@ -214,7 +212,7 @@ class TestFileArtifact:
 
     def test_hash_changes_with_content(self) -> None:
         """
-        Test that hash changes when file content changes
+        Test that hash changes when file content changes.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "changeable.txt"
@@ -234,7 +232,7 @@ class TestFileArtifact:
 
     def test_large_file_hash_performance(self) -> None:
         """
-        Test hash calculation with larger file (tests chunked reading)
+        Test hash calculation with larger file (tests chunked reading).
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             large_file = Path(temp_dir) / "large.txt"
@@ -255,12 +253,12 @@ class TestFileArtifact:
 @pytest.mark.unit
 class TestFolderArtifact:
     """
-    Test cases for FolderArtifact class
+    Test cases for FolderArtifact class.
     """
 
     def test_folder_artifact_instantiation(self) -> None:
         """
-        Test FolderArtifact can be instantiated
+        Test FolderArtifact can be instantiated.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = FolderArtifact(uri=temp_dir)
@@ -271,7 +269,7 @@ class TestFolderArtifact:
 
     def test_exists_method_existing_directory(self) -> None:
         """
-        Test exists method with existing directory
+        Test exists method with existing directory.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = FolderArtifact(uri=temp_dir)
@@ -279,14 +277,14 @@ class TestFolderArtifact:
 
     def test_exists_method_nonexistent_directory(self) -> None:
         """
-        Test exists method with non-existent directory
+        Test exists method with non-existent directory.
         """
         artifact = FolderArtifact(uri="/nonexistent/directory")
         assert artifact.exists() is False
 
     def test_exists_method_file_not_directory(self) -> None:
         """
-        Test exists method returns False when path exists but is a file
+        Test exists method returns False when path exists but is a file.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "not_a_folder.txt"
@@ -299,7 +297,7 @@ class TestFolderArtifact:
 
     def test_hash_property_empty_folder(self) -> None:
         """
-        Test hash property with empty folder
+        Test hash property with empty folder.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = FolderArtifact(uri=temp_dir)
@@ -313,14 +311,14 @@ class TestFolderArtifact:
 
     def test_hash_property_nonexistent_folder(self) -> None:
         """
-        Test hash property returns None for non-existent folder
+        Test hash property returns None for non-existent folder.
         """
         artifact = FolderArtifact(uri="/nonexistent/folder")
         assert artifact.hash is None
 
     def test_hash_property_multiple_files(self) -> None:
         """
-        Test hash property with folder containing multiple files
+        Test hash property with folder containing multiple files.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create multiple files in specific order
@@ -347,7 +345,7 @@ class TestFolderArtifact:
 
     def test_hash_empty_folders_ignored(self) -> None:
         """
-        Test that empty subfolders don't affect hash (only files are hashed)
+        Test that empty subfolders don't affect hash (only files are hashed).
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create folder with empty subdirectory
@@ -368,7 +366,7 @@ class TestFolderArtifact:
 
     def test_folder_with_special_characters(self) -> None:
         """
-        Test folder hash with files containing special characters
+        Test folder hash with files containing special characters.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create files with Unicode and special characters in names/content
@@ -383,7 +381,7 @@ class TestFolderArtifact:
 
     def test_large_folder_structure(self) -> None:
         """
-        Test hash calculation with larger folder structure
+        Test hash calculation with larger folder structure.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create multiple levels and files
@@ -405,7 +403,7 @@ class TestFolderArtifact:
 
 class ConcreteLocalArtifact(LocalPathArtifactBase):
     """
-    Concrete implementation of LocalPathArtifactBase for testing
+    Concrete implementation of LocalPathArtifactBase for testing.
     """
 
     add_to_registry = False
@@ -413,21 +411,27 @@ class ConcreteLocalArtifact(LocalPathArtifactBase):
 
     @property
     def hash(self) -> str | None:
+        """
+        Test hash property.
+        """
         return "test_hash" if self.exists() else None
 
     def delete(self) -> None:
+        """
+        Test delete method.
+        """
         pass
 
 
 @pytest.mark.unit
 class TestLocalPathArtifactBase:
     """
-    Test cases for LocalPathArtifactBase abstract class
+    Test cases for LocalPathArtifactBase abstract class.
     """
 
     def test_local_artifact_instantiation_with_uri(self) -> None:
         """
-        Test creating local artifact with URI
+        Test creating local artifact with URI.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -439,7 +443,7 @@ class TestLocalPathArtifactBase:
 
     def test_local_artifact_instantiation_with_path_string(self) -> None:
         """
-        Test creating local artifact with path string
+        Test creating local artifact with path string.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -452,7 +456,7 @@ class TestLocalPathArtifactBase:
 
     def test_path_resolution_to_absolute(self) -> None:
         """
-        Test that relative paths are resolved to absolute paths
+        Test that relative paths are resolved to absolute paths.
         """
         # Use a relative path
         artifact = ConcreteLocalArtifact(uri="./test_file.txt")
@@ -463,7 +467,7 @@ class TestLocalPathArtifactBase:
 
     def test_uri_scheme_validation_file(self) -> None:
         """
-        Test that file:// scheme is accepted
+        Test that file:// scheme is accepted.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_path = Path(temp_dir) / "test.txt"
@@ -474,14 +478,14 @@ class TestLocalPathArtifactBase:
 
     def test_uri_scheme_validation_invalid(self) -> None:
         """
-        Test that invalid URI schemes are rejected
+        Test that invalid URI schemes are rejected.
         """
         with pytest.raises(ValidationError, match="Unsupported URI scheme"):
             ConcreteLocalArtifact(uri="http://example.com/file.txt")
 
     def test_uri_scheme_validation_empty_scheme(self) -> None:
         """
-        Test that URIs without scheme are accepted as local paths
+        Test that URIs without scheme are accepted as local paths.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_path = Path(temp_dir) / "test.txt"
@@ -491,7 +495,7 @@ class TestLocalPathArtifactBase:
 
     def test_exists_method_file_exists(self) -> None:
         """
-        Test exists method when file exists
+        Test exists method when file exists.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "existing_file.txt"
@@ -502,14 +506,14 @@ class TestLocalPathArtifactBase:
 
     def test_exists_method_file_not_exists(self) -> None:
         """
-        Test exists method when file does not exist
+        Test exists method when file does not exist.
         """
         artifact = ConcreteLocalArtifact(uri="/nonexistent/path/file.txt")
         assert artifact.exists() is False
 
     def test_materialize_method_returns_path(self) -> None:
         """
-        Test materialize method returns the correct path
+        Test materialize method returns the correct path.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -523,7 +527,7 @@ class TestLocalPathArtifactBase:
 
     def test_hash_file_static_method(self) -> None:
         """
-        Test the static hash_file method
+        Test the static hash_file method.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "test.txt"
@@ -541,7 +545,7 @@ class TestLocalPathArtifactBase:
 
     def test_hash_file_different_contents(self) -> None:
         """
-        Test that different file contents produce different hashes
+        Test that different file contents produce different hashes.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             file1 = Path(temp_dir) / "file1.txt"
@@ -557,7 +561,7 @@ class TestLocalPathArtifactBase:
 
     def test_hash_file_large_file(self) -> None:
         """
-        Test hash_file method with large file to verify chunked reading
+        Test hash_file method with large file to verify chunked reading.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             large_file = Path(temp_dir) / "large.txt"
@@ -573,9 +577,8 @@ class TestLocalPathArtifactBase:
 
     def test_uri_update_on_model_validation(self) -> None:
         """
-        Test that URI is updated to match the resolved path after validation
+        Test that URI is updated to match the resolved path after validation.
         """
-
         # Create with relative path
         artifact = ConcreteLocalArtifact(uri="./test.txt")
 

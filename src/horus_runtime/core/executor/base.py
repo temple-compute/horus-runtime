@@ -54,10 +54,4 @@ class BaseExecutor(BaseModel, ABC, AutoRegistry):
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific
         execution logic for different types of executors.
-
-        Args:
-            task (BaseTask): The task to execute.
-
-        Returns:
-            int: The return code of the execution.
         """

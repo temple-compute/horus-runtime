@@ -38,7 +38,6 @@ class HorusTask(BaseTask):
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.
         """
-
         self.runs += 1
 
         # Gather inputs
@@ -64,7 +63,6 @@ class HorusTask(BaseTask):
         A HorusTask is considered complete if all of its output artifacts
         exist.
         """
-
         # If no outputs are declared, we consider the task incomplete and
         # always run it
         if not self.outputs:
@@ -81,7 +79,6 @@ class HorusTask(BaseTask):
         Reset the task by deleting all output artifacts. This allows the task
         to be re-run from scratch.
         """
-
         for artifact in self.outputs.values():
             artifact.delete()
 

@@ -66,7 +66,6 @@ class BaseRuntime(BaseModel, ABC, AutoRegistry):
         Returns:
             str: The formatted command or context ready for execution.
         """
-
         cmd = self._setup_runtime(task)
 
         # Create a namespace object to allow for attribute-style access to task

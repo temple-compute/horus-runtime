@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for BaseArtifact class
+Unit tests for BaseArtifact class.
 """
 
 import uuid
@@ -43,28 +43,40 @@ class ConcreteTestArtifact(BaseArtifact):
     kind: Literal["test"] = "test"
 
     def exists(self) -> bool:
+        """
+        Test exists.
+        """
         return True
 
     def materialize(self) -> Path:
+        """
+        Test materialize.
+        """
         return Path("/tmp/test")
 
     @property
     def hash(self) -> str | None:
+        """
+        Test hash.
+        """
         return "test_hash"
 
     def delete(self) -> None:
+        """
+        Test delete.
+        """
         pass
 
 
 @pytest.mark.unit
 class TestBaseArtifact:
     """
-    Test cases for BaseArtifact abstract base class
+    Test cases for BaseArtifact abstract base class.
     """
 
     def test_base_artifact_is_abstract(self) -> None:
         """
-        Test that BaseArtifact cannot be instantiated directly
+        Test that BaseArtifact cannot be instantiated directly.
         """
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
@@ -76,9 +88,8 @@ class TestBaseArtifact:
 
     def test_base_artifact_inherits_correctly(self) -> None:
         """
-        Test that BaseArtifact inherits from expected classes
+        Test that BaseArtifact inherits from expected classes.
         """
-
         # This is a little bit redundant since we know BaseArtifact is defined
         # as inheriting from these, but it serves as a sanity check that the
         # class hierarchy is correct. also can signal for future refactors if
@@ -89,9 +100,8 @@ class TestBaseArtifact:
 
     def test_registry_key_is_kind(self) -> None:
         """
-        Test that BaseArtifact uses 'kind' as registry key
+        Test that BaseArtifact uses 'kind' as registry key.
         """
-
         # This check will be done for other classes that inherit from
         # autoregistry. For artifact, the registry key is 'kind',
         # so we want to make sure that this is set correctly in the base class.
@@ -99,7 +109,7 @@ class TestBaseArtifact:
 
     def test_uuid_auto_generation(self) -> None:
         """
-        Test that UUID is automatically generated if not provided
+        Test that UUID is automatically generated if not provided.
         """
         artifact1 = ConcreteTestArtifact(uri="test://uri1")
         artifact2 = ConcreteTestArtifact(uri="test://uri2")
@@ -110,7 +120,7 @@ class TestBaseArtifact:
 
     def test_custom_uuid_accepted(self) -> None:
         """
-        Test that custom UUID is accepted when provided
+        Test that custom UUID is accepted when provided.
         """
         custom_id = uuid.uuid4()
         artifact = ConcreteTestArtifact(uri="test://uri", id=custom_id)
@@ -119,7 +129,7 @@ class TestBaseArtifact:
 
     def test_uri_field_required(self) -> None:
         """
-        Test that uri field is required
+        Test that uri field is required.
         """
         with pytest.raises(ValidationError) as exc_info:
             # This should fail because uri is a required field and we're
@@ -134,7 +144,7 @@ class TestBaseArtifact:
 
     def test_kind_validation_in_subclass(self) -> None:
         """
-        Test that kind field validation works in subclasses
+        Test that kind field validation works in subclasses.
         """
         # This should work since ConcreteTestArtifact sets kind = "test"
         artifact = ConcreteTestArtifact(uri="test://uri")
@@ -142,7 +152,7 @@ class TestBaseArtifact:
 
     def test_abstract_methods_defined(self) -> None:
         """
-        Test that abstract methods are properly defined in concrete class
+        Test that abstract methods are properly defined in concrete class.
         """
         artifact = ConcreteTestArtifact(uri="test://uri")
 
@@ -159,7 +169,7 @@ class TestBaseArtifact:
 
     def test_artifact_serialization(self) -> None:
         """
-        Test that artifacts can be serialized to dict
+        Test that artifacts can be serialized to dict.
         """
         artifact = ConcreteTestArtifact(uri="test://uri")
         artifact_dict = artifact.model_dump()
@@ -172,7 +182,7 @@ class TestBaseArtifact:
 
     def test_artifact_deserialization(self) -> None:
         """
-        Test that artifacts can be deserialized from dict
+        Test that artifacts can be deserialized from dict.
         """
         test_id = uuid.uuid4()
         data = {"id": str(test_id), "uri": "test://uri", "kind": "test"}
@@ -187,12 +197,12 @@ class TestBaseArtifact:
 @pytest.mark.unit
 class TestBaseArtifactValidation:
     """
-    Test validation behavior of BaseArtifact
+    Test validation behavior of BaseArtifact.
     """
 
     def test_kind_field_must_be_set_in_subclass(self) -> None:
         """
-        Test that subclasses must set the kind field
+        Test that subclasses must set the kind field.
         """
         # This artifact doesn't set kind, so validation should fail
         with pytest.raises(
@@ -202,7 +212,7 @@ class TestBaseArtifactValidation:
 
             class InvalidArtifactNoKind(BaseArtifact):
                 """
-                Invalid artifact implementation without kind field for testing
+                Invalid artifact implementation without kind field for testing.
                 """
 
                 add_to_registry = True
@@ -222,7 +232,7 @@ class TestBaseArtifactValidation:
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """
-        Test that Pydantic validation maintains type safety
+        Test that Pydantic validation maintains type safety.
         """
         with pytest.raises(ValidationError):
             # We use type:ignore here because we're intentionally passing
@@ -236,7 +246,7 @@ class TestBaseArtifactValidation:
 
     def test_extra_fields_handling(self) -> None:
         """
-        Test behavior with extra fields in model validation
+        Test behavior with extra fields in model validation.
         """
         data = {
             "uri": "test://uri",

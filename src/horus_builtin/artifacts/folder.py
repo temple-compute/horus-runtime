@@ -51,7 +51,6 @@ class FolderArtifact(LocalPathArtifactBase):
         any file or the addition/removal of files will result in a different
         hash.
         """
-
         if not self.exists():
             return None
 
@@ -75,6 +74,5 @@ class FolderArtifact(LocalPathArtifactBase):
         Deletes the artifact from its location by deleting the folder at the
         specified path.
         """
-
         if self.exists():
             shutil.rmtree(self.path)

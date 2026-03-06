@@ -52,7 +52,6 @@ class _LocaleUtils:
         Returns:
             Locale code as string (e.g., 'en', 'es')
         """
-
         # Get system locale from environment variables
         # Usually, the LANG variable is in the format 'en_US.UTF-8'
         return os.environ.get("LANG", "en").split("_")[0]
@@ -108,7 +107,6 @@ class _HorusTranslationManager:
         This should be called once during application startup, before any
         translation functions are used.
         """
-
         # Get the package directory to locate translation files
         package_dir = Path(__file__).parent
         locale_dir = package_dir / "locale"
@@ -160,7 +158,6 @@ class _HorusTranslationManager:
             _("User {user} logged in", user=username)
             ```
         """
-
         if n is not None and plural is not None:
             translated = self._current_translation.ngettext(msg, plural, n)
             return translated.format(n=n, **kwargs)

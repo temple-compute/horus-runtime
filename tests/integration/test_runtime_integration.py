@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Integration tests for horus-runtime
+Integration tests for horus-runtime.
 """
 
 import subprocess
@@ -27,14 +27,13 @@ import pytest
 @pytest.mark.integration
 class TestHorusRuntimeIntegration:
     """
-    Integration test cases
+    Integration test cases.
     """
 
     def test_main_script_execution(self) -> None:
         """
-        Test that main script can be executed
+        Test that main script can be executed.
         """
-
         result = subprocess.run(
             ["horus"],
             capture_output=True,
@@ -48,7 +47,7 @@ class TestHorusRuntimeIntegration:
     @pytest.mark.slow
     def test_system_integration(self) -> None:
         """
-        Test basic system integration (placeholder)
+        Test basic system integration (placeholder).
         """
         # This is a placeholder for more complex integration tests
         assert True, "System integration test placeholder"

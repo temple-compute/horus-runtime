@@ -7,7 +7,7 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["pydantic~=2.0", "pyyaml~=6.0"]
+dependencies = ["pydantic~=2.0", "pyyaml~=6.0", "loguru~=0.7"]
 
 [project.optional-dependencies]
 dev = [
@@ -64,8 +64,12 @@ line-length = 79
 target-version = "py310"
 exclude = [".git", ".venv", "build", "dist", "__pycache__"]
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.ruff.lint]
 select = [
+    "D",   # pydocstyle
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
     "F",   # pyflakes
@@ -79,6 +83,10 @@ select = [
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
+    "D104", # Missing docstring in __init__ (often redundant)
+    "D205", # 1 blank line required between summary line and description
+    "D212", # Multi-line docstring summary should start at the first line
+    "D200", # One-line docstring should fit on one line
 ]
 
 [tool.ruff.format]

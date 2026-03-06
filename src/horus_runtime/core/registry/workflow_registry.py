@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Definitions of the workflow registry
+Definitions of the workflow registry.
 """
 
 from typing import TYPE_CHECKING, TypeAlias

@@ -86,6 +86,10 @@ class AutoRegistry:
     # up the correct subclass based on the 'registry_key' field when we want to
     # materialize an instance from the registry.
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        """
+        Automatically register subclasses in the registry when they are
+        defined.
+        """
         super().__init_subclass__(**kwargs)
 
         # Initialize the registry if it doesn't exist yet. initializing it here
@@ -148,7 +152,6 @@ def init_registry(
     Generic function to build a Union type for all registered subclasses
     of a given base class.
     """
-
     print(
         _("Initializing %(group)s registry for %(cls)s")
         % {"group": entry_point_group, "cls": base_cls.__name__}

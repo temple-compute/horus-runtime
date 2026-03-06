@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Runtime registry
+Runtime registry.
 """
 
 from typing import TYPE_CHECKING, TypeAlias

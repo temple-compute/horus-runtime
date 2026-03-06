@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Test configuration for pytest
+Test configuration for pytest.
 """
 
 from pathlib import Path
@@ -32,7 +32,7 @@ from horus_runtime.core.artifact.base import BaseArtifact
 
 def pytest_configure(config: pytest.Config) -> None:
     """
-    Configure pytest with custom markers
+    Configure pytest with custom markers.
     """
     config.addinivalue_line("markers", "unit: Unit tests")
     config.addinivalue_line("markers", "integration: Integration tests")
@@ -42,7 +42,7 @@ def pytest_configure(config: pytest.Config) -> None:
 class MakeTaskType(Protocol):
     """
     Protocol for a factory function that creates HorusTask instances for
-    testing
+    testing.
     """
 
     def __call__(
@@ -50,13 +50,18 @@ class MakeTaskType(Protocol):
         cmd: str = ...,
         inputs: dict[str, BaseArtifact] | None = None,
         task_class: type[HorusTask] = HorusTask,
-    ) -> HorusTask: ...
+    ) -> HorusTask:
+        """
+        Create a HorusTask instance with the given command, inputs,
+        and task class.
+        """
+        ...
 
 
 @pytest.fixture
 def make_task() -> MakeTaskType:
     """
-    Fixture to create HorusTask instances with CommandRuntime for testing
+    Fixture to create HorusTask instances with CommandRuntime for testing.
     """
 
     # Factory function to create a HorusTask with a given command
@@ -82,16 +87,20 @@ def make_task() -> MakeTaskType:
 class MakeWorkflowFileType(Protocol):
     """
     Protocol for a factory function that creates temporary workflow YAML files
-    for testing
+    for testing.
     """
 
-    def __call__(self, tmp_path: Path, content: str) -> Path: ...
+    def __call__(self, tmp_path: Path, content: str) -> Path:
+        """
+        Create a temporary workflow YAML file with the given content.
+        """
+        ...
 
 
 @pytest.fixture
 def make_workflow_file() -> MakeWorkflowFileType:
     """
-    Fixture to create a temporary workflow YAML file for testing
+    Fixture to create a temporary workflow YAML file for testing.
     """
 
     def _make_workflow_file(tmp_path: Path, content: str) -> Path:

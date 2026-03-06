@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Base definition for local file or folder artifacts in the Horus Runtime
+Base definition for local file or folder artifacts in the Horus Runtime.
 """
 
 import hashlib
@@ -101,6 +101,9 @@ class LocalPathArtifactBase(BaseArtifact):
         return self.path.exists()
 
     def materialize(self) -> Path:
+        """
+        Materializes the artifact by returning the resolved absolute path.
+        """
         return self.path
 
     @staticmethod
@@ -108,7 +111,6 @@ class LocalPathArtifactBase(BaseArtifact):
         """
         Computes the hash of the file contents.
         """
-
         # Read in 64KB chunks to handle large files efficiently
         buffer = 65536
 

@@ -18,7 +18,7 @@
 
 # ruff: noqa: PLC0415
 """
-Unit tests for ShellExecutor and related builtin executors
+Unit tests for ShellExecutor and related builtin executors.
 """
 
 from unittest.mock import Mock, patch
@@ -35,14 +35,13 @@ from tests.conftest import MakeTaskType
 @pytest.mark.unit
 class TestInitRegistry:
     """
-    Test that the builtin horus executors are properly registered
+    Test that the builtin horus executors are properly registered.
     """
 
     def test_init_registry_scans_builtin_executors(self) -> None:
         """
-        Test that init_registry scans the core executors package
+        Test that init_registry scans the core executors package.
         """
-
         init_registry(BaseExecutor, "horus.executors")
 
         # Should have scanned the core executors package
@@ -52,7 +51,7 @@ class TestInitRegistry:
 
     def test_init_registry_returns_union_type(self) -> None:
         """
-        Test that init_registry returns a proper Union type annotation
+        Test that init_registry returns a proper Union type annotation.
         """
         registry_union = init_registry(BaseExecutor, "horus.executors")
 
@@ -63,12 +62,12 @@ class TestInitRegistry:
 @pytest.mark.unit
 class TestExecutorRegistry:
     """
-    Test cases for ExecutorUnion type alias
+    Test cases for ExecutorUnion type alias.
     """
 
     def test_executor_union_is_defined(self) -> None:
         """
-        Test that ExecutorUnion type alias is properly defined
+        Test that ExecutorUnion type alias is properly defined.
         """
         from horus_runtime.core.registry.executor_registry import ExecutorUnion
 
@@ -76,7 +75,7 @@ class TestExecutorRegistry:
 
     def test_executor_union_can_validate_union_executor(self) -> None:
         """
-        Test that ExecutorUnion can validate ShellExecutor data
+        Test that ExecutorUnion can validate ShellExecutor data.
         """
         data = {"kind": "shell"}
 
@@ -94,9 +93,8 @@ class TestExecutorRegistry:
 
     def test_executor_registry_invalid_kind_handling(self) -> None:
         """
-        Test handling of invalid kind values
+        Test handling of invalid kind values.
         """
-
         from horus_runtime.core.registry.executor_registry import ExecutorUnion
 
         invalid_data = {"kind": "invalid_type"}
@@ -114,18 +112,18 @@ class TestExecutorRegistry:
 @pytest.mark.unit
 class TestShellExecutor:
     """
-    Test cases for ShellExecutor class
+    Test cases for ShellExecutor class.
     """
 
     def test_shell_executor_inherits_from_base(self) -> None:
         """
-        Test that ShellExecutor inherits from BaseExecutor
+        Test that ShellExecutor inherits from BaseExecutor.
         """
         assert issubclass(ShellExecutor, BaseExecutor)
 
     def test_shell_executor_kind_is_shell(self) -> None:
         """
-        Test that ShellExecutor has correct kind value
+        Test that ShellExecutor has correct kind value.
         """
         executor = ShellExecutor()
         assert executor.kind == "shell"
@@ -135,7 +133,7 @@ class TestShellExecutor:
         self, mock_run: Mock, make_task: MakeTaskType
     ) -> None:
         """
-        Test executing a successful command returns correct exit code
+        Test executing a successful command returns correct exit code.
         """
         # Mock subprocess.run to return successful execution
         mock_result = Mock()
@@ -156,14 +154,14 @@ class TestShellExecutor:
 @pytest.mark.unit
 class TestShellExecutorIntegration:
     """
-    Integration tests for ShellExecutor with real subprocess calls
+    Integration tests for ShellExecutor with real subprocess calls.
     """
 
     def test_execute_real_successful_command(
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test executing a real successful command (echo)
+        Test executing a real successful command (echo).
         """
         executor = ShellExecutor()
 
@@ -178,7 +176,7 @@ class TestShellExecutorIntegration:
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test executing a real command that fails
+        Test executing a real command that fails.
         """
         executor = ShellExecutor()
 
@@ -192,7 +190,7 @@ class TestShellExecutorIntegration:
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test executing a real command with specific exit code
+        Test executing a real command with specific exit code.
         """
         executor = ShellExecutor()
 
