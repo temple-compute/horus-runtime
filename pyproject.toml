@@ -7,7 +7,12 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["pydantic~=2.0", "pyyaml~=6.0"]
+dependencies = [
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
+    "pyyaml~=6.0",
+    "loguru~=0.7",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -43,6 +48,13 @@ horus_task = "horus_builtin.task.horus_task"
 
 [project.entry-points."horus.workflow"]
 horus_workflow = "horus_builtin.workflow.horus_workflow"
+
+[project.entry-points."horus.subscribers"]
+loguru = "horus_builtin.events.loguru_subscriber"
+
+[project.entry-points."horus.events"]
+task_event = "horus_builtin.tasks.task_event"
+
 
 # ================
 
