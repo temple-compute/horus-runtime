@@ -31,9 +31,9 @@ from horus_builtin.executors.shell import ShellExecutor
 from horus_builtin.runtimes.command import CommandRuntime
 from horus_builtin.tasks.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
-from horus_runtime.core.registry.auto_registry import init_registry
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -72,7 +72,7 @@ class TestTaskRegistry:
         Test that the task union type is defined after registry
         initialization.
         """
-        from horus_runtime.core.registry.task_registry import TaskUnion
+        from horus_runtime.registry.task_registry import TaskUnion
 
         assert TaskUnion is not None
 
@@ -87,7 +87,7 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.core.registry.task_registry import TaskUnion
+        from horus_runtime.registry.task_registry import TaskUnion
 
         class TestModel(BaseModel):
             task: TaskUnion
@@ -107,7 +107,7 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.core.registry.task_registry import TaskUnion
+        from horus_runtime.registry.task_registry import TaskUnion
 
         class TestModel(BaseModel):
             task: TaskUnion

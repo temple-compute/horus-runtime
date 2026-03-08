@@ -22,13 +22,13 @@ Unit tests for BaseArtifact class.
 import uuid
 from abc import ABC
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
     RegistryKeyIsNoneError,
 )
@@ -39,7 +39,9 @@ class ConcreteTestArtifact(BaseArtifact):
     Concrete implementation of BaseArtifact for testing purposes.
     """
 
-    add_to_registry = False  # Prevent registry pollution in tests
+    add_to_registry: ClassVar[bool] = (
+        False  # Prevent registry pollution in tests
+    )
     kind: Literal["test"] = "test"
 
     def exists(self) -> bool:
@@ -215,7 +217,7 @@ class TestBaseArtifactValidation:
                 Invalid artifact implementation without kind field for testing.
                 """
 
-                add_to_registry = True
+                add_to_registry: ClassVar[bool] = True
 
                 def exists(self) -> bool:
                     return False
@@ -241,7 +243,7 @@ class TestBaseArtifactValidation:
             # is raised at runtime.
             ConcreteTestArtifact(
                 uri="test://uri",
-                id="not-a-uuid",  # type: ignore
+                id="not-a-uuid",  # type: ignore[arg-type]
             )
 
     def test_extra_fields_handling(self) -> None:

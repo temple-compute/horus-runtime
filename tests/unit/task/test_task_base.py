@@ -21,7 +21,7 @@ Unit tests for BaseTask abstract base class.
 
 import inspect
 from abc import ABC
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -29,11 +29,11 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.artifacts.file import FileArtifact
 from horus_builtin.executors.shell import ShellExecutor
 from horus_builtin.runtimes.command import CommandRuntime
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.core.task.base import BaseTask
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
     RegistryKeyIsNoneError,
 )
-from horus_runtime.core.task.base import BaseTask
 
 
 class ConcreteTestTask(BaseTask):
@@ -200,7 +200,7 @@ class TestBaseTaskValidation:
                 Incomplete task that doesn't implement run method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing run method implementation
 

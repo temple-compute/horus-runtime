@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executors.shell import ShellExecutor
 from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.core.registry.auto_registry import init_registry
+from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -69,7 +69,7 @@ class TestExecutorRegistry:
         """
         Test that ExecutorUnion type alias is properly defined.
         """
-        from horus_runtime.core.registry.executor_registry import ExecutorUnion
+        from horus_runtime.registry.executor_registry import ExecutorUnion
 
         assert ExecutorUnion is not None
 
@@ -79,7 +79,7 @@ class TestExecutorRegistry:
         """
         data = {"kind": "shell"}
 
-        from horus_runtime.core.registry.executor_registry import ExecutorUnion
+        from horus_runtime.registry.executor_registry import ExecutorUnion
 
         class TestModel(BaseModel):
             executor: ExecutorUnion
@@ -95,7 +95,7 @@ class TestExecutorRegistry:
         """
         Test handling of invalid kind values.
         """
-        from horus_runtime.core.registry.executor_registry import ExecutorUnion
+        from horus_runtime.registry.executor_registry import ExecutorUnion
 
         invalid_data = {"kind": "invalid_type"}
 

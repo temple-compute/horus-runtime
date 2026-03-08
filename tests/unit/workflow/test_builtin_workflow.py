@@ -21,6 +21,7 @@ Unit tests for the Workflow class.
 
 import textwrap
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import Mock, patch
 
 import pytest
@@ -211,7 +212,7 @@ class TestWorkflowRun:
         """
 
         class TaskWithFailure(HorusTask):
-            add_to_registry = False
+            add_to_registry: ClassVar[bool] = False
 
             def run(self) -> None:
                 super().run()  # Here it calls +1 run count

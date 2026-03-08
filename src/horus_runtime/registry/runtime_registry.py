@@ -16,16 +16,16 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Task registry.
+Runtime registry.
 """
 
 from typing import TYPE_CHECKING, TypeAlias
 
-from horus_runtime.core.registry.auto_registry import init_registry
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.registry.auto_registry import init_registry
 
 # Check ArtifactRegistry for an explanation of this trick
 if TYPE_CHECKING:
-    TaskUnion: TypeAlias = BaseTask
+    RuntimeUnion: TypeAlias = BaseRuntime
 else:
-    TaskUnion = init_registry(BaseTask, "horus.tasks")
+    RuntimeUnion = init_registry(BaseRuntime, "horus.runtimes")

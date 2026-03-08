@@ -23,7 +23,7 @@ from typing import ClassVar, Literal
 
 import pytest
 
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
     NoSubclassesRegisteredError,
     RegistryKeyAttributeNotDefinedError,
@@ -90,7 +90,7 @@ class TestAutoRegistry:
         assert (
             ConcreteRegistryItem.registry["concrete"] == ConcreteRegistryItem
         )
-        assert ConcreteRegistryItem.registry["another"] == AnotherConcreteItem
+        assert AnotherConcreteItem.registry["another"] == AnotherConcreteItem
 
     def test_abstract_items_not_registered(self) -> None:
         """
@@ -126,7 +126,9 @@ class TestAutoRegistry:
         # Should have separate registries
         assert hasattr(TestRegistryBase, "registry")
         assert hasattr(DifferentBase, "registry")
-        assert TestRegistryBase.registry is not DifferentBase.registry
+        assert TestRegistryBase.registry is not DifferentBase.registry  # type: ignore[comparison-overlap]
+        # Intentional: verifying __init_subclass__ created separate registry
+        # dicts per base class, not a shared one. Types differ by design.
 
     def test_registry_key_from_attribute(self) -> None:
         """
@@ -192,7 +194,9 @@ class TestAutoRegistry:
             add_to_registry: ClassVar[bool] = True
 
         # Last one wins (this is current behavior)
-        assert FirstItem.registry["duplicate"] == SecondItem
+        assert FirstItem.registry["duplicate"] == SecondItem  # type: ignore[comparison-overlap]
+        # Intentional: verifying __init_subclass__ uses the same
+        # registry dict for the same base class, allowing overwriting.
         assert FirstItem.registry["duplicate"] != first_class
 
     def test_no_key_attribute_defined(self) -> None:

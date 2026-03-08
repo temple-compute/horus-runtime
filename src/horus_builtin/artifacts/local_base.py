@@ -21,7 +21,7 @@ Base definition for local file or folder artifacts in the Horus Runtime.
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from pydantic import model_validator
@@ -47,7 +47,7 @@ class LocalPathArtifactBase(BaseArtifact):
     the URI will be derived from it automatically.
     """
 
-    add_to_registry = False
+    add_to_registry: ClassVar[bool] = False
 
     @model_validator(mode="before")
     @classmethod

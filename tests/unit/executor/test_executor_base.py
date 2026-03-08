@@ -21,13 +21,13 @@ Unit tests for BaseExecutor class.
 
 import inspect
 from abc import ABC
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, ClassVar, Literal, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
     RegistryKeyIsNoneError,
 )
@@ -41,7 +41,9 @@ class ConcreteTestExecutor(BaseExecutor):
     Concrete implementation of BaseExecutor for testing purposes.
     """
 
-    add_to_registry = False  # Prevent registry pollution in tests
+    add_to_registry: ClassVar[bool] = (
+        False  # Prevent registry pollution in tests
+    )
     kind: Literal["test"] = "test"
 
     def execute(self, task: Union["BaseTask", str]) -> int:
@@ -174,9 +176,7 @@ class TestBaseExecutorValidation:
             match="must define a class property named 'kind'",
         ):
 
-            class InvalidExecutorNoKind(  # pyright: ignore[reportUnusedClass]
-                BaseExecutor
-            ):
+            class InvalidExecutorNoKind(BaseExecutor):
                 """
                 Invalid executor implementation without kind field for testing.
                 """
@@ -193,7 +193,7 @@ class TestBaseExecutorValidation:
             # the wrong type for the 'kind' field. The linter will complain
             # about this, but we want to ensure that the validation error
             # is raised at runtime.
-            ConcreteTestExecutor(kind=123)  # type: ignore
+            ConcreteTestExecutor(kind=123)  # type: ignore[arg-type]
 
     def test_abstract_method_enforcement(self) -> None:
         """
@@ -210,7 +210,7 @@ class TestBaseExecutorValidation:
                 Incomplete executor that doesn't implement execute method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing execute method implementation
 

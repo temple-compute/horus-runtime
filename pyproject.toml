@@ -115,3 +115,8 @@ python_version = "3.10"
 strict = true
 exclude = ["build", "dist"]
 plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_typed = true
+init_forbid_extra = true
+warn_required_dynamic_aliases = true

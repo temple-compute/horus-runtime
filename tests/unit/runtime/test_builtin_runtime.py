@@ -26,8 +26,8 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifacts.file import FileArtifact
 from horus_builtin.runtimes.command import CommandRuntime
-from horus_runtime.core.registry.auto_registry import init_registry
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -68,7 +68,7 @@ class TestRuntimeRegistry:
         Test that the runtime union type is defined after registry
         initialization.
         """
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
+        from horus_runtime.registry.runtime_registry import RuntimeUnion
 
         assert RuntimeUnion is not None
 
@@ -81,7 +81,7 @@ class TestRuntimeRegistry:
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
+        from horus_runtime.registry.runtime_registry import RuntimeUnion
 
         class TestModel(BaseModel):
             runtime: RuntimeUnion
@@ -100,7 +100,7 @@ class TestRuntimeRegistry:
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
+        from horus_runtime.registry.runtime_registry import RuntimeUnion
 
         class TestModel(BaseModel):
             runtime: RuntimeUnion

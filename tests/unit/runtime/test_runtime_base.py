@@ -21,17 +21,17 @@ Unit tests for BaseRuntime abstract base class.
 
 import inspect
 from abc import ABC
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.task.base import BaseTask
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
     RegistryKeyIsNoneError,
 )
-from horus_runtime.core.runtime.base import BaseRuntime
-from horus_runtime.core.task.base import BaseTask
 
 
 class ConcreteTestRuntime(BaseRuntime):
@@ -152,7 +152,7 @@ class TestBaseRuntimeValidation:
                 method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing _setup_runtime method implementation
 

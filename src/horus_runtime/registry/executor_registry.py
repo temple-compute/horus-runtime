@@ -16,16 +16,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Runtime registry.
+Definition of the executor registry, which is responsible for managing the
+executors in the Horus runtime.
 """
 
 from typing import TYPE_CHECKING, TypeAlias
 
-from horus_runtime.core.registry.auto_registry import init_registry
-from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.registry.auto_registry import init_registry
 
 # Check ArtifactRegistry for an explanation of this trick
 if TYPE_CHECKING:
-    RuntimeUnion: TypeAlias = BaseRuntime
+    ExecutorUnion: TypeAlias = BaseExecutor
 else:
-    RuntimeUnion = init_registry(BaseRuntime, "horus.runtimes")
+    ExecutorUnion = init_registry(BaseExecutor, "horus.executors")

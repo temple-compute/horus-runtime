@@ -16,28 +16,20 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Definitions of the artifact registry, which is responsible for managing the
-artifacts in the Horus runtime. The artifact registry provides a way to
-register, retrieve, and manage artifacts based on their unique identifiers,
-paths, and types. It serves as a central repository for all artifacts in the
-runtime, allowing for efficient storage and retrieval of artifacts based on
-their metadata and content. The artifact registry can be implemented using
-various storage backends, such as a local file system, a database, or a cloud
-storage service, depending on the requirements of the runtime and the scale of
-the artifacts being managed.
+Definitions of the workflow registry.
 """
 
 from typing import TYPE_CHECKING, TypeAlias
 
-from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.registry.auto_registry import init_registry
+from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.registry.auto_registry import init_registry
 
 # We define a type alias for the registry union type to make it easier to use
 # in type annotations throughout the codebase. We need to "trick" the type
 # checker here because the registry union type is dynamically generated at
 # runtime and can't be easily expressed as a static type annotation, so we
-# assign BaseArtifact during development
+# assign BaseWorkflow during development
 if TYPE_CHECKING:
-    ArtifactUnion: TypeAlias = BaseArtifact
+    WorkflowUnion: TypeAlias = BaseWorkflow
 else:
-    ArtifactUnion = init_registry(BaseArtifact, "horus.artifacts")
+    WorkflowUnion = init_registry(BaseWorkflow, "horus.workflows")

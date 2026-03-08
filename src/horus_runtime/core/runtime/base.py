@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
-from horus_runtime.core.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -40,7 +40,7 @@ class BaseRuntime(BaseModel, ABC, AutoRegistry):
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = None
+    kind: Any = ...
     """
     The 'kind' field is used to identify the specific type of runtime.
     """

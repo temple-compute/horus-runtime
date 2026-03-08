@@ -28,6 +28,7 @@ from inspect import isabstract
 from typing import Annotated, Any, ClassVar, cast
 
 from pydantic import Field
+from typing_extensions import Self
 
 from horus_runtime.i18n import tr as _
 
@@ -61,7 +62,7 @@ class AutoRegistry:
     Base class for automatically registering subclasses.
     """
 
-    registry: ClassVar[dict[str, type[Any]]]
+    registry: ClassVar[dict[str, type[Self]]]
     """
     A class variable that holds the registry of subclasses.
     """
@@ -85,7 +86,7 @@ class AutoRegistry:
     # This method is called when a subclass is defined. This allows us to look
     # up the correct subclass based on the 'registry_key' field when we want to
     # materialize an instance from the registry.
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls: type[Self], **kwargs: Any) -> None:
         """
         Automatically register subclasses in the registry when they are
         defined.
@@ -128,7 +129,7 @@ class AutoRegistry:
 
         # Then we check if the value of the 'registry_key' attribute is not
         # None or empty
-        key_value = getattr(cls, cls.registry_key, None)
+        key_value: str | None = getattr(cls, cls.registry_key, None)
         if not key_value:
             raise RegistryKeyIsNoneError(
                 _(

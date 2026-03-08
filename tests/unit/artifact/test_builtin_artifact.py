@@ -33,7 +33,7 @@ from horus_builtin.artifacts.file import FileArtifact
 from horus_builtin.artifacts.folder import FolderArtifact
 from horus_builtin.artifacts.local_base import LocalPathArtifactBase
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.registry.auto_registry import init_registry
+from horus_runtime.registry.auto_registry import init_registry
 
 SHA_HEX_LENGTH = 64  # Length of SHA-256 hash in hexadecimal representation
 SHA_HEX_LENGTH_BYTES = 32  # Length of SHA-256 hash in bytes
@@ -81,7 +81,7 @@ class TestArtifactRegistry:
         """
         Test that ArtifactUnion type alias is properly defined.
         """
-        from horus_runtime.core.registry.artifact_registry import ArtifactUnion
+        from horus_runtime.registry.artifact_registry import ArtifactUnion
 
         assert ArtifactUnion is not None
 
@@ -96,7 +96,7 @@ class TestArtifactRegistry:
 
         from horus_builtin.artifacts.file import FileArtifact
         from horus_builtin.artifacts.folder import FolderArtifact
-        from horus_runtime.core.registry.artifact_registry import ArtifactUnion
+        from horus_runtime.registry.artifact_registry import ArtifactUnion
 
         class TestModel(BaseModel):
             artifact: list[ArtifactUnion]
@@ -116,7 +116,7 @@ class TestArtifactRegistry:
         """
         Test handling of invalid kind values.
         """
-        from horus_runtime.core.registry.artifact_registry import ArtifactUnion
+        from horus_runtime.registry.artifact_registry import ArtifactUnion
 
         invalid_data = [{"uri": "/test/path.txt", "kind": "invalid_type"}]
 
@@ -142,7 +142,7 @@ class TestArtifactRegistryIntegration:
         """
         # Access the registry from BaseArtifact after scanning
         from horus_runtime.core.artifact.base import BaseArtifact
-        from horus_runtime.core.registry.artifact_registry import (  # noqa: F401
+        from horus_runtime.registry.artifact_registry import (  # noqa: F401
             ArtifactUnion,
         )
 

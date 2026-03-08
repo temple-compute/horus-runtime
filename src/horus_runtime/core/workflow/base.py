@@ -35,8 +35,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
-from horus_runtime.core.registry.auto_registry import AutoRegistry
-from horus_runtime.core.registry.task_registry import TaskUnion
+from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.task_registry import TaskUnion
 
 
 class BaseWorkflow(BaseModel, ABC, AutoRegistry):
@@ -46,7 +46,7 @@ class BaseWorkflow(BaseModel, ABC, AutoRegistry):
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = None
+    kind: Any = ...
     """
     The 'kind' field is used to identify the specific type of workflow.
     """

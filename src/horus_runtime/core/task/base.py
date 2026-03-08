@@ -26,10 +26,10 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
-from horus_runtime.core.registry.artifact_registry import ArtifactUnion
-from horus_runtime.core.registry.auto_registry import AutoRegistry
-from horus_runtime.core.registry.executor_registry import ExecutorUnion
-from horus_runtime.core.registry.runtime_registry import RuntimeUnion
+from horus_runtime.registry.artifact_registry import ArtifactUnion
+from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.executor_registry import ExecutorUnion
+from horus_runtime.registry.runtime_registry import RuntimeUnion
 
 
 class BaseTask(BaseModel, ABC, AutoRegistry):
@@ -43,7 +43,7 @@ class BaseTask(BaseModel, ABC, AutoRegistry):
     The 'registry_key' field is used to identify the specific type of task.
     """
 
-    kind: Any = None
+    kind: Any = ...
     """
     The 'kind' field is used to identify the specific type of task.
     """
