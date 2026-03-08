@@ -7,7 +7,12 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["pydantic~=2.0", "pyyaml~=6.0", "loguru~=0.7"]
+dependencies = [
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
+    "pyyaml~=6.0",
+    "loguru~=0.7",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -25,7 +30,9 @@ dev = [
 [project.scripts]
 horus = "horus_runtime.cli:main"
 
+# ================
 # Built-in plugins
+# ================
 [project.entry-points."horus.artifacts"]
 file = "horus_builtin.artifacts.file"
 folder = "horus_builtin.artifacts.folder"
@@ -42,6 +49,16 @@ horus_task = "horus_builtin.tasks.horus_task"
 [project.entry-points."horus.workflows"]
 horus_workflow = "horus_builtin.workflows.horus_workflow"
 
+[project.entry-points."horus.subscribers"]
+loguru = "horus_builtin.events.loguru_subscriber"
+
+[project.entry-points."horus.events"]
+task_event = "horus_builtin.tasks.task_event"
+
+
+# ================
+
+# Other tool configurations
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 
@@ -97,3 +114,4 @@ indent-style = "space"
 python_version = "3.10"
 strict = true
 exclude = ["build", "dist"]
+plugins = ["pydantic.mypy"]
