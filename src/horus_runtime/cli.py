@@ -20,14 +20,16 @@
 Entrypoint for horus-runtime.
 """
 
-from horus_runtime.i18n import tr as _
+from horus_runtime.runtime import HorusRuntime
 
 
 def main() -> None:
     """
     Main function for horus-runtime.
     """
-    print(_("Horus Runtime is starting..."))
+    # Boot the runtime to initialize logging, load plugins,
+    # and set up global context
+    HorusRuntime.boot()
 
 
 if __name__ == "__main__":
