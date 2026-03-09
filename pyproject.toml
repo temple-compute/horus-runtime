@@ -49,13 +49,6 @@ horus_task = "horus_builtin.task.horus_task"
 [project.entry-points."horus.workflow"]
 horus_workflow = "horus_builtin.workflow.horus_workflow"
 
-[project.entry-points."horus.subscribers"]
-loguru = "horus_builtin.events.loguru_subscriber"
-
-[project.entry-points."horus.events"]
-task_event = "horus_builtin.tasks.task_event"
-
-
 # ================
 
 # Other tool configurations
