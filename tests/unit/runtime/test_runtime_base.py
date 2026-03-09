@@ -30,8 +30,8 @@ from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
-    RegistryKeyIsNoneError,
 )
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
 class ConcreteTestRuntime(BaseRuntime):
@@ -91,9 +91,7 @@ class TestBaseRuntime:
         """
         Test that _setup_runtime method has correct signature.
         """
-        sig = inspect.signature(
-            BaseRuntime._setup_runtime  # pylint: disable=protected-access
-        )
+        sig = inspect.signature(BaseRuntime._setup_runtime)
 
         params = list(sig.parameters.keys())
         assert params == ["self", "task"]
@@ -119,9 +117,7 @@ class TestBaseRuntimeValidation:
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class InvalidRuntime(  # pyright: ignore[reportUnusedClass]
-                BaseRuntime
-            ):
+            class InvalidRuntime(BaseRuntime):
                 """
                 Invalid runtime that does not set 'kind' field.
                 """
@@ -144,9 +140,7 @@ class TestBaseRuntimeValidation:
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteRuntime(  # pyright: ignore[reportUnusedClass]
-                BaseRuntime
-            ):
+            class IncompleteRuntime(BaseRuntime):
                 """
                 Incomplete runtime that doesn't implement _setup_runtime
                 method.

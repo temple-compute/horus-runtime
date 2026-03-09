@@ -32,8 +32,8 @@ from horus_builtin.runtimes.command import CommandRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
-    RegistryKeyIsNoneError,
 )
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
 class ConcreteTestTask(BaseTask):
@@ -107,7 +107,7 @@ class TestBaseTask:
         """
         Test that run method has correct signature.
         """
-        sig = inspect.signature(BaseTask.run)  # pylint: disable=no-member
+        sig = inspect.signature(BaseTask.run)
 
         params = list(sig.parameters.keys())
         assert params == ["self"]
@@ -160,7 +160,7 @@ class TestBaseTaskValidation:
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class InvalidTask(BaseTask):  # pyright: ignore[reportUnusedClass]
+            class InvalidTask(BaseTask):
                 """
                 Invalid task that does not set 'kind' field.
                 """
@@ -193,9 +193,7 @@ class TestBaseTaskValidation:
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteTask(  # pyright: ignore[reportUnusedClass]
-                BaseTask
-            ):
+            class IncompleteTask(BaseTask):
                 """
                 Incomplete task that doesn't implement run method.
                 """

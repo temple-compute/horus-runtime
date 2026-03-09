@@ -16,7 +16,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# ruff: noqa: PLC0415
 """
 Unit tests for ShellExecutor and related builtin executors.
 """
@@ -28,7 +27,6 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executors.shell import ShellExecutor
 from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -42,21 +40,10 @@ class TestInitRegistry:
         """
         Test that init_registry scans the core executors package.
         """
-        init_registry(BaseExecutor, "horus.executors")
-
         # Should have scanned the core executors package
         assert "shell" in BaseExecutor.registry
 
         assert BaseExecutor.registry["shell"] is ShellExecutor
-
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a proper Union type annotation.
-        """
-        registry_union = init_registry(BaseExecutor, "horus.executors")
-
-        # Result should be a type annotation that can be used with Pydantic
-        assert registry_union is not None
 
 
 @pytest.mark.unit
@@ -65,24 +52,14 @@ class TestExecutorRegistry:
     Test cases for ExecutorUnion type alias.
     """
 
-    def test_executor_union_is_defined(self) -> None:
-        """
-        Test that ExecutorUnion type alias is properly defined.
-        """
-        from horus_runtime.registry.executor_registry import ExecutorUnion
-
-        assert ExecutorUnion is not None
-
     def test_executor_union_can_validate_union_executor(self) -> None:
         """
         Test that ExecutorUnion can validate ShellExecutor data.
         """
         data = {"kind": "shell"}
 
-        from horus_runtime.registry.executor_registry import ExecutorUnion
-
         class TestModel(BaseModel):
-            executor: ExecutorUnion
+            executor: BaseExecutor
 
         # This should work with the discriminated union
         result = TestModel.model_validate({"executor": data})
@@ -95,12 +72,10 @@ class TestExecutorRegistry:
         """
         Test handling of invalid kind values.
         """
-        from horus_runtime.registry.executor_registry import ExecutorUnion
-
         invalid_data = {"kind": "invalid_type"}
 
         class TestModel(BaseModel):
-            executor: ExecutorUnion
+            executor: BaseExecutor
 
         # Should raise validation error for unknown kind
         with pytest.raises(ValidationError):

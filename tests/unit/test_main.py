@@ -41,7 +41,10 @@ class TestMain:
         horus_runtime()
 
         # Verify the print was called with expected message
-        mock_print.assert_called_with("Horus Runtime is starting...")
+        assert any(
+            call.args[0] == "Horus Runtime is starting..."
+            for call in mock_print.call_args_list
+        )
 
     def test_main_module_exists(self) -> None:
         """

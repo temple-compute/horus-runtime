@@ -16,7 +16,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# ruff: noqa: PLC0415
 """
 Unit tests for HorusTask builtin task.
 """
@@ -33,7 +32,6 @@ from horus_builtin.tasks.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
-from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -47,18 +45,8 @@ class TestInitRegistry:
         """
         Test that init_registry properly scans the horus.tasks module.
         """
-        init_registry(BaseTask, "horus.tasks")
-
         assert "horus_task" in BaseTask.registry
         assert BaseTask.registry["horus_task"] is not None
-
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a Union type of all registered tasks.
-        """
-        registry_union = init_registry(BaseTask, "horus.tasks")
-
-        assert registry_union is not None
 
 
 @pytest.mark.unit
@@ -66,15 +54,6 @@ class TestTaskRegistry:
     """
     Test cases for task registry functionality.
     """
-
-    def test_task_union_is_defined(self) -> None:
-        """
-        Test that the task union type is defined after registry
-        initialization.
-        """
-        from horus_runtime.registry.task_registry import TaskUnion
-
-        assert TaskUnion is not None
 
     def test_task_union_can_validate_horus_task(self) -> None:
         """
@@ -87,10 +66,8 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.registry.task_registry import TaskUnion
-
         class TestModel(BaseModel):
-            task: TaskUnion
+            task: BaseTask
 
         result = TestModel.model_validate({"task": data})
 
@@ -107,10 +84,8 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.registry.task_registry import TaskUnion
-
         class TestModel(BaseModel):
-            task: TaskUnion
+            task: BaseTask
 
         with pytest.raises(ValidationError):
             TestModel.model_validate({"task": data})

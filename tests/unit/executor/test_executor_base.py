@@ -29,8 +29,8 @@ from pydantic import BaseModel, ValidationError
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
-    RegistryKeyIsNoneError,
 )
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -203,9 +203,7 @@ class TestBaseExecutorValidation:
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteExecutor(  # pyright: ignore[reportUnusedClass]
-                BaseExecutor
-            ):
+            class IncompleteExecutor(BaseExecutor):
                 """
                 Incomplete executor that doesn't implement execute method.
                 """

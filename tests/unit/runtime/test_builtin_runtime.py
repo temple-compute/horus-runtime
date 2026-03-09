@@ -15,8 +15,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
-# ruff: noqa: PLC0415
 """
 Unit tests for CommandRuntime builtin runtime.
 """
@@ -27,7 +25,6 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.artifacts.file import FileArtifact
 from horus_builtin.runtimes.command import CommandRuntime
 from horus_runtime.core.runtime.base import BaseRuntime
-from horus_runtime.registry.auto_registry import init_registry
 from tests.conftest import MakeTaskType
 
 
@@ -41,20 +38,9 @@ class TestInitRegistry:
         """
         Test that init_registry properly scans the horus.runtimes module.
         """
-        init_registry(BaseRuntime, "horus.runtimes")
-
         assert "command" in BaseRuntime.registry
 
         assert BaseRuntime.registry["command"] is not None
-
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a Union type of all registered
-        runtimes.
-        """
-        registry_union = init_registry(BaseRuntime, "horus.runtimes")
-
-        assert registry_union is not None
 
 
 @pytest.mark.unit
@@ -62,15 +48,6 @@ class TestRuntimeRegistry:
     """
     Test cases for runtime registry functionality.
     """
-
-    def test_runtime_union_is_defined(self) -> None:
-        """
-        Test that the runtime union type is defined after registry
-        initialization.
-        """
-        from horus_runtime.registry.runtime_registry import RuntimeUnion
-
-        assert RuntimeUnion is not None
 
     def test_runtime_union_can_validate_union_runtime(self) -> None:
         """
@@ -81,10 +58,8 @@ class TestRuntimeRegistry:
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.registry.runtime_registry import RuntimeUnion
-
         class TestModel(BaseModel):
-            runtime: RuntimeUnion
+            runtime: BaseRuntime
 
         result = TestModel.model_validate({"runtime": data})
 
@@ -100,10 +75,8 @@ class TestRuntimeRegistry:
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.registry.runtime_registry import RuntimeUnion
-
         class TestModel(BaseModel):
-            runtime: RuntimeUnion
+            runtime: BaseRuntime
 
         with pytest.raises(ValidationError):
             TestModel.model_validate({"runtime": data})

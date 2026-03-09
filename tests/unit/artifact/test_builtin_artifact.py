@@ -15,8 +15,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
-# ruff: noqa: PLC0415
 """
 Unit tests for artifact_registry module.
 """
@@ -33,7 +31,6 @@ from horus_builtin.artifacts.file import FileArtifact
 from horus_builtin.artifacts.folder import FolderArtifact
 from horus_builtin.artifacts.local_base import LocalPathArtifactBase
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.registry.auto_registry import init_registry
 
 SHA_HEX_LENGTH = 64  # Length of SHA-256 hash in hexadecimal representation
 SHA_HEX_LENGTH_BYTES = 32  # Length of SHA-256 hash in bytes
@@ -45,15 +42,12 @@ class TestInitRegistry:
     Test that the builtin horus artifacts are properly registered.
     """
 
-    def test_init_registry_scans_builtin_artifacts(self) -> None:
+    def test_init_registry_scans_builtin_artifacts(
+        self,
+    ) -> None:
         """
         Test that init_registry scans the core artifacts package.
         """
-        from horus_builtin.artifacts.file import FileArtifact
-        from horus_builtin.artifacts.folder import FolderArtifact
-
-        init_registry(BaseArtifact, "horus.artifacts")
-
         # Should have scanned the core artifacts package
         assert "file" in BaseArtifact.registry
         assert "folder" in BaseArtifact.registry
@@ -61,29 +55,12 @@ class TestInitRegistry:
         assert BaseArtifact.registry["file"] is FileArtifact
         assert BaseArtifact.registry["folder"] is FolderArtifact
 
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a proper Union type annotation.
-        """
-        registry_union = init_registry(BaseArtifact, "horus.artifacts")
-
-        # Result should be a type annotation that can be used with Pydantic
-        assert registry_union is not None
-
 
 @pytest.mark.unit
 class TestArtifactRegistry:
     """
     Test cases for ArtifactUnion type alias.
     """
-
-    def test_artifact_union_is_defined(self) -> None:
-        """
-        Test that ArtifactUnion type alias is properly defined.
-        """
-        from horus_runtime.registry.artifact_registry import ArtifactUnion
-
-        assert ArtifactUnion is not None
 
     def test_artifact_union_can_validate_union_artifact(self) -> None:
         """
@@ -94,12 +71,8 @@ class TestArtifactRegistry:
             {"uri": "/test/folder", "kind": "folder"},
         ]
 
-        from horus_builtin.artifacts.file import FileArtifact
-        from horus_builtin.artifacts.folder import FolderArtifact
-        from horus_runtime.registry.artifact_registry import ArtifactUnion
-
         class TestModel(BaseModel):
-            artifact: list[ArtifactUnion]
+            artifact: list[BaseArtifact]
 
         # This should work with the discriminated union
         result = TestModel.model_validate({"artifact": data})
@@ -116,12 +89,10 @@ class TestArtifactRegistry:
         """
         Test handling of invalid kind values.
         """
-        from horus_runtime.registry.artifact_registry import ArtifactUnion
-
         invalid_data = [{"uri": "/test/path.txt", "kind": "invalid_type"}]
 
         class TestModel(BaseModel):
-            artifact: list[ArtifactUnion]
+            artifact: list[BaseArtifact]
 
         # Should raise validation error for unknown kind
         with pytest.raises(ValidationError):
@@ -140,12 +111,6 @@ class TestArtifactRegistryIntegration:
         """
         Test that the registry contains the expected artifact types.
         """
-        # Access the registry from BaseArtifact after scanning
-        from horus_runtime.core.artifact.base import BaseArtifact
-        from horus_runtime.registry.artifact_registry import (  # noqa: F401
-            ArtifactUnion,
-        )
-
         # Registry should contain file and folder artifacts
         assert hasattr(BaseArtifact, "registry")
         assert "file" in BaseArtifact.registry

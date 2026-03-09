@@ -23,16 +23,15 @@ from typing import ClassVar, Literal
 
 import pytest
 
-from horus_runtime.registry.auto_registry import (
-    AutoRegistry,
-    NoSubclassesRegisteredError,
+from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.exceptions import (
+    DuplicatedRegistryKeyError,
     RegistryKeyAttributeNotDefinedError,
     RegistryKeyIsNoneError,
-    init_registry,
 )
 
 
-class TestRegistryBase(AutoRegistry):
+class RegistryBaseTest(AutoRegistry, registry_point="test_registry"):
     """
     Test base class for AutoRegistry testing.
     """
@@ -41,7 +40,7 @@ class TestRegistryBase(AutoRegistry):
     add_to_registry: ClassVar[bool] = False  # Prevent pollution
 
 
-class ConcreteRegistryItem(TestRegistryBase):
+class ConcreteRegistryItem(RegistryBaseTest):
     """
     Concrete implementation for testing.
     """
@@ -50,7 +49,7 @@ class ConcreteRegistryItem(TestRegistryBase):
     add_to_registry: ClassVar[bool] = True
 
 
-class AnotherConcreteItem(TestRegistryBase):
+class AnotherConcreteItem(RegistryBaseTest):
     """
     Another concrete implementation for testing.
     """
@@ -59,7 +58,7 @@ class AnotherConcreteItem(TestRegistryBase):
     add_to_registry: ClassVar[bool] = True
 
 
-class AbstractTestItem(TestRegistryBase):
+class AbstractTestItem(RegistryBaseTest):
     """
     Abstract class that should not be registered.
     """
@@ -78,8 +77,8 @@ class TestAutoRegistry:
         """
         Test that registry is properly initialized for subclasses.
         """
-        assert hasattr(TestRegistryBase, "registry")
-        assert isinstance(TestRegistryBase.registry, dict)
+        assert hasattr(RegistryBaseTest, "registry")
+        assert isinstance(RegistryBaseTest.registry, dict)
 
     def test_concrete_items_registered(self) -> None:
         """
@@ -105,7 +104,7 @@ class TestAutoRegistry:
         Test that different inheritance hierarchies have separate registries.
         """
 
-        class DifferentBase(AutoRegistry):
+        class DifferentBase(AutoRegistry, registry_point="different"):
             """
             Different base class for testing separate registries.
             """
@@ -113,9 +112,7 @@ class TestAutoRegistry:
             registry_key: ClassVar[str] = "different_key"
             add_to_registry: ClassVar[bool] = False
 
-        class DifferentConcrete(  # pyright: ignore[reportUnusedClass]
-            DifferentBase
-        ):
+        class DifferentConcrete(DifferentBase):
             """
             Test class.
             """
@@ -124,9 +121,9 @@ class TestAutoRegistry:
             add_to_registry: ClassVar[bool] = True
 
         # Should have separate registries
-        assert hasattr(TestRegistryBase, "registry")
+        assert hasattr(RegistryBaseTest, "registry")
         assert hasattr(DifferentBase, "registry")
-        assert TestRegistryBase.registry is not DifferentBase.registry  # type: ignore[comparison-overlap]
+        assert RegistryBaseTest.registry is not DifferentBase.registry  # type: ignore[comparison-overlap]
         # Intentional: verifying __init_subclass__ created separate registry
         # dicts per base class, not a shared one. Types differ by design.
 
@@ -135,7 +132,7 @@ class TestAutoRegistry:
         Test that registry_key value is taken from the class attribute.
         """
 
-        class TestKeyItem(AutoRegistry):
+        class TestKeyItem(AutoRegistry, registry_point="test_key"):
             """
             Test class for registry key from attribute.
             """
@@ -159,7 +156,7 @@ class TestAutoRegistry:
 
             mixin_attr: str = "mixin"
 
-        class MultiInheritItem(TestRegistryBase, MixinClass):
+        class MultiInheritItem(RegistryBaseTest, MixinClass):
             """
             Test class for multiple inheritance scenarios.
             """
@@ -175,7 +172,7 @@ class TestAutoRegistry:
         Test behavior when multiple classes try to register with same key.
         """
 
-        class FirstItem(TestRegistryBase):
+        class FirstItem(RegistryBaseTest):
             """
             First class to register.
             """
@@ -183,21 +180,15 @@ class TestAutoRegistry:
             test_type: Literal["duplicate"] = "duplicate"
             add_to_registry: ClassVar[bool] = True
 
-        first_class = FirstItem.registry["duplicate"]
+        with pytest.raises(DuplicatedRegistryKeyError):
 
-        class SecondItem(TestRegistryBase):
-            """
-            Second class to register.
-            """
+            class SecondItem(RegistryBaseTest):
+                """
+                Second class to register.
+                """
 
-            test_type: Literal["duplicate"] = "duplicate"
-            add_to_registry: ClassVar[bool] = True
-
-        # Last one wins (this is current behavior)
-        assert FirstItem.registry["duplicate"] == SecondItem  # type: ignore[comparison-overlap]
-        # Intentional: verifying __init_subclass__ uses the same
-        # registry dict for the same base class, allowing overwriting.
-        assert FirstItem.registry["duplicate"] != first_class
+                test_type: Literal["duplicate"] = "duplicate"
+                add_to_registry: ClassVar[bool] = True
 
     def test_no_key_attribute_defined(self) -> None:
         """
@@ -206,8 +197,8 @@ class TestAutoRegistry:
         """
         with pytest.raises(RegistryKeyAttributeNotDefinedError):
 
-            class MissingKeyAttribute(  # pyright: ignore[reportUnusedClass]
-                AutoRegistry
+            class MissingKeyAttribute(
+                AutoRegistry, registry_point="missing_key"
             ):
                 """
                 Class with registry_key missing.
@@ -221,9 +212,7 @@ class TestAutoRegistry:
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class BaseRegisteredItem(  # pyright: ignore[reportUnusedClass]
-                AutoRegistry
-            ):
+            class BaseRegisteredItem(AutoRegistry, registry_point="base_item"):
                 """
                 Class with registry_key value set to None for testing.
                 """
@@ -231,9 +220,7 @@ class TestAutoRegistry:
                 registry_key: ClassVar[str] = "key_attr"
                 add_to_registry: ClassVar[bool] = False
 
-            class NoKeyValueItem(  # pyright: ignore[reportUnusedClass]
-                BaseRegisteredItem
-            ):
+            class NoKeyValueItem(BaseRegisteredItem):
                 """
                 Class with registry_key value set to None for testing.
                 """
@@ -241,36 +228,12 @@ class TestAutoRegistry:
                 key_attr: str = ""
                 add_to_registry: ClassVar[bool] = True
 
-    def test_no_subclasses_registered(self) -> None:
-        """
-        Test behavior when no subclasses are registered.
-        """
-
-        class BaseNoRegisteredItems(AutoRegistry):
-            """
-            Base class for testing with no registered subclasses.
-            """
-
-            registry_key: ClassVar[str] = "test_type"
-            add_to_registry: ClassVar[bool] = False
-
-        class NoRegisteredItems(BaseNoRegisteredItems):
-            """
-            Class with no registered subclasses.
-            """
-
-            test_type: Literal["none"] = "none"
-            add_to_registry: ClassVar[bool] = False
-
-        with pytest.raises(NoSubclassesRegisteredError):
-            init_registry(NoRegisteredItems, "test_group")
-
     def test_one_subclass_registered(self) -> None:
         """
         Test behavior when only one subclass is registered.
         """
 
-        class BaseWithOneItem(AutoRegistry):
+        class BaseWithOneItem(AutoRegistry, registry_point="test_group"):
             """
             Base class for testing with only one registered subclass.
             """
@@ -278,9 +241,7 @@ class TestAutoRegistry:
             registry_key: ClassVar[str] = "test_type"
             add_to_registry: ClassVar[bool] = False
 
-        class OnlyOneItem(  # pyright: ignore[reportUnusedClass]
-            BaseWithOneItem
-        ):
+        class OnlyOneItem(BaseWithOneItem):
             """
             Class with only one registered subclass.
             """
@@ -288,6 +249,6 @@ class TestAutoRegistry:
             test_type: Literal["only"] = "only"
             add_to_registry: ClassVar[bool] = True
 
-        init_registry(BaseWithOneItem, "test_group")
+        AutoRegistry.init_registry([BaseWithOneItem])
 
         assert len(BaseWithOneItem.registry) == 1

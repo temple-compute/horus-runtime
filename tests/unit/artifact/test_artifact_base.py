@@ -30,8 +30,8 @@ from pydantic import BaseModel, ValidationError
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
-    RegistryKeyIsNoneError,
 )
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
 class ConcreteTestArtifact(BaseArtifact):

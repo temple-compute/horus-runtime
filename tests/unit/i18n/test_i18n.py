@@ -19,10 +19,6 @@
 Unit tests for i18n module.
 """
 
-# We disable protected-access warnings for testing private members
-# pyright: reportPrivateUsage=false
-# pylint: disable=protected-access
-
 import gettext
 import os
 from unittest.mock import MagicMock, patch
