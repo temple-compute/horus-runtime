@@ -52,11 +52,11 @@ class AutoRegistry(BaseModel, ABC):
 
     Usage
     -----
-    Define a root registry class by passing ``registry_point="entry_point"``
+    Define a root registry class by passing ``entry_point="entry_point"``
     in the class definition. This marks the class as the top of a registry
     hierarchy and initialises an empty registry dict for it::
 
-        class BaseArtifact(AutoRegistry, registry_point="artifact"):
+        class BaseArtifact(AutoRegistry, entry_point="artifact"):
             registry_key: ClassVar[str] = "type"
             type: str
 
@@ -78,7 +78,7 @@ class AutoRegistry(BaseModel, ABC):
     A class variable that holds the registry of concrete subclasses, keyed by
     the value of the field named by ``registry_key``. Each root registry class
     gets its own independent registry dict, initialised in
-    ``__init_subclass__`` when ``registry_point="someting"``.
+    ``__init_subclass__`` when ``entry_point="someting"``.
     """
 
     registry_key: ClassVar[str]
@@ -99,7 +99,7 @@ class AutoRegistry(BaseModel, ABC):
     _registry_roots: ClassVar[dict[type["AutoRegistry"], str]] = {}
     """
     Internal dict of classes that were declared with
-    ``registry_point="something"``.
+    ``entry_point="something"``.
     The keys are the root classes, and the values are their corresponding
     entry point groups. Used by ``__get_pydantic_core_schema__`` to decide
     whether to intercept validation and dispatch to a concrete subclass, or
@@ -108,56 +108,57 @@ class AutoRegistry(BaseModel, ABC):
 
     def __init_subclass__(
         cls: type[Self],
-        registry_point: str | None = None,
+        entry_point: str | None = None,
         **kwargs: Any,
     ) -> None:
         """
         Called automatically when a subclass is defined.
 
-        If ``registry_point`` is provided, the class is marked as a dispatch
+        If ``entry_point`` is provided, the class is marked as a dispatch
         root and given its own empty registry. Otherwise the subclass is
         validated and registered in the nearest root registry it belongs to.
 
         Parameters
         ----------
-        registry_point:
+        entry_point:
             Pass a string when defining a new top-level registry hierarchy,
             this value will be used to load the entry point group for that
             hierarchy in ``init_registry()``, adding the horus. suffix (e.g.
-            ``class BaseArtifact(AutoRegistry, registry_point="artifact")``).
+            ``class BaseArtifact(AutoRegistry, entry_point="artifact")``).
             Artifact plugins will load then from the ``horus.artifact`` entry
             point group. Root classes are not registered in any registry
             themselves.
         """
         super().__init_subclass__(**kwargs)
 
-        if registry_point:
+        if entry_point:
             # Verify the point does not exist already
-            if registry_point in AutoRegistry._registry_roots.values():
+            if entry_point in AutoRegistry._registry_roots.values():
                 raise RegistryPointExistsError(
                     _(
-                        "%(registry_point)s already exists in the registry. "
-                        "Registry points must be unique."
+                        "%(entry_point)s already exists in the registry. "
+                        "Entry points must be unique."
                     )
+                    % {"entry_point": entry_point}
                 )
 
             # Mark as a dispatch root and give it a fresh registry. Root
             # classes are not themselves registered as concrete
             # implementations.
             AutoRegistry._registry_roots[cls] = (
-                HORUS_ENTRY_POINT_PREFIX + registry_point
+                HORUS_ENTRY_POINT_PREFIX + entry_point
             )
             cls.registry = {}
 
-        # If the developer did NOT specify a registry_point, and the class
+        # If the developer did NOT specify a entry_point, and the class
         # does NOT have a registry, means the dev forgot to add the
-        # registry_point into this new registry class.
-        if not registry_point and not hasattr(cls, "registry"):
+        # entry_point into this new registry class.
+        if not entry_point and not hasattr(cls, "registry"):
             raise BaseRegistryClassEntryPointNotDefinedError(
                 _(
                     "%(cls)s tried to register without specifying a "
-                    "'registry_point'. Make sure all base classes that "
-                    "inherit from AutoRegistry define a registry_point."
+                    "'entry_point'. Make sure all base classes that "
+                    "inherit from AutoRegistry define an entry_point."
                 )
                 % {"cls": cls.__name__}
             )

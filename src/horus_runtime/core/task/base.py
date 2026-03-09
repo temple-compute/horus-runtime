@@ -32,7 +32,7 @@ from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseTask(AutoRegistry, registry_point="task"):
+class BaseTask(AutoRegistry, entry_point="task"):
     """
     The base task. This class provides the foundational functionality for
     defining and executing tasks, and should be ingested by the executor.

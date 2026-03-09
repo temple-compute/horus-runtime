@@ -31,7 +31,7 @@ from horus_runtime.registry.exceptions import (
 )
 
 
-class RegistryBaseTest(AutoRegistry, registry_point="test_registry"):
+class RegistryBaseTest(AutoRegistry, entry_point="test_registry"):
     """
     Test base class for AutoRegistry testing.
     """
@@ -104,7 +104,7 @@ class TestAutoRegistry:
         Test that different inheritance hierarchies have separate registries.
         """
 
-        class DifferentBase(AutoRegistry, registry_point="different"):
+        class DifferentBase(AutoRegistry, entry_point="different"):
             """
             Different base class for testing separate registries.
             """
@@ -132,7 +132,7 @@ class TestAutoRegistry:
         Test that registry_key value is taken from the class attribute.
         """
 
-        class TestKeyItem(AutoRegistry, registry_point="test_key"):
+        class TestKeyItem(AutoRegistry, entry_point="test_key"):
             """
             Test class for registry key from attribute.
             """
@@ -197,9 +197,7 @@ class TestAutoRegistry:
         """
         with pytest.raises(RegistryKeyAttributeNotDefinedError):
 
-            class MissingKeyAttribute(
-                AutoRegistry, registry_point="missing_key"
-            ):
+            class MissingKeyAttribute(AutoRegistry, entry_point="missing_key"):
                 """
                 Class with registry_key missing.
                 """
@@ -212,7 +210,7 @@ class TestAutoRegistry:
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class BaseRegisteredItem(AutoRegistry, registry_point="base_item"):
+            class BaseRegisteredItem(AutoRegistry, entry_point="base_item"):
                 """
                 Class with registry_key value set to None for testing.
                 """
@@ -233,7 +231,7 @@ class TestAutoRegistry:
         Test behavior when only one subclass is registered.
         """
 
-        class BaseWithOneItem(AutoRegistry, registry_point="test_group"):
+        class BaseWithOneItem(AutoRegistry, entry_point="test_group"):
             """
             Base class for testing with only one registered subclass.
             """

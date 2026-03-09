@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class BaseRuntime(AutoRegistry, registry_point="runtime"):
+class BaseRuntime(AutoRegistry, entry_point="runtime"):
     """
     The base runtime. This class provides the foundational functionality for
     executing tasks, and should be ingested by the executor.

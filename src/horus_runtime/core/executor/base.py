@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class BaseExecutor(AutoRegistry, registry_point="executor"):
+class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
     The base executor represents the abstract concept of an executor in the
     Horus runtime. An executor is on charge of actually running the task in the

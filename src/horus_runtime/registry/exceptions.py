@@ -49,13 +49,13 @@ class DuplicatedRegistryKeyError(RegistryError):
 
 class RegistryPointExistsError(RegistryError):
     """
-    Exception raised when the provided registry_point already exists in the
+    Exception raised when the provided entry_point already exists in the
     registry.
     """
 
 
 class BaseRegistryClassEntryPointNotDefinedError(RegistryError):
     """
-    Exception raised when the developer forgets to add "registry_point" to a
+    Exception raised when the developer forgets to add "entry_point" to a
     subclass that directly inherits from AutoRegistry.
     """

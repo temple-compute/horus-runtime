@@ -37,7 +37,7 @@ from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseWorkflow(AutoRegistry, registry_point="workflow"):
+class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     """
     Orchestrates an ordered collection of tasks.
     """
