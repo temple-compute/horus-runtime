@@ -42,7 +42,6 @@ class TestHorusRuntimeIntegration:
         )
 
         assert result.returncode == 0
-        assert "Horus Runtime is starting..." in result.stdout
 
     @pytest.mark.slow
     def test_system_integration(self) -> None:

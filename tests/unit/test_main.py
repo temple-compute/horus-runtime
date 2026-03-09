@@ -19,8 +19,6 @@
 Unit tests for main module.
 """
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from horus_runtime.cli import main as horus_runtime
@@ -31,20 +29,6 @@ class TestMain:
     """
     Test cases for main module.
     """
-
-    @patch("builtins.print")
-    def test_main_execution(self, mock_print: MagicMock) -> None:
-        """
-        Test that main execution prints expected message.
-        """
-        # Call the main function directly
-        horus_runtime()
-
-        # Verify the print was called with expected message
-        assert any(
-            call.args[0] == "Horus Runtime is starting..."
-            for call in mock_print.call_args_list
-        )
 
     def test_main_module_exists(self) -> None:
         """

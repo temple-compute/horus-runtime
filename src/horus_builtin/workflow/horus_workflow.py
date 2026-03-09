@@ -26,6 +26,7 @@ from typing import Literal
 import yaml
 
 from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.logging import horus_logger
 
 
 class HorusWorkflow(BaseWorkflow):
@@ -57,17 +58,17 @@ class HorusWorkflow(BaseWorkflow):
         """
         for task in self.tasks.values():
             if task.is_complete():
-                print(
+                horus_logger.info(
                     f"[{self.name}] Skipping '{task.name}': "
                     "all outputs already exist."
                 )
                 continue
 
-            print(f"[{self.name}] Running '{task.name}'...")
+            horus_logger.info(f"[{self.name}] Running '{task.name}'...")
 
             task.run()
 
-            print(f"[{self.name}] '{task.name}' completed.")
+            horus_logger.info(f"[{self.name}] '{task.name}' completed.")
 
     def reset(self) -> None:
         """
@@ -75,5 +76,5 @@ class HorusWorkflow(BaseWorkflow):
         workflow. This allows the workflow to be re-run from scratch.
         """
         for task in self.tasks.values():
-            print(f"[{self.name}] Resetting task '{task.name}'...")
+            horus_logger.info(f"[{self.name}] Resetting task '{task.name}'...")
             task.reset()

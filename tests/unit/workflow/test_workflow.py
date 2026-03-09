@@ -52,9 +52,6 @@ class ConcreteWorkflow(BaseWorkflow):
         """
         Run the workflow by executing all its tasks.
         """
-        print(
-            f"Running workflow '{self.name}' with {len(self.tasks)} tasks..."
-        )
 
     def reset(self) -> None:
         """

@@ -7,7 +7,12 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["pydantic~=2.0", "pyyaml~=6.0"]
+dependencies = [
+    "pydantic~=2.0",
+    "pydantic_settings~=2.0",
+    "pyyaml~=6.0",
+    "loguru~=0.7",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -85,6 +90,7 @@ select = [
     "PL",  # pylint
     "RUF", # ruff-specific
 ]
+extend-select = ["T201"] # Prevent use of print()
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
