@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from horus_runtime.runtime import HorusContext
+from horus_runtime.context import HorusContext
 
 
 @pytest.mark.unit

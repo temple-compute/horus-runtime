@@ -20,7 +20,7 @@
 Entrypoint for horus-runtime.
 """
 
-from horus_runtime.runtime import HorusContext
+from horus_runtime.context import HorusContext
 
 
 def main() -> None:
