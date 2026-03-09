@@ -16,22 +16,22 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for BaseRuntime abstract base class
+Unit tests for BaseRuntime abstract base class.
 """
 
 import inspect
 from abc import ABC
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_runtime.core.registry.auto_registry import (
-    AutoRegistry,
-    RegistryKeyIsNoneError,
-)
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.registry.auto_registry import (
+    AutoRegistry,
+)
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
 class ConcreteTestRuntime(BaseRuntime):
@@ -48,19 +48,19 @@ class ConcreteTestRuntime(BaseRuntime):
 @pytest.mark.unit
 class TestBaseRuntime:
     """
-    Test cases for BaseRuntime abstract base class
+    Test cases for BaseRuntime abstract base class.
     """
 
     def test_base_runtime_is_abstract(self) -> None:
         """
-        Test that BaseRuntime cannot be instantiated directly
+        Test that BaseRuntime cannot be instantiated directly.
         """
         with pytest.raises(TypeError):
             BaseRuntime()  # type: ignore
 
     def test_base_runtime_inherits_correctly(self) -> None:
         """
-        Test that BaseRuntime inherits from expected classes
+        Test that BaseRuntime inherits from expected classes.
         """
         # This is a little bit redundant since we know BaseRuntime is defined
         # as inheriting from these, but it serves as a sanity check that the
@@ -72,7 +72,7 @@ class TestBaseRuntime:
 
     def test_registry_key_is_kind(self) -> None:
         """
-        Test that BaseRuntime uses 'kind' as registry key
+        Test that BaseRuntime uses 'kind' as registry key.
         """
         # This check will be done for other classes that inherit from
         # autoregistry. For runtime, the registry key is 'kind',
@@ -81,7 +81,7 @@ class TestBaseRuntime:
 
     def test_setup_runtime_method_is_abstract(self) -> None:
         """
-        Test that _setup_runtime method is marked as abstract
+        Test that _setup_runtime method is marked as abstract.
         """
         # Check that the _setup_runtime method is in the abstract methods
         abstract_methods = BaseRuntime.__abstractmethods__
@@ -89,12 +89,9 @@ class TestBaseRuntime:
 
     def test_setup_runtime_signature(self) -> None:
         """
-        Test that _setup_runtime method has correct signature
+        Test that _setup_runtime method has correct signature.
         """
-
-        sig = inspect.signature(
-            BaseRuntime._setup_runtime  # pylint: disable=protected-access
-        )
+        sig = inspect.signature(BaseRuntime._setup_runtime)
 
         params = list(sig.parameters.keys())
         assert params == ["self", "task"]
@@ -111,20 +108,18 @@ class TestBaseRuntime:
 class TestBaseRuntimeValidation:
     """
     Test cases for validating BaseRuntime behavior with a concrete
-    implementation
+    implementation.
     """
 
     def test_kind_field_must_be_set_in_subclass(self) -> None:
         """
-        Test that a subclass of BaseRuntime must set the 'kind' field
+        Test that a subclass of BaseRuntime must set the 'kind' field.
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class InvalidRuntime(  # pyright: ignore[reportUnusedClass]
-                BaseRuntime
-            ):
+            class InvalidRuntime(BaseRuntime):
                 """
-                Invalid runtime that does not set 'kind' field
+                Invalid runtime that does not set 'kind' field.
                 """
 
                 def _setup_runtime(self, task: "BaseTask") -> str:
@@ -132,28 +127,26 @@ class TestBaseRuntimeValidation:
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """
-        Test that model validation on a BaseRuntime preserves type safety
+        Test that model validation on a BaseRuntime preserves type safety.
         """
-
         with pytest.raises(ValidationError):
             ConcreteTestRuntime(kind=123)  # type: ignore
 
     def test_abstract_method_enforcement(self) -> None:
         """
-        Test that subclasses must implement abstract methods
+        Test that subclasses must implement abstract methods.
         """
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteRuntime(  # pyright: ignore[reportUnusedClass]
-                BaseRuntime
-            ):
+            class IncompleteRuntime(BaseRuntime):
                 """
-                Incomplete runtime that doesn't implement _setup_runtime method
+                Incomplete runtime that doesn't implement _setup_runtime
+                method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing _setup_runtime method implementation
 

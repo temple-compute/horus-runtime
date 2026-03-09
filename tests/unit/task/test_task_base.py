@@ -16,24 +16,24 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for BaseTask abstract base class
+Unit tests for BaseTask abstract base class.
 """
 
 import inspect
 from abc import ABC
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.executors.shell import ShellExecutor
-from horus_builtin.runtimes.command import CommandRuntime
-from horus_runtime.core.registry.auto_registry import (
-    AutoRegistry,
-    RegistryKeyIsNoneError,
-)
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.registry.auto_registry import (
+    AutoRegistry,
+)
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
 class ConcreteTestTask(BaseTask):
@@ -45,32 +45,38 @@ class ConcreteTestTask(BaseTask):
 
     def run(self) -> None:
         """
-        Test implementation of run method
+        Test implementation of run method.
         """
 
     def is_complete(self) -> bool:
+        """
+        Always return True for testing purposes.
+        """
         return True
 
     def reset(self) -> None:
+        """
+        Do nothing for testing purposes.
+        """
         pass
 
 
 @pytest.mark.unit
 class TestBaseTask:
     """
-    Test cases for BaseTask abstract base class
+    Test cases for BaseTask abstract base class.
     """
 
     def test_base_task_is_abstract(self) -> None:
         """
-        Test that BaseTask cannot be instantiated directly
+        Test that BaseTask cannot be instantiated directly.
         """
         with pytest.raises(TypeError):
             BaseTask()  # type: ignore
 
     def test_base_task_inherits_correctly(self) -> None:
         """
-        Test that BaseTask inherits from expected classes
+        Test that BaseTask inherits from expected classes.
         """
         # This is a little bit redundant since we know BaseTask is defined
         # as inheriting from these, but it serves as a sanity check that the
@@ -82,7 +88,7 @@ class TestBaseTask:
 
     def test_registry_key_is_kind(self) -> None:
         """
-        Test that BaseTask uses 'kind' as registry key
+        Test that BaseTask uses 'kind' as registry key.
         """
         # This check will be done for other classes that inherit from
         # autoregistry. For task, the registry key is 'kind',
@@ -91,7 +97,7 @@ class TestBaseTask:
 
     def test_run_method_is_abstract(self) -> None:
         """
-        Test that run method is marked as abstract
+        Test that run method is marked as abstract.
         """
         # Check that the run method is in the abstract methods
         abstract_methods = BaseTask.__abstractmethods__
@@ -99,16 +105,16 @@ class TestBaseTask:
 
     def test_run_method_signature(self) -> None:
         """
-        Test that run method has correct signature
+        Test that run method has correct signature.
         """
-        sig = inspect.signature(BaseTask.run)  # pylint: disable=no-member
+        sig = inspect.signature(BaseTask.run)
 
         params = list(sig.parameters.keys())
         assert params == ["self"]
 
     def test_base_task_has_required_fields(self) -> None:
         """
-        Test that BaseTask has all required fields defined
+        Test that BaseTask has all required fields defined.
         """
         fields = BaseTask.model_fields
 
@@ -125,7 +131,7 @@ class TestBaseTask:
 
     def test_default_field_values(self) -> None:
         """
-        Test that BaseTask fields have correct default values
+        Test that BaseTask fields have correct default values.
         """
         # Create a concrete task to test defaults
         task = ConcreteTestTask(
@@ -145,18 +151,18 @@ class TestBaseTask:
 class TestBaseTaskValidation:
     """
     Test cases for validating BaseTask behavior with a concrete
-    implementation
+    implementation.
     """
 
     def test_kind_field_must_be_set_in_subclass(self) -> None:
         """
-        Test that a subclass of BaseTask must set the 'kind' field
+        Test that a subclass of BaseTask must set the 'kind' field.
         """
         with pytest.raises(RegistryKeyIsNoneError):
 
-            class InvalidTask(BaseTask):  # pyright: ignore[reportUnusedClass]
+            class InvalidTask(BaseTask):
                 """
-                Invalid task that does not set 'kind' field
+                Invalid task that does not set 'kind' field.
                 """
 
                 def is_complete(self) -> bool:
@@ -170,7 +176,7 @@ class TestBaseTaskValidation:
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """
-        Test that model validation on a BaseTask preserves type safety
+        Test that model validation on a BaseTask preserves type safety.
         """
         with pytest.raises(ValidationError):
             ConcreteTestTask(
@@ -181,20 +187,18 @@ class TestBaseTaskValidation:
 
     def test_abstract_method_enforcement(self) -> None:
         """
-        Test that subclasses must implement abstract methods
+        Test that subclasses must implement abstract methods.
         """
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteTask(  # pyright: ignore[reportUnusedClass]
-                BaseTask
-            ):
+            class IncompleteTask(BaseTask):
                 """
-                Incomplete task that doesn't implement run method
+                Incomplete task that doesn't implement run method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing run method implementation
 
@@ -206,7 +210,7 @@ class TestBaseTaskValidation:
 
     def test_required_fields_validation(self) -> None:
         """
-        Test that required fields are properly validated
+        Test that required fields are properly validated.
         """
         # Test missing executor
         with pytest.raises(ValidationError):
@@ -224,7 +228,7 @@ class TestBaseTaskValidation:
 
     def test_valid_task_creation(self) -> None:
         """
-        Test that a valid task can be created successfully
+        Test that a valid task can be created successfully.
         """
         task = ConcreteTestTask(
             name="test_task",
@@ -242,9 +246,8 @@ class TestBaseTaskValidation:
 
     def test_task_with_artifacts(self) -> None:
         """
-        Test that a task can be created with input and output artifacts
+        Test that a task can be created with input and output artifacts.
         """
-
         input_artifact = FileArtifact(uri="test_input.txt")
         output_artifact = FileArtifact(uri="test_output.txt")
 

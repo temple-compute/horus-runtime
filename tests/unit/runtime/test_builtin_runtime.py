@@ -15,18 +15,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
-# ruff: noqa: PLC0415
 """
-Unit tests for CommandRuntime builtin runtime
+Unit tests for CommandRuntime builtin runtime.
 """
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.runtimes.command import CommandRuntime
-from horus_runtime.core.registry.auto_registry import init_registry
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.runtime.base import BaseRuntime
 from tests.conftest import MakeTaskType
 
@@ -34,58 +31,35 @@ from tests.conftest import MakeTaskType
 @pytest.mark.unit
 class TestInitRegistry:
     """
-    Test that the builtin horus runtimes are properly registered
+    Test that the builtin horus runtimes are properly registered.
     """
 
     def test_init_registry_scans_builtin_runtimes(self) -> None:
         """
-        Test that init_registry properly scans the horus.runtimes module
+        Test that init_registry properly scans the horus.runtimes module.
         """
-
-        init_registry(BaseRuntime, "horus.runtimes")
-
         assert "command" in BaseRuntime.registry
 
         assert BaseRuntime.registry["command"] is not None
-
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a Union type of all registered runtimes
-        """
-        registry_union = init_registry(BaseRuntime, "horus.runtimes")
-
-        assert registry_union is not None
 
 
 @pytest.mark.unit
 class TestRuntimeRegistry:
     """
-    Test cases for runtime registry functionality
+    Test cases for runtime registry functionality.
     """
-
-    def test_runtime_union_is_defined(self) -> None:
-        """
-        Test that the runtime union type is defined after registry
-        initialization
-        """
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
-
-        assert RuntimeUnion is not None
 
     def test_runtime_union_can_validate_union_runtime(self) -> None:
         """
-        Test RuntimeUnion can validate CommandRuntime data
+        Test RuntimeUnion can validate CommandRuntime data.
         """
-
         data = {
             "kind": "command",
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
-
         class TestModel(BaseModel):
-            runtime: RuntimeUnion
+            runtime: BaseRuntime
 
         result = TestModel.model_validate({"runtime": data})
 
@@ -94,18 +68,15 @@ class TestRuntimeRegistry:
 
     def test_runtime_registry_invalid_kind_handling(self) -> None:
         """
-        Test that the runtime registry properly handles invalid kinds
+        Test that the runtime registry properly handles invalid kinds.
         """
-
         data = {
             "kind": "invalid_runtime_kind",
             "command": "echo 'Hello World'",
         }
 
-        from horus_runtime.core.registry.runtime_registry import RuntimeUnion
-
         class TestModel(BaseModel):
-            runtime: RuntimeUnion
+            runtime: BaseRuntime
 
         with pytest.raises(ValidationError):
             TestModel.model_validate({"runtime": data})
@@ -114,18 +85,18 @@ class TestRuntimeRegistry:
 @pytest.mark.unit
 class TestCommandRuntime:
     """
-    Test cases for CommandRuntime functionality
+    Test cases for CommandRuntime functionality.
     """
 
     def test_command_runtime_inherits_from_base(self) -> None:
         """
-        Test that CommandRuntime properly inherits from BaseRuntime
+        Test that CommandRuntime properly inherits from BaseRuntime.
         """
         assert issubclass(CommandRuntime, BaseRuntime)
 
     def test_command_runtime_kind_is_command(self) -> None:
         """
-        Test that CommandRuntime has the correct kind field
+        Test that CommandRuntime has the correct kind field.
         """
         runtime = CommandRuntime(command="echo 'Hello World'")
 
@@ -135,7 +106,7 @@ class TestCommandRuntime:
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test that CommandRuntime properly formats commands with task inputs
+        Test that CommandRuntime properly formats commands with task inputs.
         """
         task = make_task(
             cmd="echo 'Input artifact path is {input1.path}'",
@@ -152,7 +123,7 @@ class TestCommandRuntime:
     ) -> None:
         """
         Test that CommandRuntime can access task variables in command
-        formatting
+        formatting.
         """
         task = make_task("echo 'Task kind is {task.kind}'")
 

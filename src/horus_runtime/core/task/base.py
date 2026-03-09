@@ -21,18 +21,18 @@ runtime. The base task provides the foundational functionality for defining and
 executing tasks, and should be ingested by the executor.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from horus_runtime.core.registry.artifact_registry import ArtifactUnion
-from horus_runtime.core.registry.auto_registry import AutoRegistry
-from horus_runtime.core.registry.executor_registry import ExecutorUnion
-from horus_runtime.core.registry.runtime_registry import RuntimeUnion
+from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseTask(BaseModel, ABC, AutoRegistry):
+class BaseTask(AutoRegistry, entry_point="task"):
     """
     The base task. This class provides the foundational functionality for
     defining and executing tasks, and should be ingested by the executor.
@@ -43,7 +43,7 @@ class BaseTask(BaseModel, ABC, AutoRegistry):
     The 'registry_key' field is used to identify the specific type of task.
     """
 
-    kind: Any = None
+    kind: Any = ...
     """
     The 'kind' field is used to identify the specific type of task.
     """
@@ -53,13 +53,13 @@ class BaseTask(BaseModel, ABC, AutoRegistry):
     Human-readable name for this task.
     """
 
-    inputs: dict[str, ArtifactUnion] = Field(default_factory=dict)
+    inputs: dict[str, BaseArtifact] = Field(default_factory=dict)
     """
     Input artifacts for this task. These are the artifacts that the task
     depends on.
     """
 
-    outputs: dict[str, ArtifactUnion] = Field(default_factory=dict)
+    outputs: dict[str, BaseArtifact] = Field(default_factory=dict)
     """
     Output artifacts for this task. These are the artifacts that the task
     produces.
@@ -71,14 +71,14 @@ class BaseTask(BaseModel, ABC, AutoRegistry):
     during its execution.
     """
 
-    executor: ExecutorUnion
+    executor: BaseExecutor
     """
     The executor that should execute this task. The executor is responsible for
     running the task in the appropriate environment (e.g., locally, on a remote
     server, in a container, etc.).
     """
 
-    runtime: RuntimeUnion
+    runtime: BaseRuntime
     """
     The runtime that should be used to execute this task. The runtime defines
     the actual command, program or script to run.

@@ -16,28 +16,35 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for the Workflow class
+Unit tests for the Workflow class.
 """
 
 import textwrap
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import Mock, patch
 
 import pytest
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.tasks.horus_task import HorusTask
-from horus_builtin.workflows.horus_workflow import HorusWorkflow
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from tests.conftest import MakeTaskType, MakeWorkflowFileType
 
 
 @pytest.mark.unit
 class TestWorkflowConstruction:
+    """
+    Tests for constructing Workflow instances.
+    """
+
     def test_basic_construction(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
-
+        """
+        Test that a workflow can be constructed from a valid YAML file.
+        """
         wf_content = textwrap.dedent("""\
             name: test_workflow
             kind: horus_workflow
@@ -63,6 +70,10 @@ class TestWorkflowConstruction:
     def test_tasks_preserve_order(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
+        """
+        Test that tasks are loaded in the order they are defined in the YAML
+        file.
+        """
         wf_content = textwrap.dedent("""\
             name: ordered
             kind: horus_workflow
@@ -97,15 +108,26 @@ class TestWorkflowConstruction:
         assert list(wf.tasks.keys()) == ["a", "b", "c"]
 
     def test_empty_tasks(self) -> None:
+        """
+        Test that a workflow can be created with an empty tasks dictionary.
+        """
         wf = HorusWorkflow(name="empty", tasks={})
         assert wf.tasks == {}
 
 
 @pytest.mark.unit
 class TestWorkflowRun:
+    """
+    Tests for the run method of the Workflow class.
+    """
+
     def test_run_executes_task_without_outputs(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
+        """
+        Test that a workflow with a single task and no outputs executes the
+        task.
+        """
         wf_contents = textwrap.dedent("""\
         name: run_test
         kind: horus_workflow
@@ -131,6 +153,9 @@ class TestWorkflowRun:
     def test_run_skips_task_when_all_outputs_exist(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
+        """
+        Test that a task is skipped if all its outputs already exist.
+        """
         wf_contents = textwrap.dedent("""\
             name: skip_test
             kind: horus_workflow
@@ -163,7 +188,9 @@ class TestWorkflowRun:
     def test_run_executes_tasks_in_order(
         self, mock_run: Mock, make_task: MakeTaskType
     ) -> None:
-
+        """
+        Tasks should be executed in the order they are defined in the workflow.
+        """
         mock_run.return_value = Mock(returncode=0)
         task_a = make_task(cmd="echo A")
         task_b = make_task(cmd="echo B")
@@ -179,9 +206,13 @@ class TestWorkflowRun:
         assert calls == ["echo A", "echo B"]
 
     def test_run_stops_on_first_failure(self, make_task: MakeTaskType) -> None:
+        """
+        If a task fails, the workflow should stop and not
+        execute subsequent tasks.
+        """
 
         class TaskWithFailure(HorusTask):
-            add_to_registry = False
+            add_to_registry: ClassVar[bool] = False
 
             def run(self) -> None:
                 super().run()  # Here it calls +1 run count
@@ -200,7 +231,9 @@ class TestWorkflowRun:
         assert task_b.runs == 0
 
     def test_run_empty_workflow(self) -> None:
-
+        """
+        Test that running an empty workflow completes without error.
+        """
         # Empty flow
         wf = HorusWorkflow(name="empty", tasks={})
 

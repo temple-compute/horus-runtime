@@ -16,21 +16,21 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for BaseExecutor class
+Unit tests for BaseExecutor class.
 """
 
 import inspect
 from abc import ABC
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, ClassVar, Literal, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.core.registry.auto_registry import (
+from horus_runtime.registry.auto_registry import (
     AutoRegistry,
-    RegistryKeyIsNoneError,
 )
+from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -41,7 +41,9 @@ class ConcreteTestExecutor(BaseExecutor):
     Concrete implementation of BaseExecutor for testing purposes.
     """
 
-    add_to_registry = False  # Prevent registry pollution in tests
+    add_to_registry: ClassVar[bool] = (
+        False  # Prevent registry pollution in tests
+    )
     kind: Literal["test"] = "test"
 
     def execute(self, task: Union["BaseTask", str]) -> int:
@@ -54,12 +56,12 @@ class ConcreteTestExecutor(BaseExecutor):
 @pytest.mark.unit
 class TestBaseExecutor:
     """
-    Test cases for BaseExecutor abstract base class
+    Test cases for BaseExecutor abstract base class.
     """
 
     def test_base_executor_is_abstract(self) -> None:
         """
-        Test that BaseExecutor cannot be instantiated directly
+        Test that BaseExecutor cannot be instantiated directly.
         """
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
@@ -71,7 +73,7 @@ class TestBaseExecutor:
 
     def test_base_executor_inherits_correctly(self) -> None:
         """
-        Test that BaseExecutor inherits from expected classes
+        Test that BaseExecutor inherits from expected classes.
         """
         # This is a little bit redundant since we know BaseExecutor is defined
         # as inheriting from these, but it serves as a sanity check that the
@@ -83,7 +85,7 @@ class TestBaseExecutor:
 
     def test_registry_key_is_kind(self) -> None:
         """
-        Test that BaseExecutor uses 'kind' as registry key
+        Test that BaseExecutor uses 'kind' as registry key.
         """
         # This check will be done for other classes that inherit from
         # autoregistry. For executor, the registry key is 'kind',
@@ -92,7 +94,7 @@ class TestBaseExecutor:
 
     def test_execute_method_is_abstract(self) -> None:
         """
-        Test that execute method is marked as abstract
+        Test that execute method is marked as abstract.
         """
         # Check that the execute method is in the abstract methods
         abstract_methods = BaseExecutor.__abstractmethods__
@@ -100,9 +102,8 @@ class TestBaseExecutor:
 
     def test_concrete_executor_implementation(self) -> None:
         """
-        Test that concrete implementation works correctly
+        Test that concrete implementation works correctly.
         """
-
         executor = ConcreteTestExecutor()
 
         # Test successful execution
@@ -115,7 +116,7 @@ class TestBaseExecutor:
 
     def test_kind_field_validation(self) -> None:
         """
-        Test that kind field validation works in subclasses
+        Test that kind field validation works in subclasses.
         """
         # This should work since ConcreteTestExecutor sets kind = "test"
         executor = ConcreteTestExecutor()
@@ -123,7 +124,7 @@ class TestBaseExecutor:
 
     def test_executor_serialization(self) -> None:
         """
-        Test that executors can be serialized to dict
+        Test that executors can be serialized to dict.
         """
         executor = ConcreteTestExecutor()
         executor_dict = executor.model_dump()
@@ -133,7 +134,7 @@ class TestBaseExecutor:
 
     def test_executor_deserialization(self) -> None:
         """
-        Test that executors can be deserialized from dict
+        Test that executors can be deserialized from dict.
         """
         data = {"kind": "test"}
 
@@ -143,9 +144,8 @@ class TestBaseExecutor:
 
     def test_execute_method_signature(self) -> None:
         """
-        Test that execute method has correct signature
+        Test that execute method has correct signature.
         """
-
         sig = inspect.signature(BaseExecutor.execute)
 
         # Should have 'self' and 'task' parameters
@@ -163,12 +163,12 @@ class TestBaseExecutor:
 @pytest.mark.unit
 class TestBaseExecutorValidation:
     """
-    Test validation behavior of BaseExecutor
+    Test validation behavior of BaseExecutor.
     """
 
     def test_kind_field_must_be_set_in_subclass(self) -> None:
         """
-        Test that subclasses must set the kind field
+        Test that subclasses must set the kind field.
         """
         # This executor doesn't set kind, so validation should fail
         with pytest.raises(
@@ -176,11 +176,9 @@ class TestBaseExecutorValidation:
             match="must define a class property named 'kind'",
         ):
 
-            class InvalidExecutorNoKind(  # pyright: ignore[reportUnusedClass]
-                BaseExecutor
-            ):
+            class InvalidExecutorNoKind(BaseExecutor):
                 """
-                Invalid executor implementation without kind field for testing
+                Invalid executor implementation without kind field for testing.
                 """
 
                 def execute(self, task: "BaseTask") -> int:
@@ -188,31 +186,29 @@ class TestBaseExecutorValidation:
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """
-        Test that Pydantic validation maintains type safety
+        Test that Pydantic validation maintains type safety.
         """
         with pytest.raises(ValidationError):
             # We use type:ignore here because we're intentionally passing
             # the wrong type for the 'kind' field. The linter will complain
             # about this, but we want to ensure that the validation error
             # is raised at runtime.
-            ConcreteTestExecutor(kind=123)  # type: ignore
+            ConcreteTestExecutor(kind=123)  # type: ignore[arg-type]
 
     def test_abstract_method_enforcement(self) -> None:
         """
-        Test that subclasses must implement abstract methods
+        Test that subclasses must implement abstract methods.
         """
         with pytest.raises(
             TypeError, match="Can't instantiate abstract class"
         ):
 
-            class IncompleteExecutor(  # pyright: ignore[reportUnusedClass]
-                BaseExecutor
-            ):
+            class IncompleteExecutor(BaseExecutor):
                 """
-                Incomplete executor that doesn't implement execute method
+                Incomplete executor that doesn't implement execute method.
                 """
 
-                add_to_registry = False
+                add_to_registry: ClassVar[bool] = False
                 kind: Literal["incomplete"] = "incomplete"
                 # Missing execute method implementation
 

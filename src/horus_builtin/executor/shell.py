@@ -46,7 +46,6 @@ class ShellExecutor(BaseExecutor):
         Returns:
             int: The return code of the executed command.
         """
-
         prepared_command = task.runtime.format_runtime(task)
 
         # Security Warning:

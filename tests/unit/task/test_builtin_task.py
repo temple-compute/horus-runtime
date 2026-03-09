@@ -16,9 +16,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-# ruff: noqa: PLC0415
 """
-Unit tests for HorusTask builtin task
+Unit tests for HorusTask builtin task.
 """
 
 from unittest.mock import patch
@@ -26,12 +25,11 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.executors.shell import ShellExecutor
-from horus_builtin.runtimes.command import CommandRuntime
-from horus_builtin.tasks.horus_task import HorusTask
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
-from horus_runtime.core.registry.auto_registry import init_registry
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from tests.conftest import MakeTaskType
@@ -40,45 +38,26 @@ from tests.conftest import MakeTaskType
 @pytest.mark.unit
 class TestInitRegistry:
     """
-    Test that the builtin horus tasks are properly registered
+    Test that the builtin horus tasks are properly registered.
     """
 
     def test_init_registry_scans_builtin_tasks(self) -> None:
         """
-        Test that init_registry properly scans the horus.tasks module
+        Test that init_registry properly scans the horus.tasks module.
         """
-        init_registry(BaseTask, "horus.tasks")
-
         assert "horus_task" in BaseTask.registry
         assert BaseTask.registry["horus_task"] is not None
-
-    def test_init_registry_returns_union_type(self) -> None:
-        """
-        Test that init_registry returns a Union type of all registered tasks
-        """
-        registry_union = init_registry(BaseTask, "horus.tasks")
-
-        assert registry_union is not None
 
 
 @pytest.mark.unit
 class TestTaskRegistry:
     """
-    Test cases for task registry functionality
+    Test cases for task registry functionality.
     """
-
-    def test_task_union_is_defined(self) -> None:
-        """
-        Test that the task union type is defined after registry
-        initialization
-        """
-        from horus_runtime.core.registry.task_registry import TaskUnion
-
-        assert TaskUnion is not None
 
     def test_task_union_can_validate_horus_task(self) -> None:
         """
-        Test TaskUnion can validate HorusTask data
+        Test TaskUnion can validate HorusTask data.
         """
         data = {
             "name": "test_task",
@@ -87,10 +66,8 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.core.registry.task_registry import TaskUnion
-
         class TestModel(BaseModel):
-            task: TaskUnion
+            task: BaseTask
 
         result = TestModel.model_validate({"task": data})
 
@@ -99,7 +76,7 @@ class TestTaskRegistry:
 
     def test_task_registry_invalid_kind_handling(self) -> None:
         """
-        Test that the task registry properly handles invalid kinds
+        Test that the task registry properly handles invalid kinds.
         """
         data = {
             "kind": "invalid_task_kind",
@@ -107,10 +84,8 @@ class TestTaskRegistry:
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
         }
 
-        from horus_runtime.core.registry.task_registry import TaskUnion
-
         class TestModel(BaseModel):
-            task: TaskUnion
+            task: BaseTask
 
         with pytest.raises(ValidationError):
             TestModel.model_validate({"task": data})
@@ -119,18 +94,18 @@ class TestTaskRegistry:
 @pytest.mark.unit
 class TestHorusTask:
     """
-    Test cases for HorusTask functionality
+    Test cases for HorusTask functionality.
     """
 
     def test_horus_task_inherits_from_base(self) -> None:
         """
-        Test that HorusTask properly inherits from BaseTask
+        Test that HorusTask properly inherits from BaseTask.
         """
         assert issubclass(HorusTask, BaseTask)
 
     def test_horus_task_kind_is_horus_task(self) -> None:
         """
-        Test that HorusTask has the correct kind field
+        Test that HorusTask has the correct kind field.
         """
         task = HorusTask(
             name="test_task",
@@ -142,7 +117,7 @@ class TestHorusTask:
 
     def test_horus_task_run_method_exists(self) -> None:
         """
-        Test that HorusTask implements the run method
+        Test that HorusTask implements the run method.
         """
         task = HorusTask(
             name="test_task",
@@ -155,7 +130,7 @@ class TestHorusTask:
 
     def test_horus_task_creation_with_minimal_fields(self) -> None:
         """
-        Test that HorusTask can be created with minimal required fields
+        Test that HorusTask can be created with minimal required fields.
         """
         task = HorusTask(
             name="test_task",
@@ -170,7 +145,7 @@ class TestHorusTask:
 
     def test_horus_task_creation_with_all_fields(self) -> None:
         """
-        Test that HorusTask can be created with all fields specified
+        Test that HorusTask can be created with all fields specified.
         """
         input_artifact = FileArtifact(uri="input.txt")
         output_artifact = FileArtifact(uri="output.txt")
@@ -193,12 +168,12 @@ class TestHorusTask:
 @pytest.mark.unit
 class TestHorusTaskExecution:
     """
-    Test cases for HorusTask execution functionality
+    Test cases for HorusTask execution functionality.
     """
 
     def test_horus_task_run_checks_input_artifacts_exist(self) -> None:
         """
-        Test that HorusTask.run() checks if input artifacts exist
+        Test that HorusTask.run() checks if input artifacts exist.
         """
         # Use a path that definitely doesn't exist
         input_artifact = FileArtifact(
@@ -217,7 +192,7 @@ class TestHorusTaskExecution:
 
     def test_horus_task_run_executes_via_executor(self) -> None:
         """
-        Test that HorusTask.run() executes the task via the executor
+        Test that HorusTask.run() executes the task via the executor.
         """
         task = HorusTask(
             name="test_task",
@@ -239,7 +214,7 @@ class TestHorusTaskExecution:
     def test_horus_task_run_raises_error_on_execution_failure(self) -> None:
         """
         Test that HorusTask.run() raises TaskExecutionError when executor
-        returns non-zero
+        returns non-zero.
         """
         task = HorusTask(
             name="test_task",
@@ -256,7 +231,7 @@ class TestHorusTaskExecution:
 
     def test_horus_task_run_with_no_inputs(self) -> None:
         """
-        Test that HorusTask.run() works correctly with no inputs
+        Test that HorusTask.run() works correctly with no inputs.
         """
         task = HorusTask(
             name="test_task",
@@ -277,7 +252,7 @@ class TestHorusTaskExecution:
 
     def test_horus_task_run_with_multiple_inputs_one_missing(self) -> None:
         """
-        Test that HorusTask.run() stops on first missing artifact
+        Test that HorusTask.run() stops on first missing artifact.
         """
         # Use paths that definitely don't exist
         input_artifact1 = FileArtifact(
@@ -302,7 +277,7 @@ class TestHorusTaskExecution:
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test that HorusTask.run() increases the runs count
+        Test that HorusTask.run() increases the runs count.
         """
         task = make_task(cmd="echo 'Hello World'")
 
@@ -320,7 +295,7 @@ class TestHorusTaskExecution:
         self, make_task: MakeTaskType
     ) -> None:
         """
-        Test that HorusTask.reset() resets the runs count
+        Test that HorusTask.reset() resets the runs count.
         """
         task = make_task(cmd="echo 'Hello World'")
 

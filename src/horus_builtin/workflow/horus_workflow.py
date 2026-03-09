@@ -15,6 +15,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+
+"""
+HorusWorkflow implementation for Horus built-in workflows.
+"""
+
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +43,10 @@ class HorusWorkflow(BaseWorkflow):
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
+        """
+        Load a workflow from a YAML file and return an instance of
+        HorusWorkflow.
+        """
         with Path(path).open("r", encoding="utf-8") as fh:
             return cls.model_validate(yaml.safe_load(fh))
 

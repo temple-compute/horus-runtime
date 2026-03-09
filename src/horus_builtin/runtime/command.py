@@ -48,12 +48,16 @@ class CommandRuntime(BaseRuntime):
 
     def _setup_runtime(self, task: "BaseTask") -> str:
         """
-        Nothing to be done for the CommandRuntime
+        Nothing to be done for the CommandRuntime.
         """
-
         return self.command
 
     def format_runtime(self, task: "BaseTask") -> str:
+        """
+        For the CommandRuntime, formatting the runtime simply involves
+        returning the command as is, since there are no placeholders to
+        replace.
+        """
         fmt = super().format_runtime(task)
 
         self.formatted_command = fmt

@@ -25,23 +25,28 @@ dev = [
 [project.scripts]
 horus = "horus_runtime.cli:main"
 
+# ================
 # Built-in plugins
-[project.entry-points."horus.artifacts"]
-file = "horus_builtin.artifacts.file"
-folder = "horus_builtin.artifacts.folder"
+# ================
+[project.entry-points."horus.artifact"]
+file = "horus_builtin.artifact.file"
+folder = "horus_builtin.artifact.folder"
 
-[project.entry-points."horus.executors"]
-shell = "horus_builtin.executors.shell"
+[project.entry-points."horus.executor"]
+shell = "horus_builtin.executor.shell"
 
-[project.entry-points."horus.runtimes"]
-command = "horus_builtin.runtimes.command"
+[project.entry-points."horus.runtime"]
+command = "horus_builtin.runtime.command"
 
-[project.entry-points."horus.tasks"]
-horus_task = "horus_builtin.tasks.horus_task"
+[project.entry-points."horus.task"]
+horus_task = "horus_builtin.task.horus_task"
 
-[project.entry-points."horus.workflows"]
-horus_workflow = "horus_builtin.workflows.horus_workflow"
+[project.entry-points."horus.workflow"]
+horus_workflow = "horus_builtin.workflow.horus_workflow"
 
+# ================
+
+# Other tool configurations
 [tool.setuptools.package-data]
 horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 
@@ -64,8 +69,12 @@ line-length = 79
 target-version = "py310"
 exclude = [".git", ".venv", "build", "dist", "__pycache__"]
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.ruff.lint]
 select = [
+    "D",   # pydocstyle
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
     "F",   # pyflakes
@@ -79,6 +88,10 @@ select = [
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
+    "D104", # Missing docstring in __init__ (often redundant)
+    "D205", # 1 blank line required between summary line and description
+    "D212", # Multi-line docstring summary should start at the first line
+    "D200", # One-line docstring should fit on one line
 ]
 
 [tool.ruff.format]
@@ -89,3 +102,9 @@ indent-style = "space"
 python_version = "3.10"
 strict = true
 exclude = ["build", "dist"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_typed = true
+init_forbid_extra = true
+warn_required_dynamic_aliases = true

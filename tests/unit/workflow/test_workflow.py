@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for the Workflow class
+Unit tests for the Workflow class.
 """
 
 import textwrap
@@ -32,25 +32,43 @@ from tests.conftest import MakeWorkflowFileType
 
 
 class ConcreteWorkflow(BaseWorkflow):
+    """
+    A concrete implementation of BaseWorkflow for testing purposes.
+    """
+
     kind: Literal["concrete_workflow"] = "concrete_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ConcreteWorkflow":
+        """
+        Load a workflow from a YAML file and return an instance of
+        ConcreteWorkflow.
+        """
         with Path(path).open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
             return cls.model_validate(data)
 
     def run(self) -> None:
+        """
+        Run the workflow by executing all its tasks.
+        """
         print(
             f"Running workflow '{self.name}' with {len(self.tasks)} tasks..."
         )
 
     def reset(self) -> None:
+        """
+        Reset the workflow to its initial state.
+        """
         return None
 
 
 @pytest.mark.unit
 class TestWorkflowFromYaml:
+    """
+    Tests for the from_yaml class method of the Workflow class.
+    """
+
     def test_from_yaml_loads_valid_file(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
@@ -58,7 +76,6 @@ class TestWorkflowFromYaml:
         Test that a valid workflow YAML file is correctly loaded into a
         Workflow object.
         """
-
         wf_content = textwrap.dedent("""\
         name: yaml_workflow
         kind: concrete_workflow

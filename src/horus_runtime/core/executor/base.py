@@ -23,18 +23,16 @@ specified runtime in a certain environment, for example running it locally as
 a command or running it inside a SLURM job, either remote or locally.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from pydantic import BaseModel
-
-from horus_runtime.core.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class BaseExecutor(BaseModel, ABC, AutoRegistry):
+class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
     The base executor represents the abstract concept of an executor in the
     Horus runtime. An executor is on charge of actually running the task in the
@@ -43,7 +41,7 @@ class BaseExecutor(BaseModel, ABC, AutoRegistry):
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = None
+    kind: Any = ...
     """
     The 'kind' field is used to identify the specific type of executor.
     """
@@ -54,10 +52,4 @@ class BaseExecutor(BaseModel, ABC, AutoRegistry):
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific
         execution logic for different types of executors.
-
-        Args:
-            task (BaseTask): The task to execute.
-
-        Returns:
-            int: The return code of the execution.
         """

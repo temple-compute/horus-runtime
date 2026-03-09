@@ -16,12 +16,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Base definition for local file or folder artifacts in the Horus Runtime
+Base definition for local file or folder artifacts in the Horus Runtime.
 """
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from pydantic import model_validator
@@ -47,7 +47,7 @@ class LocalPathArtifactBase(BaseArtifact):
     the URI will be derived from it automatically.
     """
 
-    add_to_registry = False
+    add_to_registry: ClassVar[bool] = False
 
     @model_validator(mode="before")
     @classmethod
@@ -101,6 +101,9 @@ class LocalPathArtifactBase(BaseArtifact):
         return self.path.exists()
 
     def materialize(self) -> Path:
+        """
+        Materializes the artifact by returning the resolved absolute path.
+        """
         return self.path
 
     @staticmethod
@@ -108,7 +111,6 @@ class LocalPathArtifactBase(BaseArtifact):
         """
         Computes the hash of the file contents.
         """
-
         # Read in 64KB chunks to handle large files efficiently
         buffer = 65536
 
