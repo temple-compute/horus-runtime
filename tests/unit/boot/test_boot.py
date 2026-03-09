@@ -20,7 +20,6 @@ Test module for horus-runtime boot process.
 """
 
 import contextvars
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,18 +31,6 @@ class TestBoot:
     """
     Test cases for HorusContext boot process.
     """
-
-    @patch("builtins.print")
-    def test_boot_prints_message(self, mock_print: MagicMock) -> None:
-        """
-        Test that boot prints the startup message.
-        """
-        ctx = contextvars.copy_context()
-        ctx.run(HorusContext.boot)
-        assert (
-            mock_print.call_args_list[0].args[0]
-            == "Horus Runtime is starting..."
-        )
 
     def test_boot_sets_context(self) -> None:
         """

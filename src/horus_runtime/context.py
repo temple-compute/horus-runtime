@@ -25,7 +25,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from horus_runtime.i18n import tr as _
-from horus_runtime.logging.logging import HorusLoggerSettings
+from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
@@ -51,10 +51,7 @@ class HorusContext:
         Initialize the runtime, load plugins, and set up global context.
         Must be called before using any other horus-runtime features.
         """
-        # Setup the logger
-        logger = HorusLoggerSettings.setup()
-
-        logger.info(_("Horus Runtime is starting..."))
+        horus_logger.info(_("Horus Runtime is starting..."))
 
         # Register horus-plugins
         AutoRegistry.init_registry()

@@ -32,6 +32,7 @@ from pydantic_core import CoreSchema, core_schema
 from typing_extensions import Self
 
 from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.registry.exceptions import (
     BaseRegistryClassEntryPointNotDefinedError,
     DuplicatedRegistryKeyError,
@@ -237,16 +238,7 @@ class AutoRegistry(BaseModel, ABC):
         # schema generation. If we intercepted here we would recurse infinitely
         # because dispatching calls back into validation.
         if cls not in cls._registry_roots:
-            print(
-                _("Generating default schema for %(cls)s")
-                % {"cls": cls.__name__}
-            )
             return handler(source_type)
-
-        print(
-            _("Generating dispatch schema for registry root %(cls)s")
-            % {"cls": cls.__name__}
-        )
 
         def validate(data: Any) -> Any:
             # Already a valid instance of this hierarchy, pass through.
@@ -255,21 +247,30 @@ class AutoRegistry(BaseModel, ABC):
 
             if not isinstance(data, dict):
                 raise TypeError(
-                    f"Expected dict or {cls.__name__}, got {type(data)}"
+                    _("Expected dict or %(cls)s, got %(type)s")
+                    % {"cls": cls.__name__, "type": type(data)}
                 )
 
             discriminator = data.get(cls.registry_key)
             if not discriminator:
                 raise ValueError(
-                    f"Missing '{cls.registry_key}' discriminator in data"
+                    _("Missing '%(registry_key)s' discriminator in data")
+                    % {"registry_key": cls.registry_key}
                 )
 
             target_cls = cls.registry.get(discriminator)
             if target_cls is None:
                 raise ValueError(
-                    f"Unknown {cls.registry_key}='{discriminator}' for"
-                    f" {cls.__name__}. Registered: "
-                    f"{tuple(cls.registry.keys())}"
+                    _(
+                        "Unknown %(registry_key)s='%(discriminator)s' for "
+                        "%(cls)s. Registered: %(registered)s"
+                    )
+                    % {
+                        "registry_key": cls.registry_key,
+                        "discriminator": discriminator,
+                        "cls": cls.__name__,
+                        "registered": tuple(cls.registry.keys()),
+                    }
                 )
 
             # Use the pre-built validator on the concrete class directly.
@@ -308,10 +309,12 @@ class AutoRegistry(BaseModel, ABC):
             }
 
         for group in groups_to_load:
-            print(_("Initializing %(group)s registry.") % {"group": group})
+            horus_logger.debug(
+                _("Initializing %(group)s registry.") % {"group": group}
+            )
 
             for horus_plugin in entry_points(group=group):
-                print(
+                horus_logger.debug(
                     _("- %(entry_point)s")
                     % {"entry_point": horus_plugin.value}
                 )
@@ -322,7 +325,7 @@ class AutoRegistry(BaseModel, ABC):
                 try:
                     horus_plugin.load()
                 except Exception as e:
-                    print(
+                    horus_logger.error(
                         _("Failed to load plugin %(entry_point)s: %(error)s")
                         % {"entry_point": horus_plugin.value, "error": str(e)}
                     )

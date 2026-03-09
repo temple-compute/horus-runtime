@@ -47,7 +47,7 @@ class HorusLoggerSettings(BaseSettings):
         "<level>{message}</level>"
     )
 
-    log_level: Literal[
+    level: Literal[
         "TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
     ] = "INFO"
     log_directory: Path = Path("logs")
@@ -72,7 +72,7 @@ class HorusLoggerSettings(BaseSettings):
         logger.add(
             sink=f"{config.log_directory}/{config.filename_template}",
             format=config.format,
-            level=config.log_level,
+            level=config.level,
             rotation=config.rotation,
             retention=config.retention,
             compression=config.compression,
@@ -83,7 +83,14 @@ class HorusLoggerSettings(BaseSettings):
         logger.add(
             sink=sys.stderr,
             format=config.format,
-            level=config.log_level,
+            level=config.level,
         )
 
         return logger
+
+
+# Instantiate a global logger ready to be used.
+horus_logger: "Logger" = HorusLoggerSettings.setup()
+"""
+The Horus logger module
+"""

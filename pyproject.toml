@@ -90,6 +90,7 @@ select = [
     "PL",  # pylint
     "RUF", # ruff-specific
 ]
+extend-select = ["T201"] # Prevent use of print()
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
