@@ -21,16 +21,16 @@ runtime. An artifact is a piece of data that is produced or consumed by a task.
 """
 
 import uuid
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseArtifact(BaseModel, ABC, AutoRegistry):
+class BaseArtifact(AutoRegistry, registry_point="artifact"):
     """
     Represents an artifact in the Horus runtime. An artifact is a piece of data
     that is produced or consumed by a task. It can be a file, a dataset,

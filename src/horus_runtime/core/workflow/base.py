@@ -29,17 +29,15 @@ currently perform dependency resolution; ordering is the author's
 responsibility when writing the workflow YAML file.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel
-
+from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import AutoRegistry
-from horus_runtime.registry.task_registry import TaskUnion
 
 
-class BaseWorkflow(BaseModel, ABC, AutoRegistry):
+class BaseWorkflow(AutoRegistry, registry_point="workflow"):
     """
     Orchestrates an ordered collection of tasks.
     """
@@ -56,7 +54,7 @@ class BaseWorkflow(BaseModel, ABC, AutoRegistry):
     Human-readable name for this workflow.
     """
 
-    tasks: dict[str, TaskUnion]
+    tasks: dict[str, BaseTask]
     """
     Ordered mapping of task names to task instances.
     """

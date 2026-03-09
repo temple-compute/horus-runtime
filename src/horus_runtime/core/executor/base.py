@@ -23,10 +23,8 @@ specified runtime in a certain environment, for example running it locally as
 a command or running it inside a SLURM job, either remote or locally.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
-
-from pydantic import BaseModel
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -34,7 +32,7 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class BaseExecutor(BaseModel, ABC, AutoRegistry):
+class BaseExecutor(AutoRegistry, registry_point="executor"):
     """
     The base executor represents the abstract concept of an executor in the
     Horus runtime. An executor is on charge of actually running the task in the

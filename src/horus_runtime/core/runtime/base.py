@@ -21,10 +21,8 @@ context in which a task is executed. The base runtime provides the foundational
 functionality for executing tasks, and should be ingested by the executor.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
-
-from pydantic import BaseModel
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -32,7 +30,7 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class BaseRuntime(BaseModel, ABC, AutoRegistry):
+class BaseRuntime(AutoRegistry, registry_point="runtime"):
     """
     The base runtime. This class provides the foundational functionality for
     executing tasks, and should be ingested by the executor.
