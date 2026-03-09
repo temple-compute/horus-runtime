@@ -22,101 +22,154 @@ new module types (such as artifacts) without needing to manually add the
 new type to a central registry.
 """
 
-from functools import reduce
+from abc import ABC
 from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Annotated, Any, ClassVar, cast
+from typing import Any, ClassVar
 
-from pydantic import Field
+from pydantic import BaseModel, GetCoreSchemaHandler
+from pydantic_core import CoreSchema, core_schema
 from typing_extensions import Self
 
 from horus_runtime.i18n import tr as _
+from horus_runtime.registry.exceptions import (
+    BaseRegistryClassEntryPointNotDefinedError,
+    DuplicatedRegistryKeyError,
+    RegistryKeyAttributeNotDefinedError,
+    RegistryKeyIsNoneError,
+    RegistryPointExistsError,
+)
+
+HORUS_ENTRY_POINT_PREFIX: str = "horus."
 
 
-class RegistryError(Exception):
+class AutoRegistry(BaseModel, ABC):
     """
-    Base exception for registry-related errors.
-    """
+    Base class for automatically registering subclasses in a per-hierarchy
+    registry. Subclasses are registered by their ``registry_key`` field value
+    when they are defined, and can be looked up and instantiated by key at
+    runtime.
 
+    Usage
+    -----
+    Define a root registry class by passing ``registry_point="entry_point"``
+    in the class definition. This marks the class as the top of a registry
+    hierarchy and initialises an empty registry dict for it::
 
-class RegistryKeyAttributeNotDefinedError(RegistryError):
-    """
-    Exception raised when a subclass is missing a required registry key.
-    """
+        class BaseArtifact(AutoRegistry, registry_point="artifact"):
+            registry_key: ClassVar[str] = "type"
+            type: str
 
+    Concrete subclasses are then registered automatically when defined::
 
-class RegistryKeyIsNoneError(RegistryError):
-    """
-    Exception raised when a subclass has a registry key set to None.
-    """
+        class S3Artifact(BaseArtifact):
+            type: str = "s3"
+            bucket: str
 
+    When a ``BaseArtifact`` field is used in a Pydantic model, incoming dicts
+    are dispatched to the correct concrete class transparently::
 
-class NoSubclassesRegisteredError(RegistryError):
-    """
-    Exception raised when no subclasses are registered for a given base class.
-    """
-
-
-class AutoRegistry:
-    """
-    Base class for automatically registering subclasses.
+        class MyWorkflow(BaseModel):
+            artifact: BaseArtifact  # dispatches to S3Artifact, etc.
     """
 
     registry: ClassVar[dict[str, type[Self]]]
     """
-    A class variable that holds the registry of subclasses.
+    A class variable that holds the registry of concrete subclasses, keyed by
+    the value of the field named by ``registry_key``. Each root registry class
+    gets its own independent registry dict, initialised in
+    ``__init_subclass__`` when ``registry_point="someting"``.
     """
 
     registry_key: ClassVar[str]
     """
-    A class variable that defines the key used to register the subclass in the
-    registry. Subclasses must define this variable to be registered in the
-    registry. The value of this variable is used as the key in the registry
-    to look up the subclass when instantiating an object from the registry.
+    The name of the field whose value is used as the registry key when
+    registering and looking up subclasses. Must be defined on every root
+    registry class (e.g. ``registry_key = "type"``).
     """
 
     add_to_registry: ClassVar[bool] = True
     """
-    A class variable that indicates whether the subclass should be added to
-    the registry. This can be set to False for subclasses that should not be
-    registered in the registry. If the class has abstract methods, it will
-    not be registered in the registry regardless of the value of this variable.
+    Controls whether this class should be added to the registry when defined.
+    Set to ``False`` on intermediate abstract base classes that should not be
+    instantiated directly. Abstract classes (those with unimplemented abstract
+    methods) are always excluded regardless of this flag.
     """
 
-    # This method is called when a subclass is defined. This allows us to look
-    # up the correct subclass based on the 'registry_key' field when we want to
-    # materialize an instance from the registry.
-    def __init_subclass__(cls: type[Self], **kwargs: Any) -> None:
+    _registry_roots: ClassVar[dict[type["AutoRegistry"], str]] = {}
+    """
+    Internal dict of classes that were declared with
+    ``registry_point="something"``.
+    The keys are the root classes, and the values are their corresponding
+    entry point groups. Used by ``__get_pydantic_core_schema__`` to decide
+    whether to intercept validation and dispatch to a concrete subclass, or
+    to delegate to the default Pydantic schema generation for the class.
+    """
+
+    def __init_subclass__(
+        cls: type[Self],
+        registry_point: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         """
-        Automatically register subclasses in the registry when they are
-        defined.
+        Called automatically when a subclass is defined.
+
+        If ``registry_point`` is provided, the class is marked as a dispatch
+        root and given its own empty registry. Otherwise the subclass is
+        validated and registered in the nearest root registry it belongs to.
+
+        Parameters
+        ----------
+        registry_point:
+            Pass a string when defining a new top-level registry hierarchy,
+            this value will be used to load the entry point group for that
+            hierarchy in ``init_registry()``, adding the horus. suffix (e.g.
+            ``class BaseArtifact(AutoRegistry, registry_point="artifact")``).
+            Artifact plugins will load then from the ``horus.artifact`` entry
+            point group. Root classes are not registered in any registry
+            themselves.
         """
         super().__init_subclass__(**kwargs)
 
-        # Initialize the registry if it doesn't exist yet. initializing it here
-        # ensures that each subclass has its own registry, since the registry
-        # is a class variable. If we initialized the registry in the base
-        # class, all subclasses would share the same registry, which is not
-        # what we want.
-        if not hasattr(cls, "registry"):
+        if registry_point:
+            # Verify the point does not exist already
+            if registry_point in AutoRegistry._registry_roots.values():
+                raise RegistryPointExistsError(
+                    _(
+                        "%(registry_point)s already exists in the registry. "
+                        "Registry points must be unique."
+                    )
+                )
+
+            # Mark as a dispatch root and give it a fresh registry. Root
+            # classes are not themselves registered as concrete
+            # implementations.
+            AutoRegistry._registry_roots[cls] = (
+                HORUS_ENTRY_POINT_PREFIX + registry_point
+            )
             cls.registry = {}
 
-        # Prevent abstract base classes from being registered in the
-        # registry, since they should not be instantiated directly.
-        # Skip registration if 'add_to_registry' is set to False.
+        # If the developer did NOT specify a registry_point, and the class
+        # does NOT have a registry, means the dev forgot to add the
+        # registry_point into this new registry class.
+        if not registry_point and not hasattr(cls, "registry"):
+            raise BaseRegistryClassEntryPointNotDefinedError(
+                _(
+                    "%(cls)s tried to register without specifying a "
+                    "'registry_point'. Make sure all base classes that "
+                    "inherit from AutoRegistry define a registry_point."
+                )
+                % {"cls": cls.__name__}
+            )
+
+        # Abstract classes and opted-out classes are never registered as
+        # concrete implementations.
         if isabstract(cls) or not cls.add_to_registry:
             return
 
-        # If the subclass does not define a 'registry_key' class variable,
-        # raise an error. It's not possible to use a subclass without a
-        # 'registry_key' field, since the 'registry_key' field is used for
-        # discriminating between different types in the instantiation process.
-
-        # First we check if the 'registry_key' attribute is defined in the
-        # first "base" class that has it defined inheriting from AutoRegistry
-        has_key = hasattr(cls, "registry_key")
-
-        if not has_key:
+        # Every concrete subclass must declare a 'registry_key' class variable
+        # so we know which field to read the discriminator value from.
+        if not hasattr(cls, "registry_key"):
             raise RegistryKeyAttributeNotDefinedError(
                 _(
                     "%(cls)s must define a class property named 'registry_key'"
@@ -127,8 +180,8 @@ class AutoRegistry:
                 % {"cls": cls.__name__}
             )
 
-        # Then we check if the value of the 'registry_key' attribute is not
-        # None or empty
+        # The field named by 'registry_key' must carry a non-empty value on
+        # the concrete class so the discriminator lookup works at runtime.
         key_value: str | None = getattr(cls, cls.registry_key, None)
         if not key_value:
             raise RegistryKeyIsNoneError(
@@ -140,66 +193,132 @@ class AutoRegistry:
                 % {"cls": cls.__name__, "key": cls.registry_key}
             )
 
-        # Register the subclass in the registry using the value of the
-        # 'registry_key' field as the key.
+        # Check for duplicate registry keys to avoid silent overwriting of
+        # existing entries.
+        if key_value in cls.registry:
+            raise DuplicatedRegistryKeyError(
+                _(
+                    "Duplicate registry key '%(key_value)s' "
+                    "for %(cls)s and %(cls_key)s"
+                )
+                % {
+                    "key_value": key_value,
+                    "cls": cls.__name__,
+                    "cls_key": cls.registry[key_value].__name__,
+                }
+            )
+
+        # Register the concrete subclass under its discriminator value.
         cls.registry[key_value] = cls
 
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: Any,
+        handler: GetCoreSchemaHandler,
+    ) -> CoreSchema:
+        """
+        Generate a custom Pydantic core schema for registry root classes.
 
-def init_registry(
-    base_cls: type[AutoRegistry],
-    entry_point_group: str,
-) -> Any:
-    """
-    Generic function to build a Union type for all registered subclasses
-    of a given base class.
-    """
-    print(
-        _("Initializing %(group)s registry for %(cls)s")
-        % {"group": entry_point_group, "cls": base_cls.__name__}
-    )
+        For root classes (those declared with ``registry_root=True``), this
+        returns a plain validator that dispatches incoming dicts to the correct
+        concrete subclass based on the discriminator field. For all other
+        classes the default Pydantic schema generation is used.
 
-    # Import plugins from metadata
-    entries = entry_points(group=entry_point_group)
-    for ep in entries:
-        print(_("- %(entry_point)s") % {"entry_point": ep.value})
-        ep.load()
-
-    # If the registry is empty, raise an error
-    # horus could not work properly without implementations
-    if not base_cls.registry:
-        raise NoSubclassesRegisteredError(
-            _(
-                "No subclasses registered for %(cls)s. Ensure that there"
-                " are subclasses of this base class with add_to_registry=True."
+        This hook is what allows a plain ``BaseArtifact`` field annotation to
+        transparently deserialise into ``S3Artifact``, ``LocalArtifact``, etc.
+        without any per-model boilerplate.
+        """
+        # Non-root classes (concrete subclasses) must use Pydantic's default
+        # schema generation. If we intercepted here we would recurse infinitely
+        # because dispatching calls back into validation.
+        if cls not in cls._registry_roots:
+            print(
+                _("Generating default schema for %(cls)s")
+                % {"cls": cls.__name__}
             )
-            % {"cls": base_cls.__name__}
+            return handler(source_type)
+
+        print(
+            _("Generating dispatch schema for registry root %(cls)s")
+            % {"cls": cls.__name__}
         )
 
-    # If there is only one registered subclass, different logic
-    # applies. Moreover, we have to cast the resulting type to Any to avoid
-    # mypy errors about the type being too complex (this is not TypeScript)
-    def build_registry_union(
-        base_cls: type[AutoRegistry],
-    ) -> Any:
-        if len(base_cls.registry) == 1:
-            return cast(
-                Any,
-                Annotated[
-                    next(iter(base_cls.registry.values())),
-                    Field(discriminator=base_cls.registry_key),
-                ],
-            )
+        def validate(data: Any) -> Any:
+            # Already a valid instance of this hierarchy, pass through.
+            if isinstance(data, cls):
+                return data
 
-        # We generate a dynamic Union type at runtime
-        union_type: Any = reduce(
-            lambda a, b: cast(Any, a | b), base_cls.registry.values()
-        )
-        return cast(
-            Any,
-            Annotated[
-                union_type,
-                Field(discriminator=base_cls.registry_key),
-            ],
-        )
+            if not isinstance(data, dict):
+                raise TypeError(
+                    f"Expected dict or {cls.__name__}, got {type(data)}"
+                )
 
-    return build_registry_union(base_cls)
+            discriminator = data.get(cls.registry_key)
+            if not discriminator:
+                raise ValueError(
+                    f"Missing '{cls.registry_key}' discriminator in data"
+                )
+
+            target_cls = cls.registry.get(discriminator)
+            if target_cls is None:
+                raise ValueError(
+                    f"Unknown {cls.registry_key}='{discriminator}' for"
+                    f" {cls.__name__}. Registered: "
+                    f"{tuple(cls.registry.keys())}"
+                )
+
+            # Use the pre-built validator on the concrete class directly.
+            # Calling model_validate() here would re-enter
+            # __get_pydantic_core_schema__ and cause infinite recursion.
+            return target_cls.__pydantic_validator__.validate_python(data)
+
+        return core_schema.no_info_plain_validator_function(validate)
+
+    @staticmethod
+    def init_registry(bases: list[type["AutoRegistry"]] | None = None) -> None:
+        """
+        Load all plugins registered under ``horus.*`` entry point groups.
+
+        This method must be called once at application boot before any Pydantic
+        model that contains a registry field is instantiated. Loading a plugin
+        module causes its subclasses to be defined, which triggers
+        ``__init_subclass__`` and populates the relevant registry.
+        """
+        # If a base list is provided, only load
+        # the entry point groups for those bases.
+        groups_to_load: set[str]
+        if bases is not None:
+            groups_to_load = {
+                AutoRegistry._registry_roots[b]
+                for b in bases
+                if b in AutoRegistry._registry_roots
+            }
+        # Otherwise load all entry point groups for all registry roots.
+        # This is the default behavior and ensures that all plugins are loaded.
+        else:
+            groups_to_load = {
+                group
+                for group in entry_points().groups
+                if group.startswith(HORUS_ENTRY_POINT_PREFIX)
+            }
+
+        for group in groups_to_load:
+            print(_("Initializing %(group)s registry.") % {"group": group})
+
+            for horus_plugin in entry_points(group=group):
+                print(
+                    _("- %(entry_point)s")
+                    % {"entry_point": horus_plugin.value}
+                )
+
+                # If a plugin fails to load, log the error and continue so
+                # that a single broken plugin does not prevent the rest from
+                # being registered.
+                try:
+                    horus_plugin.load()
+                except Exception as e:
+                    print(
+                        _("Failed to load plugin %(entry_point)s: %(error)s")
+                        % {"entry_point": horus_plugin.value, "error": str(e)}
+                    )
