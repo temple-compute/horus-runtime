@@ -123,7 +123,7 @@ class AutoRegistry(BaseModel, ABC):
         entry_point:
             Pass a string when defining a new top-level registry hierarchy,
             this value will be used to load the entry point group for that
-            hierarchy in ``init_registry()``, adding the horus. suffix (e.g.
+            hierarchy in ``init_registry()``, adding the horus. prefix (e.g.
             ``class BaseArtifact(AutoRegistry, entry_point="artifact")``).
             Artifact plugins will load then from the ``horus.artifact`` entry
             point group. Root classes are not registered in any registry
@@ -131,7 +131,7 @@ class AutoRegistry(BaseModel, ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        # Prefix the entry_point with ".horus"
+        # Prefix the entry_point with "horus."
         prefixed_entry_point: str | None = (
             (HORUS_ENTRY_POINT_PREFIX + entry_point) if entry_point else None
         )

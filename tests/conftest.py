@@ -21,18 +21,15 @@ Test configuration for pytest.
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import pytest
 
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.registry.auto_registry import AutoRegistry
-
-if TYPE_CHECKING:
-    from horus_builtin.task.horus_task import HorusTask
-    from horus_runtime.core.artifact.base import BaseArtifact
 
 
 def pytest_configure(config: pytest.Config) -> None:
