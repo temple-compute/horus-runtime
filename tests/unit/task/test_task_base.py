@@ -26,9 +26,9 @@ from typing import ClassVar, Literal
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.executors.shell import ShellExecutor
-from horus_builtin.runtimes.command import CommandRuntime
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,

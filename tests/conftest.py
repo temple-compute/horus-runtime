@@ -25,13 +25,13 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 
-from horus_builtin.executors.shell import ShellExecutor
-from horus_builtin.runtimes.command import CommandRuntime
-from horus_builtin.tasks.horus_task import HorusTask
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
-    from horus_builtin.tasks.horus_task import HorusTask
+    from horus_builtin.task.horus_task import HorusTask
     from horus_runtime.core.artifact.base import BaseArtifact
 
 

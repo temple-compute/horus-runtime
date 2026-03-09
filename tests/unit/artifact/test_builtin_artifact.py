@@ -27,9 +27,9 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.artifacts.folder import FolderArtifact
-from horus_builtin.artifacts.local_base import LocalPathArtifactBase
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.artifact.local_base import LocalPathArtifactBase
 from horus_runtime.core.artifact.base import BaseArtifact
 
 SHA_HEX_LENGTH = 64  # Length of SHA-256 hash in hexadecimal representation

@@ -25,7 +25,7 @@ from unittest.mock import Mock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from horus_builtin.executors.shell import ShellExecutor
+from horus_builtin.executor.shell import ShellExecutor
 from horus_runtime.core.executor.base import BaseExecutor
 from tests.conftest import MakeTaskType
 

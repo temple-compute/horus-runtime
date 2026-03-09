@@ -26,9 +26,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from horus_builtin.artifacts.file import FileArtifact
-from horus_builtin.tasks.horus_task import HorusTask
-from horus_builtin.workflows.horus_workflow import HorusWorkflow
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from tests.conftest import MakeTaskType, MakeWorkflowFileType
 

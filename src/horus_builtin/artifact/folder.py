@@ -24,7 +24,7 @@ import hashlib
 import shutil
 from typing import Literal
 
-from horus_builtin.artifacts.local_base import LocalPathArtifactBase
+from horus_builtin.artifact.local_base import LocalPathArtifactBase
 
 
 class FolderArtifact(LocalPathArtifactBase):
