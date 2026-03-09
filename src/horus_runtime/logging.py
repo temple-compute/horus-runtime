@@ -79,7 +79,7 @@ class HorusLoggerSettings(BaseSettings):
             enqueue=True,
         )
 
-        # Add stdout logging as well
+        # Add terminal logging as well
         logger.add(
             sink=sys.stderr,
             format=config.format,
@@ -91,6 +91,3 @@ class HorusLoggerSettings(BaseSettings):
 
 # Instantiate a global logger ready to be used.
 horus_logger: "Logger" = HorusLoggerSettings.setup()
-"""
-The Horus logger module
-"""

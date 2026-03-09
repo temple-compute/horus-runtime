@@ -58,7 +58,7 @@ class HorusWorkflow(BaseWorkflow):
         """
         for task in self.tasks.values():
             if task.is_complete():
-                (
+                horus_logger.info(
                     f"[{self.name}] Skipping '{task.name}': "
                     "all outputs already exist."
                 )
