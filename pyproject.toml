@@ -7,12 +7,7 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
     "Programming Language :: Python :: 3",
 ]
-dependencies = [
-    "pydantic~=2.0",
-    "pydantic_settings~=2.0",
-    "pyyaml~=6.0",
-    "loguru~=0.7",
-]
+dependencies = ["pydantic~=2.0", "pyyaml~=6.0"]
 
 [project.optional-dependencies]
 dev = [
@@ -34,27 +29,20 @@ horus = "horus_runtime.cli:main"
 # Built-in plugins
 # ================
 [project.entry-points."horus.artifact"]
-file = "horus_builtin.artifacts.file"
-folder = "horus_builtin.artifacts.folder"
+file = "horus_builtin.artifact.file"
+folder = "horus_builtin.artifact.folder"
 
 [project.entry-points."horus.executor"]
-shell = "horus_builtin.executors.shell"
+shell = "horus_builtin.executor.shell"
 
 [project.entry-points."horus.runtime"]
-command = "horus_builtin.runtimes.command"
+command = "horus_builtin.runtime.command"
 
 [project.entry-points."horus.task"]
-horus_task = "horus_builtin.tasks.horus_task"
+horus_task = "horus_builtin.task.horus_task"
 
 [project.entry-points."horus.workflow"]
-horus_workflow = "horus_builtin.workflows.horus_workflow"
-
-[project.entry-points."horus.subscriber"]
-loguru = "horus_builtin.events.loguru_subscriber"
-
-[project.entry-points."horus.event"]
-task_event = "horus_builtin.tasks.task_event"
-
+horus_workflow = "horus_builtin.workflow.horus_workflow"
 
 # ================
 

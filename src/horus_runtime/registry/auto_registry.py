@@ -78,7 +78,7 @@ class AutoRegistry(BaseModel, ABC):
     A class variable that holds the registry of concrete subclasses, keyed by
     the value of the field named by ``registry_key``. Each root registry class
     gets its own independent registry dict, initialised in
-    ``__init_subclass__`` when ``entry_point="someting"``.
+    ``__init_subclass__`` when ``entry_point="something"``.
     """
 
     registry_key: ClassVar[str]
@@ -131,29 +131,32 @@ class AutoRegistry(BaseModel, ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        if entry_point:
+        # Prefix the entry_point with ".horus"
+        prefixed_entry_point: str | None = (
+            (HORUS_ENTRY_POINT_PREFIX + entry_point) if entry_point else None
+        )
+
+        if prefixed_entry_point:
             # Verify the point does not exist already
-            if entry_point in AutoRegistry._registry_roots.values():
+            if prefixed_entry_point in AutoRegistry._registry_roots.values():
                 raise RegistryPointExistsError(
                     _(
                         "%(entry_point)s already exists in the registry. "
                         "Entry points must be unique."
                     )
-                    % {"entry_point": entry_point}
+                    % {"entry_point": prefixed_entry_point}
                 )
 
             # Mark as a dispatch root and give it a fresh registry. Root
             # classes are not themselves registered as concrete
             # implementations.
-            AutoRegistry._registry_roots[cls] = (
-                HORUS_ENTRY_POINT_PREFIX + entry_point
-            )
+            AutoRegistry._registry_roots[cls] = prefixed_entry_point
             cls.registry = {}
 
-        # If the developer did NOT specify a entry_point, and the class
+        # If the developer did NOT specify an entry_point, and the class
         # does NOT have a registry, means the dev forgot to add the
         # entry_point into this new registry class.
-        if not entry_point and not hasattr(cls, "registry"):
+        if not prefixed_entry_point and not hasattr(cls, "registry"):
             raise BaseRegistryClassEntryPointNotDefinedError(
                 _(
                     "%(cls)s tried to register without specifying a "
@@ -221,7 +224,7 @@ class AutoRegistry(BaseModel, ABC):
         """
         Generate a custom Pydantic core schema for registry root classes.
 
-        For root classes (those declared with ``registry_root=True``), this
+        For root classes (those declared with ``entry_point``), this
         returns a plain validator that dispatches incoming dicts to the correct
         concrete subclass based on the discriminator field. For all other
         classes the default Pydantic schema generation is used.
