@@ -24,13 +24,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from horus_runtime.runtime import HorusRuntime
+from horus_runtime.runtime import HorusContext
 
 
 @pytest.mark.unit
 class TestBoot:
     """
-    Test cases for HorusRuntime boot process.
+    Test cases for HorusContext boot process.
     """
 
     @patch("builtins.print")
@@ -39,7 +39,7 @@ class TestBoot:
         Test that boot prints the startup message.
         """
         ctx = contextvars.copy_context()
-        ctx.run(HorusRuntime.boot)
+        ctx.run(HorusContext.boot)
         assert (
             mock_print.call_args_list[0].args[0]
             == "Horus Runtime is starting..."
@@ -47,13 +47,13 @@ class TestBoot:
 
     def test_boot_sets_context(self) -> None:
         """
-        Test that boot sets a HorusRuntime instance in the context.
+        Test that boot sets a HorusContext instance in the context.
         """
         ctx = contextvars.copy_context()
-        ctx.run(HorusRuntime.boot)
+        ctx.run(HorusContext.boot)
 
-        runtime = ctx.run(HorusRuntime.get_context)
-        assert isinstance(runtime, HorusRuntime)
+        runtime = ctx.run(HorusContext.get_context)
+        assert isinstance(runtime, HorusContext)
 
     def test_get_context_raises_before_boot(self) -> None:
         """
@@ -61,4 +61,4 @@ class TestBoot:
         """
         ctx = contextvars.copy_context()
         with pytest.raises(LookupError):
-            ctx.run(HorusRuntime.get_context)
+            ctx.run(HorusContext.get_context)

@@ -20,7 +20,7 @@
 Entrypoint for horus-runtime.
 """
 
-from horus_runtime.runtime import HorusRuntime
+from horus_runtime.runtime import HorusContext
 
 
 def main() -> None:
@@ -29,7 +29,7 @@ def main() -> None:
     """
     # Boot the runtime to initialize logging, load plugins,
     # and set up global context
-    HorusRuntime.boot()
+    HorusContext.boot()
 
 
 if __name__ == "__main__":

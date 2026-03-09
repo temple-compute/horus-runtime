@@ -27,20 +27,20 @@ from dataclasses import dataclass
 from horus_runtime.i18n import tr as _
 from horus_runtime.registry.auto_registry import AutoRegistry
 
-_runtime_ctx: ContextVar["HorusRuntime"] = ContextVar("horus_runtime_context")
+_runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
 
 
 @dataclass(frozen=True)
-class HorusRuntime:
+class HorusContext:
     """
     Main entry point for horus-runtime. Handles initialization, plugin loading,
     and global context management.
     """
 
     @staticmethod
-    def get_context() -> "HorusRuntime":
+    def get_context() -> "HorusContext":
         """
-        Get the current HorusRuntime from the active context.
+        Get the current HorusContext from the active context.
         """
         return _runtime_ctx.get()
 
@@ -55,4 +55,4 @@ class HorusRuntime:
         # Register horus-plugins
         AutoRegistry.init_registry()
 
-        _runtime_ctx.set(HorusRuntime())
+        _runtime_ctx.set(HorusContext())
