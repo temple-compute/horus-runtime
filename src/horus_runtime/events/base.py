@@ -21,16 +21,34 @@ Base event class for horus-runtime.
 """
 
 import datetime
+import inspect
 import uuid
-from abc import ABC
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseEvent(BaseModel, ABC, AutoRegistry):
+def _get_current_frame_info() -> str:
+    """
+    Utility function to get the caller's frame information for event source.
+    Walks the call stack to find the first frame outside of pydantic internals
+    to provide a more meaningful source for events.
+    """
+    frame = inspect.currentframe()
+
+    if frame:
+        while frame := frame.f_back:
+            module = frame.f_globals.get("__name__", "")
+            if not module.startswith("pydantic"):
+                code = frame.f_code
+                return getattr(code, "co_qualname", code.co_name)
+
+    return "unknown"
+
+
+class BaseEvent(AutoRegistry, entry_point="event"):
     """
     Base event class. All Horus events should inherit from this class.
     """
@@ -64,9 +82,15 @@ class BaseEvent(BaseModel, ABC, AutoRegistry):
     Timestamp of when the event was created.
     """
 
-    source: str
+    source: str = Field(default_factory=_get_current_frame_info)
     """
-    Optional source of the event.
+    Source of the event. Automaticaly inferred from the caller's frame
+    information if not provided.
+    """
+
+    message: str | None = None
+    """
+    Optional message or payload for the event.
     """
 
     class Config:

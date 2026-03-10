@@ -21,14 +21,25 @@ Runtime initialization, plugin loading, and global context management for
 horus-runtime.
 """
 
+import asyncio
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from horus_runtime.events.base import BaseEvent
+from horus_runtime.events.bus import HorusEventBus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
+
+
+class HorusContextEvent(BaseEvent):
+    """
+    Base event class for horus-runtime context events.
+    """
+
+    event_type: str = "horus_context_event"
 
 
 @dataclass(frozen=True)
@@ -38,6 +49,8 @@ class HorusContext:
     and global context management.
     """
 
+    bus: HorusEventBus = field(default_factory=HorusEventBus)
+
     @staticmethod
     def get_context() -> "HorusContext":
         """
@@ -46,15 +59,44 @@ class HorusContext:
         return _runtime_ctx.get()
 
     @staticmethod
-    def boot() -> None:
+    def boot() -> "HorusContext":
         """
         Initialize the runtime, load plugins, and set up global context.
         Must be called before using any other horus-runtime features.
         """
         horus_logger.info(_("Horus Runtime is starting..."))
+        ctx = HorusContext()
 
         # Register horus-plugins
         AutoRegistry.init_registry()
 
+        # Setup the bus
+        ctx.bus.setup_bus()
+
         # Set the context
-        _runtime_ctx.set(HorusContext())
+        _runtime_ctx.set(ctx)
+
+        # Send a test event to see if loguru event handler is working
+        ctx.bus.emit(
+            HorusContextEvent(
+                message=_("Horus Runtime ready!"),
+            )
+        )
+
+        return ctx
+
+    def shutdown(self) -> None:
+        """
+        Shutdown the runtime gracefully, cleaning up resources and
+        stopping transports.
+        """
+        # Emit a shutdown event before stopping transports so subscribers can
+        # react
+        self.bus.emit(
+            HorusContextEvent(
+                message=_("Horus Runtime is shutting down..."),
+            )
+        )
+
+        # Stop the event bus and all transports
+        asyncio.run(self.bus.stop())

@@ -20,21 +20,22 @@
 Base event subscriber class for horus-runtime.
 """
 
-from abc import ABC, abstractmethod
-from typing import ClassVar
+from abc import abstractmethod
+from typing import TYPE_CHECKING, ClassVar
 
 from horus_runtime.events.base import BaseEvent
-from horus_runtime.events.bus import BaseEventBus
 from horus_runtime.registry.auto_registry import AutoRegistry
 
+if TYPE_CHECKING:
+    from horus_runtime.events.bus import HorusEventBus
 
-class BaseEventSubscriber(ABC, AutoRegistry):
+
+class BaseEventSubscriber(AutoRegistry, entry_point="subscriber"):
     """
     Base class for event subscribers.
     """
 
     registry_key: ClassVar[str] = "subscriber_type"
-    subscriber_type: str
 
     @abstractmethod
     def setup(self) -> None:
@@ -56,7 +57,7 @@ class BaseEventSubscriber(ABC, AutoRegistry):
         """
         self.handle(event)
 
-    def register_on(self, bus: BaseEventBus) -> None:
+    def register_on(self, bus: "HorusEventBus") -> None:
         """
         Override to control which event types you subscribe to.
         Default: subscribe to everything.

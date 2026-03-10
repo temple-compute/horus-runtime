@@ -16,20 +16,35 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Definition of the event subscriber registry for horus-runtime.
+Logging subscriber for horus-runtime events.
 """
 
-from typing import TYPE_CHECKING, TypeAlias
+from typing import Literal
 
+from horus_runtime.events.base import BaseEvent
 from horus_runtime.events.subscriber import BaseEventSubscriber
-from horus_runtime.registry.auto_registry import init_registry
+from horus_runtime.logging import horus_logger
 
-# Check ArtifactRegistry for an explanation of this trick
-if TYPE_CHECKING:
-    BaseEventSubscriberUnion: TypeAlias = BaseEventSubscriber
-else:
-    BaseEventSubscriberUnion = init_registry(
-        BaseEventSubscriber, "horus.subscribers"
-    )
 
-SubscriberRegistry = BaseEventSubscriber.registry
+class LoguruSubscriber(BaseEventSubscriber):
+    """
+    A simple event subscriber that logs all events using loguru.
+    """
+
+    subscriber_type: Literal["loguru"] = "loguru"
+
+    def setup(self) -> None:
+        """
+        No setup needed for this subscriber.
+        """
+        pass
+
+    def handle(self, event: BaseEvent) -> None:
+        """
+        Handle an incoming event by logging it.
+        """
+        horus_logger.debug(
+            f"Received event: {event.event_type} with ID {event.event_id} "
+            f"from {event.source}"
+        )
+        horus_logger.info(event.message)

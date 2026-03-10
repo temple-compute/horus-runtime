@@ -20,14 +20,14 @@
 Event bus transport base for horus-runtime.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any, ClassVar
 
 from horus_runtime.events.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseBusTransport(ABC, AutoRegistry):
+class BaseBusTransport(AutoRegistry, entry_point="transport"):
     """
     Defines how events move from emitter to subscribers.
     Local: direct call. Remote: serialize → broker → deserialize.

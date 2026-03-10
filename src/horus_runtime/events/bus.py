@@ -27,16 +27,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from horus_runtime.events.base import BaseEvent
+from horus_runtime.events.subscriber import BaseEventSubscriber
 from horus_runtime.events.transport import BaseBusTransport
 
 
 @dataclass
-class BaseEventBus:
+class HorusEventBus:
     """
     Base event bus class. Defines the interface for event buses.
     """
 
-    _transport: BaseBusTransport | None = None
+    _transports: list[BaseBusTransport] = field(default_factory=list)
     """
     The transport mechanism for the event bus.
     """
@@ -58,6 +59,12 @@ class BaseEventBus:
     Set of running tasks for cleanup on shutdown.
     """
 
+    def add_transport(self, transport: BaseBusTransport) -> None:
+        """
+        Add a transport mechanism to the event bus.
+        """
+        self._transports.append(transport)
+
     def subscribe(self, event_type: str, handler: Any) -> None:
         """
         Subscribe a handler to a specific event type.
@@ -74,8 +81,12 @@ class BaseEventBus:
         """
         Async emit. Use from async contexts.
         """
-        await self._transport.publish(event) if self._transport else None
         await self._dispatch(event)
+        await asyncio.gather(
+            *(t.publish(event) for t in self._transports),
+            # one failing transport doesn't kill others
+            return_exceptions=True,
+        )
 
     def emit(self, event: BaseEvent) -> None:
         """
@@ -101,17 +112,32 @@ class BaseEventBus:
                 await handler(event)
             else:
                 # Sync handler — run in executor to avoid blocking loop
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, handler, event)
 
     async def start(self) -> None:
         """
         Start the event bus and its transport.
         """
-        await self._transport.start() if self._transport else None
+        await asyncio.gather(*(t.start() for t in self._transports))
 
     async def stop(self) -> None:
         """
         Stop the event bus and its transport.
         """
-        await self._transport.stop() if self._transport else None
+        await asyncio.gather(*(t.stop() for t in self._transports))
+
+    def setup_bus(self) -> None:
+        """
+        Initializes transport and subscribers from the registry.
+        """
+        # Register transport buses
+        for transport_cls in BaseBusTransport.registry.values():
+            transport = transport_cls()
+            self.add_transport(transport)
+
+        # Register event subscribers on the bus
+        for subscriber_cls in BaseEventSubscriber.registry.values():
+            subscriber = subscriber_cls()
+            subscriber.setup()
+            subscriber.register_on(self)

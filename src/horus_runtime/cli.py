@@ -29,7 +29,10 @@ def main() -> None:
     """
     # Boot the runtime to initialize logging, load plugins,
     # and set up global context
-    HorusContext.boot()
+    ctx = HorusContext.boot()
+
+    # Finish the application lifecycle.
+    ctx.shutdown()
 
 
 if __name__ == "__main__":
