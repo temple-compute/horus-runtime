@@ -29,10 +29,19 @@ from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from tests.conftest import MakeTaskType
+
+
+@pytest.fixture(autouse=True)
+def horus_context() -> HorusContext:
+    """
+    Fixture to provide a HorusContext for testing.
+    """
+    return HorusContext.boot()
 
 
 @pytest.mark.unit

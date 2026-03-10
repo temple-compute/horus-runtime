@@ -20,7 +20,8 @@ Test module for the built-in LogsSubscriber.
 """
 
 import asyncio
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,116 +36,127 @@ class TestLogsSubscriber:
     Test cases for LogsSubscriber setup, handling, and bus registration.
     """
 
-    def test_handle_logs_event_type_at_debug(self) -> None:
+    def _call_args(
+        self, mock_log: MagicMock
+    ) -> tuple[tuple[Any], dict[Any, Any]]:
         """
-        Test that handle() emits a debug log containing the event type.
+        Extract (args, kwargs) from the opt().log() call.
+        """
+        opt_instance = mock_log.opt.return_value
+        args, kwargs = opt_instance.log.call_args
+        return args, kwargs
+
+    def test_handle_logs_correct_level(self) -> None:
+        """
+        Test that handle() calls log() with the event's level.
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
-            debug_msg: str = mock_log.debug.call_args[0][0]
+            args, _ = self._call_args(mock_log)
+            assert args[0] == event.level
 
-        assert "test.event" in debug_msg
-
-    def test_handle_logs_event_id_at_debug(self) -> None:
+    def test_handle_logs_event_type(self) -> None:
         """
-        Test that handle() includes the event UUID in the debug log.
+        Test that handle() passes the event type as a kwarg to log().
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
-            debug_msg: str = mock_log.debug.call_args[0][0]
+            _, kwargs = self._call_args(mock_log)
+            assert kwargs["event_type"] == event.event_type
 
-        assert str(event.event_id) in debug_msg
-
-    def test_handle_logs_event_source_at_debug(self) -> None:
+    def test_handle_logs_event_source(self) -> None:
         """
-        Test that handle() includes the event source in the debug log.
+        Test that handle() passes the event source as a kwarg to log().
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
-            debug_msg: str = mock_log.debug.call_args[0][0]
+            _, kwargs = self._call_args(mock_log)
+            assert kwargs["source"] == event.source
 
-        assert event.source in debug_msg
-
-    def test_handle_logs_message_at_info(self) -> None:
+    def test_handle_logs_event_message(self) -> None:
         """
-        Test that handle() passes the event message to info().
+        Test that handle() passes the event message as safe_message to log().
         """
         sub = LogsSubscriber()
         event = _TestEvent(message="something happened")
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
+            _, kwargs = self._call_args(mock_log)
+            assert kwargs["safe_message"] == "something happened"
 
-        mock_log.info.assert_called_once_with("something happened")
-
-    def test_handle_logs_none_when_message_absent(self) -> None:
+    def test_handle_escapes_markup_in_message(self) -> None:
         """
-        Test that handle() passes None to info() when the event has no message.
+        Test that handle() escapes '<' characters to prevent loguru markup
+        injection.
+        """
+        sub = LogsSubscriber()
+        event = _TestEvent(message="<danger>")
+        with patch(
+            "horus_builtin.event.log_subscriber.horus_logger"
+        ) as mock_log:
+            sub.handle(event)
+            _, kwargs = self._call_args(mock_log)
+
+            assert r"\<" in kwargs["safe_message"]
+
+    def test_handle_none_message_defaults_to_empty(self) -> None:
+        """
+        Test that handle() converts a None message to an empty string.
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
+            _, kwargs = self._call_args(mock_log)
+            assert kwargs["safe_message"] == ""
 
-        mock_log.info.assert_called_once_with(None)
-
-    def test_handle_calls_debug_before_info(self) -> None:
+    def test_handle_calls_opt_with_colors(self) -> None:
         """
-        Test that debug is called before info — debug carries context, info
-        carries payload.
+        Test that handle() enables color rendering via opt(colors=True).
         """
         sub = LogsSubscriber()
-        event = _TestEvent(message="ordered")
-
+        event = _TestEvent()
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             sub.handle(event)
-            call_order = [c[0] for c in mock_log.method_calls]
-
-        assert call_order == ["debug", "info"]
+            mock_log.opt.assert_called_once_with(colors=True)
 
     def test_register_on_subscribes_to_all_events(self) -> None:
         """
-        Test that register_on() attaches ahandle as a wildcard handler on the
-        bus.
+        Test that register_on() attaches ahandle as a wildcard handler on
+        the bus.
         """
         sub = LogsSubscriber()
         bus = HorusEventBus()
         sub.register_on(bus)
-
         assert sub.ahandle in bus._wildcard_handlers
 
     def test_ahandle_delegates_to_handle(self) -> None:
         """
-        Test that ahandle() falls through to handle() for sync logging.
+        Test that ahandle() falls through to handle(), triggering opt().log().
         """
         sub = LogsSubscriber()
         event = _TestEvent(message="delegated")
-
         with patch(
             "horus_builtin.event.log_subscriber.horus_logger"
         ) as mock_log:
             asyncio.run(sub.ahandle(event))
-
-        mock_log.info.assert_called_once_with("delegated")
+            mock_log.opt.assert_called_once_with(colors=True)
+            mock_log.opt.return_value.log.assert_called_once()

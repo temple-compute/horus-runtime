@@ -122,7 +122,11 @@ class TestShellExecutor:
 
         assert result == 0
         mock_run.assert_called_once_with(
-            "echo 'Hello World'", shell=True, check=False, text=True
+            "echo 'Hello World'",
+            shell=True,
+            check=False,
+            text=True,
+            capture_output=True,
         )
 
 
