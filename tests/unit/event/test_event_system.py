@@ -278,10 +278,10 @@ class TestHorusEventBusEmit:
 
         assert len(received) == 1
 
-    def test_sync_emit_schedules_task_on_running_loop(self) -> None:
+    def test_sync_emit_dispatches_immediately_on_running_loop(self) -> None:
         """
-        Test that sync emit() creates a task on the running loop and that the
-        task executes before the coroutine returns.
+        Test that sync emit() dispatches the event immediately even when called
+        from inside a running event loop, without requiring a yield point.
         """
         bus = HorusEventBus()
         received: list[BaseEvent] = []
@@ -290,7 +290,8 @@ class TestHorusEventBusEmit:
         async def _runner() -> None:
             event = _TestEvent()
             bus.emit(event)
-            await asyncio.sleep(0)  # yield so the scheduled task runs
+            # Event must already be dispatched — no yield needed.
+            assert len(received) == 1
 
         asyncio.run(_runner())
         assert len(received) == 1

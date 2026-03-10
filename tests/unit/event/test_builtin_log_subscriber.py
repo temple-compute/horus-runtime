@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Test module for the built-in LoguruSubscriber.
+Test module for the built-in LogsSubscriber.
 """
 
 import asyncio
@@ -24,22 +24,22 @@ from unittest.mock import patch
 
 import pytest
 
-from horus_builtin.event.log_subscriber import LoguruSubscriber
+from horus_builtin.event.log_subscriber import LogsSubscriber
 from horus_runtime.events.bus import HorusEventBus
 from tests.unit.event.common import _TestEvent
 
 
 @pytest.mark.unit
-class TestLoguruSubscriber:
+class TestLogsSubscriber:
     """
-    Test cases for LoguruSubscriber setup, handling, and bus registration.
+    Test cases for LogsSubscriber setup, handling, and bus registration.
     """
 
     def test_handle_logs_event_type_at_debug(self) -> None:
         """
         Test that handle() emits a debug log containing the event type.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent()
 
         with patch(
@@ -54,7 +54,7 @@ class TestLoguruSubscriber:
         """
         Test that handle() includes the event UUID in the debug log.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent()
 
         with patch(
@@ -69,7 +69,7 @@ class TestLoguruSubscriber:
         """
         Test that handle() includes the event source in the debug log.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent()
 
         with patch(
@@ -84,7 +84,7 @@ class TestLoguruSubscriber:
         """
         Test that handle() passes the event message to info().
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent(message="something happened")
 
         with patch(
@@ -98,7 +98,7 @@ class TestLoguruSubscriber:
         """
         Test that handle() passes None to info() when the event has no message.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent()
 
         with patch(
@@ -113,7 +113,7 @@ class TestLoguruSubscriber:
         Test that debug is called before info — debug carries context, info
         carries payload.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent(message="ordered")
 
         with patch(
@@ -129,7 +129,7 @@ class TestLoguruSubscriber:
         Test that register_on() attaches ahandle as a wildcard handler on the
         bus.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         bus = HorusEventBus()
         sub.register_on(bus)
 
@@ -139,7 +139,7 @@ class TestLoguruSubscriber:
         """
         Test that ahandle() falls through to handle() for sync logging.
         """
-        sub = LoguruSubscriber()
+        sub = LogsSubscriber()
         event = _TestEvent(message="delegated")
 
         with patch(

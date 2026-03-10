@@ -26,7 +26,7 @@ from horus_runtime.events.subscriber import BaseEventSubscriber
 from horus_runtime.logging import horus_logger
 
 
-class LoguruSubscriber(BaseEventSubscriber):
+class LogsSubscriber(BaseEventSubscriber):
     """
     A simple event subscriber that logs all events using loguru.
     """
@@ -41,10 +41,16 @@ class LoguruSubscriber(BaseEventSubscriber):
 
     def handle(self, event: BaseEvent) -> None:
         """
-        Handle an incoming event by logging it.
+        Handle an incoming event by logging it using loguru's bind.
         """
-        horus_logger.debug(
-            f"Received event: {event.event_type} with ID {event.event_id} "
-            f"from {event.source}"
+        # Secure the message by escaping any potential markup characters
+        safe_message = (event.message or "").replace("<", r"\<")
+
+        horus_logger.opt(colors=True).log(
+            event.level,
+            "<cyan>[{source}]</cyan> <yellow>[{event_type}]</yellow> "
+            "{safe_message}",
+            source=event.source,
+            event_type=event.event_type,
+            safe_message=safe_message,
         )
-        horus_logger.info(event.message)

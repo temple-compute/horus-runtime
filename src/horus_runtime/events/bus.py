@@ -21,6 +21,7 @@ Event bus base for horus-runtime.
 """
 
 import asyncio
+import concurrent.futures
 import inspect
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -52,11 +53,6 @@ class HorusEventBus:
     _wildcard_handlers: list[Any] = field(default_factory=list)
     """
     Handlers that receive all events regardless of type.
-    """
-
-    _tasks: set[asyncio.Task[Any]] = field(default_factory=set)
-    """
-    Set of running tasks for cleanup on shutdown.
     """
 
     def add_transport(self, transport: BaseBusTransport) -> None:
@@ -91,16 +87,24 @@ class HorusEventBus:
     def emit(self, event: BaseEvent) -> None:
         """
         Sync emit. Safe to call from sync task code.
-        Schedules on the running loop if one exists,
-        otherwise runs synchronously.
+
+        When called from inside a running event loop (e.g. from a Jupyter
+        notebook or an async runner), ``create_task`` would only schedule the
+        coroutine and it would not run until the current synchronous call
+        stack returns control to the loop, meaning all events would appear
+        after all task executions finish.  To guarantee immediate dispatch
+        even in that case, we run the coroutine in a worker thread that owns
+        its own event loop.
         """
         try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self.aemit(event))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            asyncio.get_running_loop()
+            # A loop is running in this thread but we cannot await here.
+            # Dispatch in a dedicated thread so the call is blocking and
+            # completes before we return.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(asyncio.run, self.aemit(event)).result()
         except RuntimeError:
-            # No running loop, run sync dispatch directly
+            # No running loop, run directly.
             asyncio.run(self.aemit(event))
 
     async def _dispatch(self, event: BaseEvent) -> None:

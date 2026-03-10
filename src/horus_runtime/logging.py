@@ -33,6 +33,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 HORUS_LOG_ENV_PREFIX = "HORUS_LOG_"
 
+LoggerLevel = Annotated[
+    Literal["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v),
+]
+
 
 class HorusLoggerSettings(BaseSettings):
     """
@@ -45,16 +50,12 @@ class HorusLoggerSettings(BaseSettings):
 
     format: str = (
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level: <8}</level> | "
+        "<level>{level:<8}</level> | "
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
         "<level>{message}</level>"
     )
 
-    level: Annotated[
-        Literal["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v),
-    ] = "INFO"
-
+    level: LoggerLevel = "INFO"
     log_directory: Path = Path("logs")
     rotation: str = "10 MB"
     retention: str = "7 days"

@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field
 
+from horus_runtime.logging import LoggerLevel
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -91,6 +92,16 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     message: str | None = None
     """
     Optional message or payload for the event.
+    """
+
+    level: LoggerLevel = "INFO"
+    """
+    Helper to filter the event in event logging.
+    """
+
+    data: dict[str, Any] = Field(default_factory=dict)
+    """
+    Optional dictionary to hold any additional data related to the event.
     """
 
     model_config = ConfigDict(frozen=True)

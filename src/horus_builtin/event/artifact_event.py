@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
 """
 
 from typing import ClassVar, Literal
@@ -24,13 +24,12 @@ from typing import ClassVar, Literal
 from horus_runtime.events.base import BaseEvent
 
 
-class HorusTaskEvent(BaseEvent):
+class ArtifactEvent(BaseEvent):
     """
-    Event emitted when a HorusTask is executed.
+    Event emitted when an artifact is created, updated, or deleted.
     """
 
     add_to_registry: ClassVar[bool] = True
-    event_type: Literal["horus_task_event"] = "horus_task_event"
+    event_type: Literal["artifact_event"] = "artifact_event"
 
-    task_id: str
-    task_name: str
+    artifact_id: str

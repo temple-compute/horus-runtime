@@ -48,6 +48,11 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The 'kind' field is used to identify the specific type of task.
     """
 
+    task_id: str | None = None
+    """
+    The task ID
+    """
+
     name: str
     """
     Human-readable name for this task.
