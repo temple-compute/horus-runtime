@@ -25,7 +25,7 @@ import inspect
 import uuid
 from typing import Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -93,9 +93,4 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     Optional message or payload for the event.
     """
 
-    class Config:
-        """
-        Pydantic configuration for BaseEvent.
-        """
-
-        frozen = True
+    model_config = ConfigDict(frozen=True)
