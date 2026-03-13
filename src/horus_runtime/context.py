@@ -21,12 +21,11 @@ Runtime initialization, plugin loading, and global context management for
 horus-runtime.
 """
 
-import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from horus_runtime.events.base import BaseEvent
-from horus_runtime.events.bus import HorusEventBus
+from horus_runtime.event.base import BaseEvent
+from horus_runtime.event.bus import HorusEventBus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -71,7 +70,7 @@ class HorusContext:
         AutoRegistry.init_registry()
 
         # Setup the bus
-        ctx.bus.setup_bus()
+        ctx.bus.start()
 
         # Set the context
         _runtime_ctx.set(ctx)
@@ -99,4 +98,4 @@ class HorusContext:
         )
 
         # Stop the event bus and all transports
-        asyncio.run(self.bus.stop())
+        self.bus.stop()

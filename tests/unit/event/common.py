@@ -21,7 +21,10 @@ Common TestEvent.
 
 from typing import Literal
 
-from horus_runtime.events.base import BaseEvent
+from pydantic import Field
+
+from horus_runtime.event.base import BaseEvent
+from horus_runtime.event.subscriber import BaseEventSubscriber
 
 
 class _TestEvent(BaseEvent):
@@ -30,3 +33,59 @@ class _TestEvent(BaseEvent):
     """
 
     event_type: Literal["test.event"] = "test.event"
+
+
+class _OtherEvent(BaseEvent):
+    event_type: Literal["other.event"] = "other.event"
+
+
+class _CollectingAllSubscriber(BaseEventSubscriber):
+    """
+    Concrete subscriber that records every event passed to handle().
+    Accepts an optional events filter; defaults to wildcard (no filter).
+    """
+
+    subscriber_type: Literal["collecting"] = "collecting"
+    received: list[BaseEvent] = Field(default_factory=list)
+
+    def setup(self) -> None:
+        pass
+
+    def handle(self, event: BaseEvent) -> None:
+        self.received.append(event)
+
+
+class _CollectingTestSubscriber(BaseEventSubscriber):
+    """
+    Concrete subscriber that records every event passed to handle().
+    Only accepts events of type _TestEvent.
+    """
+
+    subscriber_type: Literal["collecting_test"] = "collecting_test"
+    received: list[BaseEvent] = Field(default_factory=list)
+
+    events = (_TestEvent,)
+
+    def setup(self) -> None:
+        pass
+
+    def handle(self, event: BaseEvent) -> None:
+        self.received.append(event)
+
+
+class _CollectingOtherSubscriber(BaseEventSubscriber):
+    """
+    Concrete subscriber that records every event passed to handle().
+    Only accepts events of type _OtherEvent.
+    """
+
+    subscriber_type: Literal["collecting_other"] = "collecting_other"
+    received: list[BaseEvent] = Field(default_factory=list)
+
+    events = (_OtherEvent,)
+
+    def setup(self) -> None:
+        pass
+
+    def handle(self, event: BaseEvent) -> None:
+        self.received.append(event)

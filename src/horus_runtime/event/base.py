@@ -54,11 +54,6 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     Base event class. All Horus events should inherit from this class.
     """
 
-    add_to_registry: ClassVar[bool] = False
-    """
-    Base event class should not be added to the registry.
-    """
-
     event_id: uuid.UUID = Field(
         default_factory=uuid.uuid4,
     )
@@ -77,7 +72,7 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     """
 
     timestamp: datetime.datetime = Field(
-        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+        default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
     """
     Timestamp of when the event was created.
@@ -85,7 +80,7 @@ class BaseEvent(AutoRegistry, entry_point="event"):
 
     source: str = Field(default_factory=_get_current_frame_info)
     """
-    Source of the event. Automaticaly inferred from the caller's frame
+    Source of the event. Automatically inferred from the caller's frame
     information if not provided.
     """
 

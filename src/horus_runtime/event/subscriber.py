@@ -21,21 +21,29 @@ Base event subscriber class for horus-runtime.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar, Generic
 
-from horus_runtime.events.base import BaseEvent
+from typing_extensions import TypeVar
+
+from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
-if TYPE_CHECKING:
-    from horus_runtime.events.bus import HorusEventBus
+EventFilterType = tuple[type[BaseEvent], ...] | None
+E = TypeVar("E", bound=BaseEvent, default=BaseEvent)
 
 
-class BaseEventSubscriber(AutoRegistry, entry_point="subscriber"):
+class BaseEventSubscriber(AutoRegistry, Generic[E], entry_point="subscriber"):
     """
     Base class for event subscribers.
     """
 
     registry_key: ClassVar[str] = "subscriber_type"
+
+    events: ClassVar[EventFilterType] = None
+    """
+    Which event types this subscriber is interested in.
+    If None, the subscriber will receive all events.
+    """
 
     @abstractmethod
     def setup(self) -> None:
@@ -45,21 +53,7 @@ class BaseEventSubscriber(AutoRegistry, entry_point="subscriber"):
         """
 
     @abstractmethod
-    def handle(self, event: BaseEvent) -> None:
+    def handle(self, event: E) -> None:
         """
         Handle an incoming event. Override this for sync handling.
         """
-
-    async def ahandle(self, event: BaseEvent) -> None:
-        """
-        Handle an incoming event. Delegates to handle() by default,
-        but can be overridden for async handling.
-        """
-        self.handle(event)
-
-    def register_on(self, bus: "HorusEventBus") -> None:
-        """
-        Override to control which event types you subscribe to.
-        Default: subscribe to everything.
-        """
-        bus.subscribe_all(self.ahandle)

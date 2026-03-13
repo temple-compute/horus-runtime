@@ -23,7 +23,7 @@ Event bus transport base for horus-runtime.
 from abc import abstractmethod
 from typing import Any, ClassVar
 
-from horus_runtime.events.base import BaseEvent
+from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 

@@ -21,11 +21,10 @@ Base definition for local file or folder artifacts in the Horus Runtime.
 
 import hashlib
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 from urllib.parse import urlparse
 
 from pydantic import model_validator
-from typing_extensions import Self
 
 from horus_builtin.event.artifact_event import ArtifactEvent
 from horus_runtime.context import HorusContext

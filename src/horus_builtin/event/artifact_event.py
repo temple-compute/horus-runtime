@@ -21,7 +21,7 @@ ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
 
 from typing import ClassVar, Literal
 
-from horus_runtime.events.base import BaseEvent
+from horus_runtime.event.base import BaseEvent
 
 
 class ArtifactEvent(BaseEvent):

@@ -19,10 +19,10 @@
 Logging subscriber for horus-runtime events.
 """
 
-from typing import Literal
+from typing import ClassVar, Literal
 
-from horus_runtime.events.base import BaseEvent
-from horus_runtime.events.subscriber import BaseEventSubscriber
+from horus_runtime.event.base import BaseEvent
+from horus_runtime.event.subscriber import BaseEventSubscriber, EventFilterType
 from horus_runtime.logging import horus_logger
 
 
@@ -32,6 +32,7 @@ class LogsSubscriber(BaseEventSubscriber):
     """
 
     subscriber_type: Literal["loguru"] = "loguru"
+    events: ClassVar[EventFilterType] = None
 
     def setup(self) -> None:
         """

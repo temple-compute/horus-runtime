@@ -31,10 +31,9 @@ responsibility when writing the workflow YAML file.
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from pydantic import model_validator
-from typing_extensions import Self
 
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import AutoRegistry

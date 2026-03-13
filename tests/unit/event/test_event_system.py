@@ -20,18 +20,24 @@ Test module for horus-runtime event system (BaseEvent, HorusEventBus,
 BaseBusTransport).
 """
 
-import asyncio
 import datetime
+import threading
 import uuid
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
-from horus_runtime.events.base import BaseEvent
-from horus_runtime.events.bus import HorusEventBus
-from horus_runtime.events.transport import BaseBusTransport
-from tests.unit.event.common import _TestEvent
+from horus_runtime.event.base import BaseEvent
+from horus_runtime.event.bus import HorusEventBus
+from horus_runtime.event.transport import BaseBusTransport
+from tests.unit.event.common import (
+    _CollectingAllSubscriber,
+    _CollectingOtherSubscriber,
+    _CollectingTestSubscriber,
+    _OtherEvent,
+    _TestEvent,
+)
 
 
 @pytest.mark.unit
@@ -58,7 +64,7 @@ class TestBaseEvent:
         Test that the auto-generated timestamp carries UTC timezone info.
         """
         event = _TestEvent()
-        assert event.timestamp.tzinfo == datetime.timezone.utc
+        assert event.timestamp.tzinfo == datetime.UTC
 
     def test_source_is_inferred(self) -> None:
         """
@@ -110,26 +116,27 @@ class TestHorusEventBusSubscriptions:
         matching type.
         """
         bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe("test.event", received.append)
+        sub = _CollectingTestSubscriber()
+
+        bus.subscribe(sub)
 
         event = _TestEvent()
-        asyncio.run(bus._dispatch(event))
+        bus._dispatch(event)
 
-        assert len(received) == 1
-        assert received[0] is event
+        assert len(sub.received) == 1
+        assert sub.received[0] is event
 
     def test_subscribe_ignores_non_matching_event_type(self) -> None:
         """
         Test that a handler registered for a different type does not fire.
         """
         bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe("other.event", received.append)
+        sub = _CollectingOtherSubscriber()
+        bus.subscribe(sub)
 
-        asyncio.run(bus._dispatch(_TestEvent()))
+        bus._dispatch(_TestEvent())
 
-        assert len(received) == 0
+        assert len(sub.received) == 0
 
     def test_subscribe_all_receives_every_event(self) -> None:
         """
@@ -137,15 +144,17 @@ class TestHorusEventBusSubscriptions:
         all dispatched events.
         """
         bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe_all(received.append)
+        sub = _CollectingAllSubscriber()
+        bus.subscribe(sub)
 
-        asyncio.run(bus._dispatch(_TestEvent()))
-        asyncio.run(bus._dispatch(_TestEvent()))
+        bus._dispatch(_TestEvent())
+        bus._dispatch(_OtherEvent())
 
         runs = 2
 
-        assert len(received) == runs
+        assert len(sub.received) == runs
+        assert sub.received[0].event_type == "test.event"
+        assert sub.received[1].event_type == "other.event"
 
     def test_both_specific_and_wildcard_handlers_fire(self) -> None:
         """
@@ -153,45 +162,19 @@ class TestHorusEventBusSubscriptions:
         the same event.
         """
         bus = HorusEventBus()
-        specific: list[BaseEvent] = []
-        wildcard: list[BaseEvent] = []
+        specific = _CollectingTestSubscriber()
+        wildcard = _CollectingAllSubscriber()
+        bus.subscribe(specific)
+        bus.subscribe(wildcard)
 
-        bus.subscribe("test.event", specific.append)
-        bus.subscribe_all(wildcard.append)
+        specific_events = [_TestEvent(), _TestEvent()]
+        other_events = [_OtherEvent(), _OtherEvent()]
+        all_events = specific_events + other_events
+        for event in all_events:
+            bus._dispatch(event)
 
-        asyncio.run(bus._dispatch(_TestEvent()))
-
-        assert len(specific) == 1
-        assert len(wildcard) == 1
-
-    def test_async_handler_is_awaited(self) -> None:
-        """
-        Test that coroutine handlers are awaited rather than skipped.
-        """
-        bus = HorusEventBus()
-        received: list[BaseEvent] = []
-
-        async def _handler(event: BaseEvent) -> None:
-            received.append(event)
-
-        bus.subscribe_all(_handler)
-        asyncio.run(bus._dispatch(_TestEvent()))
-
-        assert len(received) == 1
-
-    def test_multiple_handlers_for_same_type_all_called(self) -> None:
-        """
-        Test that all handlers registered for the same event type are invoked.
-        """
-        bus = HorusEventBus()
-        calls: list[int] = []
-
-        bus.subscribe("test.event", lambda e: calls.append(1))
-        bus.subscribe("test.event", lambda e: calls.append(2))
-
-        asyncio.run(bus._dispatch(_TestEvent()))
-
-        assert calls == [1, 2]
+        assert len(specific.received) == len(specific_events)
+        assert len(wildcard.received) == len(all_events)
 
 
 @pytest.mark.unit
@@ -199,46 +182,6 @@ class TestHorusEventBusEmit:
     """
     Test cases for HorusEventBus emit paths (sync and async).
     """
-
-    def test_aemit_dispatches_to_handlers(self) -> None:
-        """
-        Test that aemit() triggers registered handlers.
-        """
-        bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe_all(received.append)
-
-        event = _TestEvent()
-        asyncio.run(bus.aemit(event))
-
-        assert len(received) == 1
-        assert received[0] is event
-
-    def test_aemit_calls_transport_publish(self) -> None:
-        """
-        Test that aemit() calls publish() on every registered transport.
-        """
-        published: list[BaseEvent] = []
-
-        class _CapturingTransport(BaseBusTransport):
-            transport_type: Literal["capturing"] = "capturing"
-
-            async def publish(self, event: BaseEvent) -> None:
-                published.append(event)
-
-            async def start(self) -> None:
-                pass
-
-            async def stop(self) -> None:
-                pass
-
-        bus = HorusEventBus()
-        bus.add_transport(_CapturingTransport())
-
-        event = _TestEvent()
-        asyncio.run(bus.aemit(event))
-
-        assert event in published
 
     def test_failing_transport_does_not_propagate_exception(self) -> None:
         """
@@ -262,36 +205,38 @@ class TestHorusEventBusEmit:
         bus.add_transport(_FailingTransport())
 
         # Must not raise.
-        asyncio.run(bus.aemit(_TestEvent()))
+        bus.emit(_TestEvent())
 
-    def test_sync_emit_runs_when_no_loop(self) -> None:
+    def test_submit_and_forget_async_publish(self) -> None:
         """
-        Test that sync emit() dispatches the event when called outside any
-        running event loop.
+        Test that emitting an event submits the publish coroutine to the async
+        loop without awaiting it, allowing the emit call to return immediately.
         """
         bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe_all(received.append)
+
+        class _RecordingTransport(BaseBusTransport):
+            transport_type: Literal["recording"] = "recording"
+            published_events: list[BaseEvent] = Field(default_factory=list)
+            event_published: ClassVar[threading.Event] = threading.Event()
+
+            async def publish(self, event: BaseEvent) -> None:
+                self.published_events.append(event)
+                self.event_published.set()
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        transport = _RecordingTransport()
+        bus.add_transport(transport)
 
         event = _TestEvent()
-        bus.emit(event)  # no running loop — falls back to asyncio.run()
+        bus.emit(event)
 
-        assert len(received) == 1
-
-    def test_sync_emit_dispatches_immediately_on_running_loop(self) -> None:
-        """
-        Test that sync emit() dispatches the event immediately even when called
-        from inside a running event loop, without requiring a yield point.
-        """
-        bus = HorusEventBus()
-        received: list[BaseEvent] = []
-        bus.subscribe_all(received.append)
-
-        async def _runner() -> None:
-            event = _TestEvent()
-            bus.emit(event)
-            # Event must already be dispatched — no yield needed.
-            assert len(received) == 1
-
-        asyncio.run(_runner())
-        assert len(received) == 1
+        # Wait deterministically for the event to be published.
+        published = transport.event_published.wait(timeout=1.0)
+        assert published
+        assert len(transport.published_events) == 1
+        assert transport.published_events[0] is event

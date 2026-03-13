@@ -19,14 +19,13 @@
 Test module for the built-in LogsSubscriber.
 """
 
-import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from horus_builtin.event.log_subscriber import LogsSubscriber
-from horus_runtime.events.bus import HorusEventBus
+from horus_runtime.event.bus import HorusEventBus
 from tests.unit.event.common import _TestEvent
 
 
@@ -140,23 +139,10 @@ class TestLogsSubscriber:
 
     def test_register_on_subscribes_to_all_events(self) -> None:
         """
-        Test that register_on() attaches ahandle as a wildcard handler on
-        the bus.
+        Test that subscribing LogsSubscriber to the bus adds it to the
+        wildcard handlers the bus.
         """
         sub = LogsSubscriber()
         bus = HorusEventBus()
-        sub.register_on(bus)
-        assert sub.ahandle in bus._wildcard_handlers
-
-    def test_ahandle_delegates_to_handle(self) -> None:
-        """
-        Test that ahandle() falls through to handle(), triggering opt().log().
-        """
-        sub = LogsSubscriber()
-        event = _TestEvent(message="delegated")
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
-            asyncio.run(sub.ahandle(event))
-            mock_log.opt.assert_called_once_with(colors=True)
-            mock_log.opt.return_value.log.assert_called_once()
+        bus.subscribe(sub)
+        assert sub in bus._wildcard_handlers

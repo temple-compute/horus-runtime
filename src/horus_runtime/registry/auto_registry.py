@@ -25,11 +25,10 @@ new type to a central registry.
 from abc import ABC
 from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
-from typing_extensions import Self
 
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger

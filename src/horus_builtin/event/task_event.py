@@ -19,9 +19,9 @@
 HorusTaskEvent. Emitted when a HorusTask is executed.
 """
 
-from typing import ClassVar, Literal
+from typing import Literal
 
-from horus_runtime.events.base import BaseEvent
+from horus_runtime.event.base import BaseEvent
 
 
 class HorusTaskEvent(BaseEvent):
@@ -29,7 +29,6 @@ class HorusTaskEvent(BaseEvent):
     Event emitted when a HorusTask is executed.
     """
 
-    add_to_registry: ClassVar[bool] = True
     event_type: Literal["horus_task_event"] = "horus_task_event"
 
     task_id: str | None
