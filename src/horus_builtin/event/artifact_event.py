@@ -15,26 +15,21 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Entrypoint for horus-runtime.
+ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
 """
 
-from horus_runtime.context import HorusContext
+from typing import ClassVar, Literal
+
+from horus_runtime.event.base import BaseEvent
 
 
-def main() -> None:
+class ArtifactEvent(BaseEvent):
     """
-    Main function for horus-runtime.
+    Event emitted when an artifact is created, updated, or deleted.
     """
-    # Boot the runtime to initialize logging, load plugins,
-    # and set up global context
-    ctx = HorusContext.boot()
 
-    # Finish the application lifecycle.
-    ctx.shutdown()
+    add_to_registry: ClassVar[bool] = True
+    event_type: Literal["artifact_event"] = "artifact_event"
 
-
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()
+    artifact_id: str

@@ -31,7 +31,9 @@ responsibility when writing the workflow YAML file.
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
+
+from pydantic import model_validator
 
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -59,9 +61,19 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Ordered mapping of task names to task instances.
     """
 
+    @model_validator(mode="after")
+    def inject_task_ids(self) -> Self:
+        """
+        After workflow initialization, inject task IDs to each task.
+        """
+        for tid, task in self.tasks.items():
+            task.task_id = tid
+
+        return self
+
     @classmethod
     @abstractmethod
-    def from_yaml(cls, path: str | Path) -> "BaseWorkflow":
+    def from_yaml(cls, path: str | Path) -> Self:
         """
         Load a workflow from a YAML file.
 

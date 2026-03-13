@@ -22,13 +22,39 @@ horus-runtime.
 """
 
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from horus_runtime.event.base import BaseEvent
+from horus_runtime.event.bus import HorusEventBus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
+
+
+class HorusContextEvent(BaseEvent):
+    """
+    Base event class for horus-runtime context events.
+    """
+
+    event_type: str = "horus_context_event"
+
+
+class HorusRuntimeReadyEvent(HorusContextEvent):
+    """
+    Event emitted when the horus runtime is ready.
+    """
+
+    event_type: str = "horus_runtime_ready"
+
+
+class HorusRuntimeWillShutdownEvent(HorusContextEvent):
+    """
+    Event emitted when the horus runtime is about to shut down.
+    """
+
+    event_type: str = "horus_runtime_will_shutdown"
 
 
 @dataclass(frozen=True)
@@ -38,6 +64,8 @@ class HorusContext:
     and global context management.
     """
 
+    bus: HorusEventBus = field(default_factory=HorusEventBus)
+
     @staticmethod
     def get_context() -> "HorusContext":
         """
@@ -46,15 +74,45 @@ class HorusContext:
         return _runtime_ctx.get()
 
     @staticmethod
-    def boot() -> None:
+    def boot() -> "HorusContext":
         """
         Initialize the runtime, load plugins, and set up global context.
         Must be called before using any other horus-runtime features.
         """
         horus_logger.info(_("Horus Runtime is starting..."))
+        ctx = HorusContext()
 
         # Register horus-plugins
         AutoRegistry.init_registry()
 
+        # Setup the bus
+        ctx.bus.start()
+
         # Set the context
-        _runtime_ctx.set(HorusContext())
+        _runtime_ctx.set(ctx)
+
+        # Emit a ready event so plugins can react to the runtime being fully
+        # initialized
+        ctx.bus.emit(
+            HorusRuntimeReadyEvent(
+                message=_("Horus Runtime ready!"),
+            )
+        )
+
+        return ctx
+
+    def shutdown(self) -> None:
+        """
+        Shutdown the runtime gracefully, cleaning up resources and
+        stopping transports.
+        """
+        # Emit a shutdown event before stopping transports so subscribers can
+        # react
+        self.bus.emit(
+            HorusRuntimeWillShutdownEvent(
+                message=_("Horus Runtime is shutting down..."),
+            )
+        )
+
+        # Stop the event bus and all transports
+        self.bus.stop()

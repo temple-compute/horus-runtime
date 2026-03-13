@@ -21,9 +21,13 @@ Default Horus task implementation.
 
 from typing import Literal
 
+from horus_builtin.event.task_event import HorusTaskEvent
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.i18n import tr as _
+from horus_runtime.utils.timing import timed
 
 
 class HorusTask(BaseTask):
@@ -38,6 +42,17 @@ class HorusTask(BaseTask):
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.
         """
+        ctx = HorusContext.get_context()
+
+        ctx.bus.emit(
+            HorusTaskEvent(
+                task_id=self.task_id,
+                task_name=self.name,
+                message=_("Task %(task_name)s started.")
+                % {"task_name": self.name},
+            )
+        )
+
         self.runs += 1
 
         # Gather inputs
@@ -51,7 +66,26 @@ class HorusTask(BaseTask):
                 )
 
         # Execute the command using the executor
-        return_code = self.executor.execute(self)
+        with timed() as get_elapsed:
+            return_code = self.executor.execute(self)
+
+        # Get the elapsed time and emit the completion event
+        elapsed = get_elapsed()
+
+        ctx.bus.emit(
+            HorusTaskEvent(
+                task_id=self.task_id,
+                task_name=self.name,
+                data={
+                    "return_code": return_code,
+                    "elapsed_time": elapsed,
+                },
+                message=_(
+                    "Task %(task_name)s completed in %(elapsed).2f seconds."
+                )
+                % {"task_name": self.name, "elapsed": elapsed},
+            )
+        )
 
         if return_code != 0:
             raise TaskExecutionError(
@@ -79,6 +113,17 @@ class HorusTask(BaseTask):
         Reset the task by deleting all output artifacts. This allows the task
         to be re-run from scratch.
         """
+        ctx = HorusContext.get_context()
+
+        ctx.bus.emit(
+            HorusTaskEvent(
+                message=_("Resetting task %(task_name)s.")
+                % {"task_name": self.name},
+                task_id=self.task_id,
+                task_name=self.name,
+            )
+        )
+
         for artifact in self.outputs.values():
             artifact.delete()
 

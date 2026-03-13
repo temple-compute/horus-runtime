@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 
-class _HorusLocales(str, Enum):
+class _HorusLocales(Enum):
     """
     Supported locales for horus-runtime.
     """
@@ -116,7 +116,7 @@ class _HorusTranslationManager:
             translation = gettext.translation(
                 "horus_runtime",
                 localedir=str(locale_dir),
-                languages=[lang],
+                languages=[lang.value],
                 fallback=True,
             )
             # Store the translation object for module-level access

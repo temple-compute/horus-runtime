@@ -76,3 +76,4 @@ class FolderArtifact(LocalPathArtifactBase):
         """
         if self.exists():
             shutil.rmtree(self.path)
+            super().delete()  # Emit the deletion event

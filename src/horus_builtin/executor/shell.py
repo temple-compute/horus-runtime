@@ -58,5 +58,9 @@ class ShellExecutor(BaseExecutor):
         # maximum flexibility, assuming the user is executing commands on
         # their own machine.
         return subprocess.run(
-            prepared_command, shell=True, check=False, text=True
+            prepared_command,
+            shell=True,
+            check=False,
+            text=True,
+            capture_output=True,
         ).returncode

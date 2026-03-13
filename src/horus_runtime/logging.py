@@ -21,14 +21,22 @@ Loguru setup for horus-runtime.
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from loguru import Logger
 
+from pydantic import BeforeValidator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+HORUS_LOG_ENV_PREFIX = "HORUS_LOG_"
+
+LoggerLevel = Annotated[
+    Literal["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v),
+]
 
 
 class HorusLoggerSettings(BaseSettings):
@@ -37,19 +45,17 @@ class HorusLoggerSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="HORUS_LOGGER_",
+        env_prefix=HORUS_LOG_ENV_PREFIX,
     )
 
     format: str = (
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level: <8}</level> | "
+        "<level>{level:<8}</level> | "
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
         "<level>{message}</level>"
     )
 
-    level: Literal[
-        "TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
-    ] = "INFO"
+    level: LoggerLevel = "INFO"
     log_directory: Path = Path("logs")
     rotation: str = "10 MB"
     retention: str = "7 days"

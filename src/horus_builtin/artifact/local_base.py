@@ -21,12 +21,13 @@ Base definition for local file or folder artifacts in the Horus Runtime.
 
 import hashlib
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 from urllib.parse import urlparse
 
 from pydantic import model_validator
-from typing_extensions import Self
 
+from horus_builtin.event.artifact_event import ArtifactEvent
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.i18n import tr as _
 
@@ -123,3 +124,18 @@ class LocalPathArtifactBase(BaseArtifact):
                 sha256.update(chunk)
 
         return sha256.digest()
+
+    def delete(self) -> None:
+        """
+        Emit the deletion event. The actual deletion logic is implemented in
+        the specific artifact.
+        """
+        ctx = HorusContext.get_context()
+
+        ctx.bus.emit(
+            ArtifactEvent(
+                message=_("Deleted artifact at %(path)s.")
+                % {"path": self.path},
+                artifact_id=str(self.id),
+            )
+        )

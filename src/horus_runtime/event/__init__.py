@@ -15,26 +15,3 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
-"""
-Entrypoint for horus-runtime.
-"""
-
-from horus_runtime.context import HorusContext
-
-
-def main() -> None:
-    """
-    Main function for horus-runtime.
-    """
-    # Boot the runtime to initialize logging, load plugins,
-    # and set up global context
-    ctx = HorusContext.boot()
-
-    # Finish the application lifecycle.
-    ctx.shutdown()
-
-
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()

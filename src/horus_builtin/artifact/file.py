@@ -49,3 +49,4 @@ class FileArtifact(LocalPathArtifactBase):
         """
         if self.exists():
             self.path.unlink()
+            super().delete()  # Emit the deletion event

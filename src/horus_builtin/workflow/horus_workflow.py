@@ -25,8 +25,10 @@ from typing import Literal
 
 import yaml
 
+from horus_builtin.event.task_event import HorusTaskEvent
+from horus_runtime.context import HorusContext
 from horus_runtime.core.workflow.base import BaseWorkflow
-from horus_runtime.logging import horus_logger
+from horus_runtime.i18n import tr as _
 
 
 class HorusWorkflow(BaseWorkflow):
@@ -56,19 +58,24 @@ class HorusWorkflow(BaseWorkflow):
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
         """
+        ctx = HorusContext.get_context()
+
         for task in self.tasks.values():
             if task.is_complete():
-                horus_logger.info(
-                    f"[{self.name}] Skipping '{task.name}': "
-                    "all outputs already exist."
+                ctx.bus.emit(
+                    HorusTaskEvent(
+                        message=_(
+                            "Skipping task %(task_name)s: all output "
+                            "artifacts exist"
+                        )
+                        % {"task_name": task.name},
+                        task_id=task.task_id,
+                        task_name=task.name,
+                    )
                 )
                 continue
 
-            horus_logger.info(f"[{self.name}] Running '{task.name}'...")
-
             task.run()
-
-            horus_logger.info(f"[{self.name}] '{task.name}' completed.")
 
     def reset(self) -> None:
         """
@@ -76,5 +83,4 @@ class HorusWorkflow(BaseWorkflow):
         workflow. This allows the workflow to be re-run from scratch.
         """
         for task in self.tasks.values():
-            horus_logger.info(f"[{self.name}] Resetting task '{task.name}'...")
             task.reset()

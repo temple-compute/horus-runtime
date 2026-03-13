@@ -53,9 +53,9 @@ class TestHorusLoggerSettings:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """
-        Test that HORUS_LOGGER_ env prefix correctly overrides log level.
+        Test that HORUS_LOG_ env prefix correctly overrides log level.
         """
-        monkeypatch.setenv("HORUS_LOGGER_level", "DEBUG")
+        monkeypatch.setenv("HORUS_LOG_level", "DEBUG")
         config = HorusLoggerSettings()
         assert config.level == "DEBUG"
 
