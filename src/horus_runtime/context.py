@@ -41,6 +41,22 @@ class HorusContextEvent(BaseEvent):
     event_type: str = "horus_context_event"
 
 
+class HorusRuntimeReadyEvent(HorusContextEvent):
+    """
+    Event emitted when the horus runtime is ready.
+    """
+
+    event_type: str = "horus_runtime_ready"
+
+
+class HorusRuntimeWillShutdownEvent(HorusContextEvent):
+    """
+    Event emitted when the horus runtime is about to shut down.
+    """
+
+    event_type: str = "horus_runtime_will_shutdown"
+
+
 @dataclass(frozen=True)
 class HorusContext:
     """
@@ -75,9 +91,10 @@ class HorusContext:
         # Set the context
         _runtime_ctx.set(ctx)
 
-        # Send a test event to see if loguru event handler is working
+        # Emit a ready event so plugins can react to the runtime being fully
+        # initialized
         ctx.bus.emit(
-            HorusContextEvent(
+            HorusRuntimeReadyEvent(
                 message=_("Horus Runtime ready!"),
             )
         )
@@ -92,7 +109,7 @@ class HorusContext:
         # Emit a shutdown event before stopping transports so subscribers can
         # react
         self.bus.emit(
-            HorusContextEvent(
+            HorusRuntimeWillShutdownEvent(
                 message=_("Horus Runtime is shutting down..."),
             )
         )

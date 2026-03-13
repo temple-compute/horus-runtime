@@ -25,6 +25,7 @@ the entire runtime to be async.
 import asyncio
 import threading
 from collections.abc import Coroutine
+from concurrent.futures import Future
 
 
 class BusAsyncLoopThread:
@@ -50,11 +51,11 @@ class BusAsyncLoopThread:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def submit(self, coro: Coroutine[None, None, None]) -> None:
+    def submit(self, coro: Coroutine[None, None, None]) -> Future[None]:
         """
         Submit a coroutine to be run on the event loop thread.
         """
-        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def stop(self) -> None:
         """

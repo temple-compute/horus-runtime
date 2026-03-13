@@ -134,7 +134,7 @@ class LocalPathArtifactBase(BaseArtifact):
 
         ctx.bus.emit(
             ArtifactEvent(
-                message=_("Deleting artifact at %(path)s.")
+                message=_("Deleted artifact at %(path)s.")
                 % {"path": self.path},
                 artifact_id=str(self.id),
             )

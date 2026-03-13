@@ -31,5 +31,5 @@ class HorusTaskEvent(BaseEvent):
 
     event_type: Literal["horus_task_event"] = "horus_task_event"
 
-    task_id: str | None
+    task_id: str | None = None
     task_name: str

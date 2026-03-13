@@ -74,6 +74,6 @@ class FolderArtifact(LocalPathArtifactBase):
         Deletes the artifact from its location by deleting the folder at the
         specified path.
         """
-        super().delete()  # Emit the deletion event
         if self.exists():
             shutil.rmtree(self.path)
+            super().delete()  # Emit the deletion event

@@ -20,14 +20,16 @@
 Event bus base for horus-runtime.
 """
 
-import asyncio
 from collections import defaultdict
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 
 from horus_runtime.event.async_loop import BusAsyncLoopThread
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.event.subscriber import BaseEventSubscriber
 from horus_runtime.event.transport import BaseBusTransport
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 
 
 @dataclass
@@ -60,6 +62,11 @@ class HorusEventBus:
     Handlers that receive all events regardless of type.
     """
 
+    _started: bool = False
+    """
+    Whether the event bus has been started. Used to prevent multiple starts.
+    """
+
     def add_transport(self, transport: BaseBusTransport) -> None:
         """
         Add a transport mechanism to the event bus.
@@ -72,9 +79,23 @@ class HorusEventBus:
         If no events are declared, subscribes to all events.
         """
         if not subscriber.events:
+            horus_logger.debug(
+                _("Subscribing handler %(subscriber)s to all events")
+                % {"subscriber": subscriber.__class__.__name__}
+            )
             self._wildcard_handlers.append(subscriber)
         else:
             for event_type in subscriber.events:
+                horus_logger.debug(
+                    _(
+                        "Subscribing handler %(subscriber)s to event "
+                        "type %(event_type)s"
+                    )
+                    % {
+                        "subscriber": subscriber.__class__.__name__,
+                        "event_type": event_type.__name__,
+                    }
+                )
                 self._handlers[event_type].append(subscriber)
 
     def emit(self, event: BaseEvent) -> None:
@@ -97,27 +118,73 @@ class HorusEventBus:
         for handler in self._wildcard_handlers:
             handler.handle(event)
 
-    def stop(self) -> None:
-        """
-        Stop the event bus and its transport.
-        """
-
-        async def _stop_transports() -> None:
-            await asyncio.gather(*(t.stop() for t in self._transports))
-
-        asyncio.run(_stop_transports())
-
     def start(self) -> None:
         """
         Initializes transport and subscribers from the registry.
         """
+        if self._started:
+            horus_logger.warning(_("Event bus is already started."))
+            return
+
+        horus_logger.debug(
+            _("Initializing transport and subscribers from the registry.")
+        )
+
         # Register transport buses
+        transport_futures: list[Future[None]] = []
         for transport_cls in BaseBusTransport.registry.values():
             transport = transport_cls()
+
+            # Start the transport
+            horus_logger.debug(
+                _("Starting transport: %(transport_type)s")
+                % {"transport_type": transport.transport_type}
+            )
+            future = self._event_loop_thread.submit(transport.start())
+            transport_futures.append(future)
             self.add_transport(transport)
+
+        # Wait for all transports to start
+        for future in transport_futures:
+            future.result()
 
         # Register event subscribers on the bus
         for subscriber_cls in BaseEventSubscriber.registry.values():
             subscriber = subscriber_cls()
+
+            horus_logger.debug(
+                _("Subscribing handler: %(subscriber_cls)s")
+                % {"subscriber_cls": subscriber_cls.__name__}
+            )
+
             subscriber.setup()
             self.subscribe(subscriber)
+
+        # Flag the bus as started to prevent multiple starts
+        self._started = True
+
+    def stop(self) -> None:
+        """
+        Stop the event bus and its transport.
+        """
+        # Schedule transport shutdown on the event loop thread
+        for transport in self._transports:
+            horus_logger.debug(
+                _("Stopping transport: %(transport_type)s")
+                % {"transport_type": transport.transport_type}
+            )
+
+            future = self._event_loop_thread.submit(transport.stop())
+            try:
+                future.result()  # Wait for the transport to stop
+            except Exception as e:
+                horus_logger.error(
+                    _("Error stopping transport %(transport_type)s: %(error)s")
+                    % {
+                        "transport_type": transport.transport_type,
+                        "error": str(e),
+                    }
+                )
+
+        # Stop the event loop thread after all transports have stopped
+        self._event_loop_thread.stop()

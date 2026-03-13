@@ -47,6 +47,6 @@ class FileArtifact(LocalPathArtifactBase):
         Deletes the artifact from its location by deleting the file at the
         specified path.
         """
-        super().delete()  # Emit the deletion event
         if self.exists():
             self.path.unlink()
+            super().delete()  # Emit the deletion event

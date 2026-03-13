@@ -54,6 +54,8 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     Base event class. All Horus events should inherit from this class.
     """
 
+    add_to_registry: ClassVar[bool] = False
+
     event_id: uuid.UUID = Field(
         default_factory=uuid.uuid4,
     )

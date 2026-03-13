@@ -27,13 +27,31 @@ from contextlib import contextmanager
 @contextmanager
 def timed() -> Generator[Callable[[], float], None, None]:
     """
-    Context manager for timing a block of code. Yields a function that returns
-    the elapsed time in seconds when called.
+    Context manager for timing a block of code.
+
+    Yields a function that returns the elapsed time in seconds when called.
+    You can call it multiple times mid-block to see running time.
+
+    After the block ends, the elapsed time is frozen.
 
     Usage:
-    with timed() as get_elapsed:
-        # some code to time
-    elapsed_time = get_elapsed()
+    ```python
+    with timed() as get_time:
+        time.sleep(0.5)
+        print(get_time()) # ~0.5s
+        time.sleep(0.3)
+        print(get_time()) # ~0.8s
+
+    print(get_time()) # ~0.8s, frozen after block ends
+    ```
     """
     start = time.perf_counter()
-    yield lambda: time.perf_counter() - start
+    elapsed: float | None = None
+
+    def get_elapsed() -> float:
+        return elapsed if elapsed is not None else time.perf_counter() - start
+
+    try:
+        yield get_elapsed
+    finally:
+        elapsed = time.perf_counter() - start
