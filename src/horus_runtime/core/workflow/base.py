@@ -35,7 +35,10 @@ from typing import Any, ClassVar, Self
 
 from pydantic import model_validator
 
+from horus_builtin.input.cli import CLIInput
+from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.input.base import BaseInput
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -56,9 +59,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Human-readable name for this workflow.
     """
 
-    tasks: dict[str, BaseTask]
+    tasks: dict[str, BaseTask[BaseRuntime]]
     """
     Ordered mapping of task names to task instances.
+    """
+
+    input: BaseInput = CLIInput()
+    """
+    The input implementation to use for this workflow.
+    This is required to support interactive workflows.
     """
 
     @model_validator(mode="after")
@@ -85,7 +94,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
 
     @abstractmethod
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Execute the workflow.
         """

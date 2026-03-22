@@ -121,7 +121,7 @@ class TestWorkflowRun:
     Tests for the run method of the Workflow class.
     """
 
-    def test_run_executes_task_without_outputs(
+    async def test_run_executes_task_without_outputs(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
         """
@@ -146,11 +146,11 @@ class TestWorkflowRun:
         wf = HorusWorkflow.from_yaml(wf_file)
 
         with patch.object(HorusTask, "run") as mock_run:
-            wf.run()
+            await wf.run()
 
         mock_run.assert_called_once()
 
-    def test_run_skips_task_when_all_outputs_exist(
+    async def test_run_skips_task_when_all_outputs_exist(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:
         """
@@ -180,12 +180,12 @@ class TestWorkflowRun:
             patch.object(FileArtifact, "exists", return_value=True),
             patch.object(HorusTask, "run") as mock_run,
         ):
-            wf.run()
+            await wf.run()
 
         mock_run.assert_not_called()
 
     @patch("subprocess.run")
-    def test_run_executes_tasks_in_order(
+    async def test_run_executes_tasks_in_order(
         self, mock_run: Mock, make_task: MakeTaskType
     ) -> None:
         """
@@ -195,7 +195,7 @@ class TestWorkflowRun:
         task_a = make_task(cmd="echo A")
         task_b = make_task(cmd="echo B")
         wf = HorusWorkflow(name="order_test", tasks={"a": task_a, "b": task_b})
-        wf.run()
+        await wf.run()
 
         # Two tasks, two calls
         function_calls = 2
@@ -205,7 +205,9 @@ class TestWorkflowRun:
         calls = [call.args[0] for call in mock_run.call_args_list]
         assert calls == ["echo A", "echo B"]
 
-    def test_run_stops_on_first_failure(self, make_task: MakeTaskType) -> None:
+    async def test_run_stops_on_first_failure(
+        self, make_task: MakeTaskType
+    ) -> None:
         """
         If a task fails, the workflow should stop and not
         execute subsequent tasks.
@@ -214,8 +216,8 @@ class TestWorkflowRun:
         class TaskWithFailure(HorusTask):
             add_to_registry: ClassVar[bool] = False
 
-            def run(self) -> None:
-                super().run()  # Here it calls +1 run count
+            async def run(self) -> None:
+                await super().run()  # Here it calls +1 run count
                 raise TaskExecutionError("fail")
 
         task_a = make_task(cmd="echo A", task_class=TaskWithFailure)
@@ -225,12 +227,12 @@ class TestWorkflowRun:
         with pytest.raises(TaskExecutionError):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = Mock(returncode=0)
-                wf.run()
+                await wf.run()
 
         assert task_a.runs == 1
         assert task_b.runs == 0
 
-    def test_run_empty_workflow(self) -> None:
+    async def test_run_empty_workflow(self) -> None:
         """
         Test that running an empty workflow completes without error.
         """
@@ -238,4 +240,4 @@ class TestWorkflowRun:
         wf = HorusWorkflow(name="empty", tasks={})
 
         # Should complete without error
-        wf.run()
+        await wf.run()

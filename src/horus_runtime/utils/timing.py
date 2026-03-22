@@ -25,7 +25,7 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def timed() -> Generator[Callable[[], float], None, None]:
+def timed() -> Generator[Callable[[], float]]:
     """
     Context manager for timing a block of code.
 

@@ -15,44 +15,36 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Base event subscriber class for horus-runtime.
+Defines the BaseInput class, which represents an interactive input that can be
+used in Horus workflows to ask users for information during execution.
 """
 
 from abc import abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
-EventFilterType = tuple[type[BaseEvent], ...]
 
+class BaseInput(AutoRegistry, entry_point="input"):
+    """
+    Base class for workflow interactive inputs.
 
-class BaseEventSubscriber[E: BaseEvent = BaseEvent](
-    AutoRegistry, entry_point="subscriber"
-):
-    """
-    Base class for event subscribers.
+    The implementation must block until a value is available. horus_builtin
+    provides a basic CLI input implementation.
     """
 
-    registry_key: ClassVar[str] = "subscriber_type"
-
-    events: ClassVar[EventFilterType] = (BaseEvent,)
-    """
-    Which event types this subscriber is interested in.
-    If None, the subscriber will receive all events.
-    """
+    registry_key: ClassVar[str] = "kind"
+    kind: Any = ...
 
     @abstractmethod
-    def setup(self) -> None:
+    def ask(
+        self,
+        prompt: str,
+        *,
+        default: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
         """
-        Perform any setup necessary for this subscriber.
-        Called once on startup.
-        """
-
-    @abstractmethod
-    def handle(self, event: E) -> None:
-        """
-        Handle an incoming event. Override this for sync handling.
+        Ask the user for input with the given prompt and return their response.
         """

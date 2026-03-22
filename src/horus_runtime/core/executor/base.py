@@ -26,13 +26,18 @@ a command or running it inside a SLURM job, either remote or locally.
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
+RuntimeFilterType = tuple[type[BaseRuntime], ...]
 
-class BaseExecutor(AutoRegistry, entry_point="executor"):
+
+class BaseExecutor[R: BaseRuntime = BaseRuntime](
+    AutoRegistry, entry_point="executor"
+):
     """
     The base executor represents the abstract concept of an executor in the
     Horus runtime. An executor is on charge of actually running the task in the
@@ -46,8 +51,14 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     The 'kind' field is used to identify the specific type of executor.
     """
 
+    runtimes: ClassVar[RuntimeFilterType] = (BaseRuntime,)
+    """
+    Which runtime types this executor can handle. By default, an executor can
+    handle any runtime type.
+    """
+
     @abstractmethod
-    def execute(self, task: "BaseTask") -> int:
+    def execute(self, task: "BaseTask[R]") -> int:
         """
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific

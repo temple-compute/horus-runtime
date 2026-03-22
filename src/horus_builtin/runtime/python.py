@@ -16,9 +16,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Command implementation for the runtime.
+Python runtime implementation for horus-runtime.
 """
 
+import sys
 from typing import TYPE_CHECKING, Literal
 
 from horus_runtime.core.runtime.base import BaseRuntime
@@ -27,39 +28,40 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class CommandRuntime(BaseRuntime):
+class PythonRuntime(BaseRuntime):
     """
-    The CommandRuntime represents a runtime that executes a command directly in
-    the local environment. This is the most basic type of runtime, and simply
-    runs the specified command as is.
+    Python runtime implementation. Executes a python code snippet.
     """
 
-    kind: Literal["command"] = "command"
+    kind: Literal["python"] = "python"
 
-    command: str
+    code: str
     """
-    The command to execute.
-    """
-
-    formatted_command: str = ""
-    """
-    The formatted command after processing any placeholders.
+    The python code to execute.
     """
 
-    def _setup_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
+    formatted_code: str = ""
+    """
+    The formatted python code after processing any placeholders.
+    """
+
+    @property
+    def version(self) -> str:
         """
-        Nothing to be done for the CommandRuntime.
+        Returns the current python version.
         """
-        return self.command
+        return sys.version
 
-    def format_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
+    def _setup_runtime(self, task: "BaseTask[PythonRuntime]") -> str:
         """
-        For the CommandRuntime, formatting the runtime simply involves
-        returning the command as is, since there are no placeholders to
+        Nothing to be done for the PythonRuntime.
+        """
+        return self.code
+
+    def format_runtime(self, task: "BaseTask[PythonRuntime]") -> str:
+        """
+        For the PythonRuntime, formatting the runtime simply involves
+        returning the code as is, since there are no placeholders to
         replace.
         """
-        fmt = super().format_runtime(task)
-
-        self.formatted_command = fmt
-
-        return fmt
+        return self.code

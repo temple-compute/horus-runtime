@@ -43,7 +43,7 @@ class ConcreteTestTask(BaseTask):
 
     kind: Literal["test_task"] = "test_task"
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Test implementation of run method.
         """
@@ -171,7 +171,7 @@ class TestBaseTaskValidation:
                 def reset(self) -> None:
                     pass
 
-                def run(self) -> None:
+                async def run(self) -> None:
                     pass
 
     def test_model_validation_preserves_type_safety(self) -> None:

@@ -154,7 +154,7 @@ class TestBaseExecutor:
 
         # Check parameter types
         cmd_param = sig.parameters["task"]
-        assert cmd_param.annotation == "BaseTask"
+        assert cmd_param.annotation == "BaseTask[R]"  # Include generic
 
         # Check return type
         assert sig.return_annotation is int

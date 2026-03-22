@@ -41,7 +41,7 @@ class ConcreteTestRuntime(BaseRuntime):
 
     kind: Literal["test_runtime"] = "test_runtime"
 
-    def _setup_runtime(self, task: "BaseTask") -> str:
+    def _setup_runtime(self, task: "BaseTask[ConcreteTestRuntime]") -> str:
         return "Runtime setup complete"
 
 
@@ -98,7 +98,7 @@ class TestBaseRuntime:
 
         # Check parameter types
         task_param = sig.parameters["task"]
-        assert task_param.annotation == "BaseTask"
+        assert task_param.annotation == "BaseTask[Self]"
 
         # Check return type
         assert sig.return_annotation is str
@@ -122,7 +122,9 @@ class TestBaseRuntimeValidation:
                 Invalid runtime that does not set 'kind' field.
                 """
 
-                def _setup_runtime(self, task: "BaseTask") -> str:
+                def _setup_runtime(
+                    self, task: "BaseTask[InvalidRuntime]"
+                ) -> str:
                     return ""
 
     def test_model_validation_preserves_type_safety(self) -> None:

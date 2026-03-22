@@ -21,9 +21,10 @@ task locally in the Horus runtime.
 """
 
 import subprocess
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
-from horus_runtime.core.executor.base import BaseExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -35,6 +36,8 @@ class ShellExecutor(BaseExecutor):
     """
 
     kind: Literal["shell"] = "shell"
+
+    runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 
     def execute(self, task: "BaseTask") -> int:
         """

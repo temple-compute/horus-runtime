@@ -180,7 +180,7 @@ class TestHorusTaskExecution:
     Test cases for HorusTask execution functionality.
     """
 
-    def test_horus_task_run_checks_input_artifacts_exist(self) -> None:
+    async def test_horus_task_run_checks_input_artifacts_exist(self) -> None:
         """
         Test that HorusTask.run() checks if input artifacts exist.
         """
@@ -197,9 +197,9 @@ class TestHorusTaskExecution:
         )
 
         with pytest.raises(ArtifactDoesNotExistError):
-            task.run()
+            await task.run()
 
-    def test_horus_task_run_executes_via_executor(self) -> None:
+    async def test_horus_task_run_executes_via_executor(self) -> None:
         """
         Test that HorusTask.run() executes the task via the executor.
         """
@@ -215,12 +215,14 @@ class TestHorusTaskExecution:
             mock_run.return_value.returncode = 0
 
             # Should not raise an exception
-            task.run()
+            await task.run()
 
             # Verify that subprocess.run was called
             mock_run.assert_called_once()
 
-    def test_horus_task_run_raises_error_on_execution_failure(self) -> None:
+    async def test_horus_task_run_raises_error_on_execution_failure(
+        self,
+    ) -> None:
         """
         Test that HorusTask.run() raises TaskExecutionError when executor
         returns non-zero.
@@ -236,9 +238,9 @@ class TestHorusTaskExecution:
             mock_run.return_value.returncode = 1  # Non-zero return code
 
             with pytest.raises(TaskExecutionError):
-                task.run()
+                await task.run()
 
-    def test_horus_task_run_with_no_inputs(self) -> None:
+    async def test_horus_task_run_with_no_inputs(self) -> None:
         """
         Test that HorusTask.run() works correctly with no inputs.
         """
@@ -254,12 +256,14 @@ class TestHorusTaskExecution:
             mock_run.return_value.returncode = 0
 
             # Should not raise an exception
-            task.run()
+            await task.run()
 
             # Verify that subprocess.run was called
             mock_run.assert_called_once()
 
-    def test_horus_task_run_with_multiple_inputs_one_missing(self) -> None:
+    async def test_horus_task_run_with_multiple_inputs_one_missing(
+        self,
+    ) -> None:
         """
         Test that HorusTask.run() stops on first missing artifact.
         """
@@ -280,9 +284,9 @@ class TestHorusTaskExecution:
 
         # Should raise error when processing the inputs
         with pytest.raises(ArtifactDoesNotExistError):
-            task.run()
+            await task.run()
 
-    def test_horus_task_increases_runs_count(
+    async def test_horus_task_increases_runs_count(
         self, make_task: MakeTaskType
     ) -> None:
         """
@@ -296,11 +300,11 @@ class TestHorusTaskExecution:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
 
-            task.run()
+            await task.run()
 
             assert task.runs == initial_runs + 1
 
-    def test_horus_task_resets_runs_on_reset(
+    async def test_horus_task_resets_runs_on_reset(
         self, make_task: MakeTaskType
     ) -> None:
         """
@@ -312,7 +316,7 @@ class TestHorusTaskExecution:
             mock_run.return_value.returncode = 0
 
             # Simulate running the task a few times
-            task.run()
+            await task.run()
 
         assert task.runs == 1
 

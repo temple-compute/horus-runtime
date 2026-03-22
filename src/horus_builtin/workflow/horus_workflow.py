@@ -53,7 +53,7 @@ class HorusWorkflow(BaseWorkflow):
         with Path(path).open("r", encoding="utf-8") as fh:
             return cls.model_validate(yaml.safe_load(fh))
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
@@ -75,7 +75,7 @@ class HorusWorkflow(BaseWorkflow):
                 )
                 continue
 
-            task.run()
+            await task.run()
 
     def reset(self) -> None:
         """

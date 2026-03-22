@@ -37,7 +37,7 @@ class HorusTask(BaseTask):
 
     kind: Literal["horus_task"] = "horus_task"
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.

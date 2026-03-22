@@ -22,12 +22,27 @@ functionality for executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
+
+T = TypeVar("T", bound="BaseRuntime")
+
+
+# Create a namespace object to allow for attribute-style access to task
+# variables and inputs in the command formatting. This allows users to
+# write commands like "echo {task.input1.path}" in the workflow yaml
+class _TaskNamespace:
+    def __init__(self, task: "BaseTask[T]"):
+        for name, value in vars(task).items():
+            setattr(self, name, value)
+        for name, artifact in task.inputs.items():
+            setattr(self, name, artifact)
+        for name, artifact in task.outputs.items():
+            setattr(self, name, artifact)
 
 
 class BaseRuntime(AutoRegistry, entry_point="runtime"):
@@ -44,7 +59,7 @@ class BaseRuntime(AutoRegistry, entry_point="runtime"):
     """
 
     @abstractmethod
-    def _setup_runtime(self, task: "BaseTask") -> str:
+    def _setup_runtime(self, task: "BaseTask[Self]") -> str:
         """
         Prepare the runtime to execute. This method should be implemented by
         subclasses to define the specific logic for preparing the command/task
@@ -54,7 +69,7 @@ class BaseRuntime(AutoRegistry, entry_point="runtime"):
             str: The prepared runtime instance.
         """
 
-    def format_runtime(self, task: "BaseTask") -> str:
+    def format_runtime(self, task: "BaseTask[Self]") -> str:
         """
         Format the runtime's command or context by substituting any variables
         using the task's variables and inputs. This method can be overridden by
@@ -65,18 +80,6 @@ class BaseRuntime(AutoRegistry, entry_point="runtime"):
             str: The formatted command or context ready for execution.
         """
         cmd = self._setup_runtime(task)
-
-        # Create a namespace object to allow for attribute-style access to task
-        # variables and inputs in the command formatting. This allows users to
-        # write commands like "echo {task.input1.path}" in the workflow yaml
-        class _TaskNamespace:
-            def __init__(self, task: "BaseTask"):
-                for name, value in vars(task).items():
-                    setattr(self, name, value)
-                for name, artifact in task.inputs.items():
-                    setattr(self, name, artifact)
-                for name, artifact in task.outputs.items():
-                    setattr(self, name, artifact)
 
         fmt_kwargs = {
             "task": _TaskNamespace(task),

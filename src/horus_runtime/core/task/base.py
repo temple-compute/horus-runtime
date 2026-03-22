@@ -22,17 +22,18 @@ executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseTask(AutoRegistry, entry_point="task"):
+class BaseTask[R: BaseRuntime = BaseRuntime](AutoRegistry, entry_point="task"):
     """
     The base task. This class provides the foundational functionality for
     defining and executing tasks, and should be ingested by the executor.
@@ -76,14 +77,14 @@ class BaseTask(AutoRegistry, entry_point="task"):
     during its execution.
     """
 
-    executor: BaseExecutor
+    executor: BaseExecutor[R]
     """
     The executor that should execute this task. The executor is responsible for
     running the task in the appropriate environment (e.g., locally, on a remote
     server, in a container, etc.).
     """
 
-    runtime: BaseRuntime
+    runtime: R
     """
     The runtime that should be used to execute this task. The runtime defines
     the actual command, program or script to run.
@@ -95,8 +96,19 @@ class BaseTask(AutoRegistry, entry_point="task"):
     debugging purposes.
     """
 
+    @model_validator(mode="after")
+    def _validate_runtime_compatibility(self) -> Self:
+        if not isinstance(self.runtime, self.executor.runtimes):
+            raise IncompatibleRuntimeError(
+                f"Runtime '{type(self.runtime).__name__}' is not compatible "
+                f"with executor '{type(self.executor).__name__}'. "
+                f"Expected one of: "
+                f"{[r.__name__ for r in self.executor.runtimes]}"
+            )
+        return self
+
     @abstractmethod
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Run the task. This method should be implemented by subclasses to define
         the specific logic for running the task based on its context and
