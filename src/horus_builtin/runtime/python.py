@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Python runtime implementation for horus-runtime.
+PythonCodeStringRuntime implementation for horus-runtime.
 """
 
 import sys
@@ -28,9 +28,9 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class PythonRuntime(BaseRuntime):
+class PythonCodeStringRuntime(BaseRuntime):
     """
-    Python runtime implementation. Executes a python code snippet.
+    Executes a python code snippet.
     """
 
     kind: Literal["python"] = "python"
@@ -52,15 +52,15 @@ class PythonRuntime(BaseRuntime):
         """
         return sys.version
 
-    def _setup_runtime(self, task: "BaseTask[PythonRuntime]") -> str:
+    def _setup_runtime(self, task: "BaseTask[PythonCodeStringRuntime]") -> str:
         """
-        Nothing to be done for the PythonRuntime.
+        Nothing to be done for the PythonCodeStringRuntime.
         """
         return self.code
 
-    def format_runtime(self, task: "BaseTask[PythonRuntime]") -> str:
+    def format_runtime(self, task: "BaseTask[PythonCodeStringRuntime]") -> str:
         """
-        For the PythonRuntime, formatting the runtime simply involves
+        For the PythonCodeStringRuntime, formatting the runtime simply involves
         returning the code as is, since there are no placeholders to
         replace.
         """

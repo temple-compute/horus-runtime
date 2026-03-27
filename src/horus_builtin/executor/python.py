@@ -16,14 +16,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Defines the PythonExecutor class, which represents an executor that runs a
+Defines the PythonExecExecutor class, which represents an executor that runs a
 a python code task in-process in the Horus runtime.
 """
 
 import traceback
 from typing import TYPE_CHECKING, ClassVar, Literal
 
-from horus_builtin.runtime.python import PythonRuntime
+from horus_builtin.runtime.python import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 
@@ -31,16 +31,16 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class PythonExecutor(BaseExecutor[PythonRuntime]):
+class PythonExecExecutor(BaseExecutor[PythonCodeStringRuntime]):
     """
     Run the tasks locally in the horus-runtime instance.
     """
 
     kind: Literal["python"] = "python"
 
-    runtimes: ClassVar[RuntimeFilterType] = (PythonRuntime,)
+    runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
 
-    def execute(self, task: "BaseTask[PythonRuntime]") -> int:
+    def execute(self, task: "BaseTask[PythonCodeStringRuntime]") -> int:
         """
         Runs the task in-process by executing the Python code specified in the
         task's runtime.
