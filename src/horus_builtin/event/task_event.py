@@ -19,8 +19,6 @@
 HorusTaskEvent. Emitted when a HorusTask is executed.
 """
 
-from typing import Literal
-
 from horus_runtime.event.base import BaseEvent
 
 
@@ -29,7 +27,7 @@ class HorusTaskEvent(BaseEvent):
     Event emitted when a HorusTask is executed.
     """
 
-    event_type: Literal["horus_task_event"] = "horus_task_event"
+    event_type: str = "horus_task_event"
 
     task_id: str | None = None
     task_name: str

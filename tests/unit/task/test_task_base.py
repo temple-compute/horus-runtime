@@ -21,7 +21,7 @@ Unit tests for BaseTask abstract base class.
 
 import inspect
 from abc import ABC
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -41,7 +41,7 @@ class ConcreteTestTask(BaseTask):
     A concrete implementation of BaseTask for testing purposes.
     """
 
-    kind: Literal["test_task"] = "test_task"
+    kind: str = "test_task"
 
     async def run(self) -> None:
         """
@@ -199,7 +199,7 @@ class TestBaseTaskValidation:
                 """
 
                 add_to_registry: ClassVar[bool] = False
-                kind: Literal["incomplete"] = "incomplete"
+                kind: str = "incomplete"
                 # Missing run method implementation
 
             # This should fail because run method is not implemented

@@ -44,7 +44,7 @@ class BaseTask[R: BaseRuntime = BaseRuntime](AutoRegistry, entry_point="task"):
     The 'registry_key' field is used to identify the specific type of task.
     """
 
-    kind: Any = ...
+    kind: str
     """
     The 'kind' field is used to identify the specific type of task.
     """

@@ -113,7 +113,7 @@ class TestCommandRuntime:
             inputs={"input1": FileArtifact(uri="test")},
         )
 
-        formatted_cmd = task.runtime.format_runtime(task)
+        formatted_cmd = task.runtime.setup_runtime(task)
 
         assert "Input artifact path is" in formatted_cmd
         assert "{input1.path}" not in formatted_cmd
@@ -127,6 +127,6 @@ class TestCommandRuntime:
         """
         task = make_task("echo 'Task kind is {task.kind}'")
 
-        formatted_cmd = task.runtime.format_runtime(task)
+        formatted_cmd = task.runtime.setup_runtime(task)
 
         assert "Task kind is horus_task" in formatted_cmd

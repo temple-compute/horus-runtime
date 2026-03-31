@@ -21,7 +21,6 @@ Unit tests for the Workflow class.
 
 import textwrap
 from pathlib import Path
-from typing import Literal
 
 import pytest
 import yaml
@@ -36,7 +35,7 @@ class ConcreteWorkflow(BaseWorkflow):
     A concrete implementation of BaseWorkflow for testing purposes.
     """
 
-    kind: Literal["concrete_workflow"] = "concrete_workflow"
+    kind: str = "concrete_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ConcreteWorkflow":

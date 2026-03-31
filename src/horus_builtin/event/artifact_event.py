@@ -19,7 +19,7 @@
 ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
 """
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 from horus_runtime.event.base import BaseEvent
 
@@ -30,6 +30,6 @@ class ArtifactEvent(BaseEvent):
     """
 
     add_to_registry: ClassVar[bool] = True
-    event_type: Literal["artifact_event"] = "artifact_event"
+    event_type: str = "artifact_event"
 
     artifact_id: str

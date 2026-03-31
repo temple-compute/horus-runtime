@@ -19,7 +19,7 @@
 Command implementation for the runtime.
 """
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, TypeVar
 
 from horus_runtime.core.runtime.base import BaseRuntime
 
@@ -27,14 +27,30 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class CommandRuntime(BaseRuntime):
+BR = TypeVar("BR", bound="CommandRuntime")
+
+
+# Create a namespace object to allow for attribute-style access to task
+# variables and inputs in the command formatting. This allows users to
+# write commands like "echo {task.input1.path}" in the workflow yaml
+class _TaskNamespace:
+    def __init__(self, task: "BaseTask[BR]"):
+        for name, value in vars(task).items():
+            setattr(self, name, value)
+        for name, artifact in task.inputs.items():
+            setattr(self, name, artifact)
+        for name, artifact in task.outputs.items():
+            setattr(self, name, artifact)
+
+
+class CommandRuntime(BaseRuntime[str]):
     """
     The CommandRuntime represents a runtime that executes a command directly in
     the local environment. This is the most basic type of runtime, and simply
     runs the specified command as is.
     """
 
-    kind: Literal["command"] = "command"
+    kind: str = "command"
 
     command: str
     """
@@ -46,19 +62,20 @@ class CommandRuntime(BaseRuntime):
     The formatted command after processing any placeholders.
     """
 
-    def _setup_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
+    def setup_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
         """
-        Nothing to be done for the CommandRuntime.
-        """
-        return self.command
-
-    def format_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
-        """
-        For the CommandRuntime, formatting the runtime simply involves
+        For the CommandRuntime, setting up the runtime simply involves
         returning the command as is, since there are no placeholders to
         replace.
         """
-        fmt = super().format_runtime(task)
+        fmt_kwargs = {
+            "task": _TaskNamespace(task),
+            **task.inputs,
+            **task.outputs,
+            **task.variables,
+        }
+
+        fmt = self.command.format(**fmt_kwargs)
 
         self.formatted_command = fmt
 

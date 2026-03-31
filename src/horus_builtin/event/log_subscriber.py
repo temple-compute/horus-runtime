@@ -19,8 +19,6 @@
 Logging subscriber for horus-runtime events.
 """
 
-from typing import Literal
-
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.event.subscriber import BaseEventSubscriber
 from horus_runtime.logging import horus_logger
@@ -31,7 +29,7 @@ class LogsSubscriber(BaseEventSubscriber):
     A simple event subscriber that logs all events using loguru.
     """
 
-    subscriber_type: Literal["loguru"] = "loguru"
+    subscriber_type: str = "loguru"
 
     def setup(self) -> None:
         """

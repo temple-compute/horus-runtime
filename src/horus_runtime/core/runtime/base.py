@@ -22,30 +22,15 @@ functionality for executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
-T = TypeVar("T", bound="BaseRuntime")
 
-
-# Create a namespace object to allow for attribute-style access to task
-# variables and inputs in the command formatting. This allows users to
-# write commands like "echo {task.input1.path}" in the workflow yaml
-class _TaskNamespace:
-    def __init__(self, task: "BaseTask[T]"):
-        for name, value in vars(task).items():
-            setattr(self, name, value)
-        for name, artifact in task.inputs.items():
-            setattr(self, name, artifact)
-        for name, artifact in task.outputs.items():
-            setattr(self, name, artifact)
-
-
-class BaseRuntime(AutoRegistry, entry_point="runtime"):
+class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
     """
     The base runtime. This class provides the foundational functionality for
     executing tasks, and should be ingested by the executor.
@@ -53,39 +38,18 @@ class BaseRuntime(AutoRegistry, entry_point="runtime"):
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = ...
+    kind: str
     """
     The 'kind' field is used to identify the specific type of runtime.
     """
 
     @abstractmethod
-    def _setup_runtime(self, task: "BaseTask[Self]") -> str:
+    def setup_runtime(self, task: "BaseTask[Self]") -> T:
         """
         Prepare the runtime to execute. This method should be implemented by
         subclasses to define the specific logic for preparing the command/task
         based on the runtime's context and environment.
 
         Returns:
-            str: The prepared runtime instance.
+            T: The prepared runtime instance.
         """
-
-    def format_runtime(self, task: "BaseTask[Self]") -> str:
-        """
-        Format the runtime's command or context by substituting any variables
-        using the task's variables and inputs. This method can be overridden by
-        subclasses if they need custom formatting logic, but by default it will
-        simply call _setup_runtime to perform the variable substitution.
-
-        Returns:
-            str: The formatted command or context ready for execution.
-        """
-        cmd = self._setup_runtime(task)
-
-        fmt_kwargs = {
-            "task": _TaskNamespace(task),
-            **task.inputs,
-            **task.outputs,
-            **task.variables,
-        }
-
-        return cmd.format(**fmt_kwargs)

@@ -21,7 +21,7 @@ Event bus transport base for horus-runtime.
 """
 
 from abc import abstractmethod
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -34,7 +34,11 @@ class BaseBusTransport(AutoRegistry, entry_point="transport"):
     """
 
     registry_key: ClassVar[str] = "transport_type"
-    transport_type: Any = None
+    transport_type: str | None = None
+    """
+    The 'transport_type' field is used to identify the specific type
+    of transport.
+    """
 
     @abstractmethod
     async def publish(self, event: BaseEvent) -> None:

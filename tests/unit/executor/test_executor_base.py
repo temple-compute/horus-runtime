@@ -21,7 +21,7 @@ Unit tests for BaseExecutor class.
 
 import inspect
 from abc import ABC
-from typing import TYPE_CHECKING, ClassVar, Literal, Union
+from typing import TYPE_CHECKING, ClassVar, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -44,7 +44,7 @@ class ConcreteTestExecutor(BaseExecutor):
     add_to_registry: ClassVar[bool] = (
         False  # Prevent registry pollution in tests
     )
-    kind: Literal["test"] = "test"
+    kind: str = "test"
 
     def execute(self, task: Union["BaseTask", str]) -> int:
         """
@@ -209,7 +209,7 @@ class TestBaseExecutorValidation:
                 """
 
                 add_to_registry: ClassVar[bool] = False
-                kind: Literal["incomplete"] = "incomplete"
+                kind: str = "incomplete"
                 # Missing execute method implementation
 
             # This should fail because execute method is not implemented

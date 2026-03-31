@@ -23,7 +23,7 @@ Base event class for horus-runtime.
 import datetime
 import inspect
 import uuid
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field
 
@@ -63,12 +63,12 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     Unique identifier for the event. Automatically generated if not provided.
     """
 
-    registry_key: ClassVar[Literal["event_type"]] = "event_type"
+    registry_key: ClassVar[str] = "event_type"
     """
     The key used to register the event in the registry.
     """
 
-    event_type: Any = ...
+    event_type: str
     """
     Must be defined by subclasses.
     """

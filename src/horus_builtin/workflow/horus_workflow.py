@@ -21,7 +21,6 @@ HorusWorkflow implementation for Horus built-in workflows.
 """
 
 from pathlib import Path
-from typing import Literal
 
 import yaml
 
@@ -42,7 +41,7 @@ class HorusWorkflow(BaseWorkflow):
     missing.
     """
 
-    kind: Literal["horus_workflow"] = "horus_workflow"
+    kind: str = "horus_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":

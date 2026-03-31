@@ -35,7 +35,7 @@ class BaseInput(AutoRegistry, entry_point="input"):
     """
 
     registry_key: ClassVar[str] = "kind"
-    kind: Any = ...
+    kind: str
 
     @abstractmethod
     def ask(

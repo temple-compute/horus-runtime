@@ -19,8 +19,6 @@
 CLI Input implementation for horus-runtime.
 """
 
-from typing import Literal
-
 from horus_runtime.input.base import BaseInput
 
 
@@ -30,7 +28,7 @@ class CLIInput(BaseInput):
     input() function.
     """
 
-    kind: Literal["cli"] = "cli"
+    kind: str = "cli"
 
     def ask(
         self,

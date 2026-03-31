@@ -38,6 +38,12 @@ class BaseEventSubscriber[E: BaseEvent = BaseEvent](
 
     registry_key: ClassVar[str] = "subscriber_type"
 
+    subscriber_type: str | None = None
+    """
+    The 'subscriber_type' field is used to identify the specific type
+    of subscriber.
+    """
+
     events: ClassVar[EventFilterType] = (BaseEvent,)
     """
     Which event types this subscriber is interested in.

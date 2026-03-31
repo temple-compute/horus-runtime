@@ -22,7 +22,6 @@ Unit tests for artifact_registry module.
 import hashlib
 import tempfile
 from pathlib import Path
-from typing import Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -372,7 +371,7 @@ class ConcreteLocalArtifact(LocalPathArtifactBase):
     """
 
     add_to_registry = False
-    kind: Literal["local_test"] = "local_test"
+    kind: str = "local_test"
 
     @property
     def hash(self) -> str | None:

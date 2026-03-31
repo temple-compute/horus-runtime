@@ -21,7 +21,7 @@ Unit tests for BaseRuntime abstract base class.
 
 import inspect
 from abc import ABC
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -39,9 +39,12 @@ class ConcreteTestRuntime(BaseRuntime):
     A concrete implementation of BaseRuntime for testing purposes.
     """
 
-    kind: Literal["test_runtime"] = "test_runtime"
+    kind: str = "test_runtime"
 
-    def _setup_runtime(self, task: "BaseTask[ConcreteTestRuntime]") -> str:
+    def setup_runtime(self, task: "BaseTask[ConcreteTestRuntime]") -> str:
+        """
+        Test implementation of setup_runtime method.
+        """
         return "Runtime setup complete"
 
 
@@ -81,17 +84,17 @@ class TestBaseRuntime:
 
     def test_setup_runtime_method_is_abstract(self) -> None:
         """
-        Test that _setup_runtime method is marked as abstract.
+        Test that setup_runtime method is marked as abstract.
         """
-        # Check that the _setup_runtime method is in the abstract methods
+        # Check that the setup_runtime method is in the abstract methods
         abstract_methods = BaseRuntime.__abstractmethods__
-        assert "_setup_runtime" in abstract_methods
+        assert "setup_runtime" in abstract_methods
 
     def test_setup_runtime_signature(self) -> None:
         """
-        Test that _setup_runtime method has correct signature.
+        Test that setup_runtime method has correct signature.
         """
-        sig = inspect.signature(BaseRuntime._setup_runtime)
+        sig = inspect.signature(BaseRuntime.setup_runtime)
 
         params = list(sig.parameters.keys())
         assert params == ["self", "task"]
@@ -99,9 +102,6 @@ class TestBaseRuntime:
         # Check parameter types
         task_param = sig.parameters["task"]
         assert task_param.annotation == "BaseTask[Self]"
-
-        # Check return type
-        assert sig.return_annotation is str
 
 
 @pytest.mark.unit
@@ -122,7 +122,7 @@ class TestBaseRuntimeValidation:
                 Invalid runtime that does not set 'kind' field.
                 """
 
-                def _setup_runtime(
+                def setup_runtime(
                     self, task: "BaseTask[InvalidRuntime]"
                 ) -> str:
                     return ""
@@ -149,7 +149,7 @@ class TestBaseRuntimeValidation:
                 """
 
                 add_to_registry: ClassVar[bool] = False
-                kind: Literal["incomplete"] = "incomplete"
+                kind: str = "incomplete"
                 # Missing _setup_runtime method implementation
 
             # This should fail because _setup_runtime method is not implemented

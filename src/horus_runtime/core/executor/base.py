@@ -24,7 +24,7 @@ a command or running it inside a SLURM job, either remote or locally.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -46,7 +46,7 @@ class BaseExecutor[R: BaseRuntime = BaseRuntime](
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = ...
+    kind: str
     """
     The 'kind' field is used to identify the specific type of executor.
     """

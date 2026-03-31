@@ -22,7 +22,7 @@ Unit tests for BaseArtifact class.
 import uuid
 from abc import ABC
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -42,7 +42,7 @@ class ConcreteTestArtifact(BaseArtifact):
     add_to_registry: ClassVar[bool] = (
         False  # Prevent registry pollution in tests
     )
-    kind: Literal["test"] = "test"
+    kind: str = "test"
 
     def exists(self) -> bool:
         """

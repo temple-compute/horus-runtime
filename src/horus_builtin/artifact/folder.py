@@ -22,7 +22,6 @@ folder/directory artifact in the Horus runtime.
 
 import hashlib
 import shutil
-from typing import Literal
 
 from horus_builtin.artifact.local_base import LocalPathArtifactBase
 
@@ -34,7 +33,7 @@ class FolderArtifact(LocalPathArtifactBase):
 
     add_to_registry = True
 
-    kind: Literal["folder"] = "folder"
+    kind: str = "folder"
 
     def exists(self) -> bool:
         """
