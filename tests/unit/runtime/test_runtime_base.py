@@ -101,7 +101,7 @@ class TestBaseRuntime:
 
         # Check parameter types
         task_param = sig.parameters["task"]
-        assert task_param.annotation == "BaseTask[Self]"
+        assert task_param.annotation == "BaseTask"
 
 
 @pytest.mark.unit
