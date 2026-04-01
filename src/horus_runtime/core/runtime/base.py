@@ -22,7 +22,7 @@ functionality for executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -44,7 +44,7 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
     """
 
     @abstractmethod
-    def setup_runtime(self, task: "BaseTask[Self]") -> T:
+    def setup_runtime(self, task: "BaseTask") -> T:
         """
         Prepare the runtime to execute. This method should be implemented by
         subclasses to define the specific logic for preparing the command/task

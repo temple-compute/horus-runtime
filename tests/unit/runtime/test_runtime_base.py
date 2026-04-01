@@ -41,7 +41,7 @@ class ConcreteTestRuntime(BaseRuntime):
 
     kind: str = "test_runtime"
 
-    def setup_runtime(self, task: "BaseTask[ConcreteTestRuntime]") -> str:
+    def setup_runtime(self, task: "BaseTask") -> str:
         """
         Test implementation of setup_runtime method.
         """
@@ -122,9 +122,7 @@ class TestBaseRuntimeValidation:
                 Invalid runtime that does not set 'kind' field.
                 """
 
-                def setup_runtime(
-                    self, task: "BaseTask[InvalidRuntime]"
-                ) -> str:
+                def setup_runtime(self, task: "BaseTask") -> str:
                     return ""
 
     def test_model_validation_preserves_type_safety(self) -> None:

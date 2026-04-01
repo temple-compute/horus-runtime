@@ -33,10 +33,9 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import ClassVar, Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from horus_builtin.input.cli import CLIInput
-from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.input.base import BaseInput
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -59,7 +58,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Human-readable name for this workflow.
     """
 
-    tasks: dict[str, BaseTask[BaseRuntime]]
+    tasks: dict[str, BaseTask] = Field(
+        default_factory=dict,
+    )
     """
     Ordered mapping of task names to task instances.
     """

@@ -16,32 +16,31 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Python runtime implementation for in-memory workflows.
+Python executor for in-memory workflows in horus-runtime. (Function
+executor).
 """
 
-from collections.abc import Callable
-from typing import Any
+from typing import ClassVar
 
-from pydantic import ConfigDict, Field
-
-from horus_runtime.core.runtime.base import BaseRuntime
+from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.base import BaseTask
 
 
-class PythonFunctionRuntime(BaseRuntime[Callable[..., Any]]):
+class PythonFunctionExecutor(BaseExecutor):
     """
-    Executes a python function.
+    Executor for running Python functions in-memory.
     """
 
     kind: str = "python_function"
 
-    # Allow callable types in the runtime configuration
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
 
-    func: Callable[..., Any] = Field(..., exclude=True)
-
-    def setup_runtime(self, task: "BaseTask") -> Callable[..., Any]:
+    def execute(self, task: "BaseTask") -> int:
         """
-        Nothing to be done for the PythonFunctionRuntime.
+        Executes the Python function specified in the task's runtime.
         """
-        return self.func
+        assert isinstance(task.runtime, PythonFunctionRuntime)
+        func = task.runtime.setup_runtime(task)
+        func()
+        return 0

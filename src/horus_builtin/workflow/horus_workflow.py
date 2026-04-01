@@ -60,7 +60,7 @@ class HorusWorkflow(BaseWorkflow):
         ctx = HorusContext.get_context()
 
         for task in self.tasks.values():
-            if task.is_complete():
+            if task.skip_if_complete and task.is_complete():
                 ctx.bus.emit(
                     HorusTaskEvent(
                         message=_(

@@ -186,14 +186,14 @@ class TestWorkflowRun:
 
     @patch("subprocess.run")
     async def test_run_executes_tasks_in_order(
-        self, mock_run: Mock, make_task: MakeTaskType
+        self, mock_run: Mock, make_shell_task: MakeTaskType
     ) -> None:
         """
         Tasks should be executed in the order they are defined in the workflow.
         """
         mock_run.return_value = Mock(returncode=0)
-        task_a = make_task(cmd="echo A")
-        task_b = make_task(cmd="echo B")
+        task_a = make_shell_task(cmd="echo A")
+        task_b = make_shell_task(cmd="echo B")
         wf = HorusWorkflow(name="order_test", tasks={"a": task_a, "b": task_b})
         await wf.run()
 
@@ -206,7 +206,7 @@ class TestWorkflowRun:
         assert calls == ["echo A", "echo B"]
 
     async def test_run_stops_on_first_failure(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         If a task fails, the workflow should stop and not
@@ -220,8 +220,8 @@ class TestWorkflowRun:
                 await super().run()  # Here it calls +1 run count
                 raise TaskExecutionError("fail")
 
-        task_a = make_task(cmd="echo A", task_class=TaskWithFailure)
-        task_b = make_task(cmd="echo B")
+        task_a = make_shell_task(cmd="echo A", task_class=TaskWithFailure)
+        task_b = make_shell_task(cmd="echo B")
 
         wf = HorusWorkflow(name="stop_test", tasks={"a": task_a, "b": task_b})
         with pytest.raises(TaskExecutionError):

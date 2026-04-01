@@ -16,32 +16,32 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Python runtime implementation for in-memory workflows.
+PythonCodeStringRuntime implementation for horus-runtime.
 """
 
-from collections.abc import Callable
-from typing import Any
-
-from pydantic import ConfigDict, Field
+from typing import TYPE_CHECKING
 
 from horus_runtime.core.runtime.base import BaseRuntime
-from horus_runtime.core.task.base import BaseTask
+
+if TYPE_CHECKING:
+    from horus_runtime.core.task.base import BaseTask
 
 
-class PythonFunctionRuntime(BaseRuntime[Callable[..., Any]]):
+class PythonCodeStringRuntime(BaseRuntime[str]):
     """
-    Executes a python function.
+    Executes a Python code snippet.
     """
 
-    kind: str = "python_function"
+    kind: str = "python"
 
-    # Allow callable types in the runtime configuration
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    code: str
+    """
+    The Python code to execute.
+    """
 
-    func: Callable[..., Any] = Field(..., exclude=True)
-
-    def setup_runtime(self, task: "BaseTask") -> Callable[..., Any]:
+    def setup_runtime(self, task: "BaseTask") -> str:
         """
-        Nothing to be done for the PythonFunctionRuntime.
+        For the PythonCodeStringRuntime, setting up the runtime simply involves
+        returning the code as is.
         """
-        return self.func
+        return self.code

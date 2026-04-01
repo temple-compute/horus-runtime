@@ -33,7 +33,7 @@ from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseTask[R: BaseRuntime = BaseRuntime](AutoRegistry, entry_point="task"):
+class BaseTask(AutoRegistry, entry_point="task"):
     """
     The base task. This class provides the foundational functionality for
     defining and executing tasks, and should be ingested by the executor.
@@ -77,14 +77,14 @@ class BaseTask[R: BaseRuntime = BaseRuntime](AutoRegistry, entry_point="task"):
     during its execution.
     """
 
-    executor: BaseExecutor[R]
+    executor: BaseExecutor
     """
     The executor that should execute this task. The executor is responsible for
     running the task in the appropriate environment (e.g., locally, on a remote
     server, in a container, etc.).
     """
 
-    runtime: R
+    runtime: BaseRuntime
     """
     The runtime that should be used to execute this task. The runtime defines
     the actual command, program or script to run.
@@ -94,6 +94,11 @@ class BaseTask[R: BaseRuntime = BaseRuntime](AutoRegistry, entry_point="task"):
     """
     Number of times this task has been run. This can be used for tracking and
     debugging purposes.
+    """
+
+    skip_if_complete: bool = True
+    """
+    Whether to skip execution of this task if it is already complete.
     """
 
     @model_validator(mode="after")

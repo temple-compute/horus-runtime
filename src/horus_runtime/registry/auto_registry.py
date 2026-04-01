@@ -166,6 +166,16 @@ class AutoRegistry(BaseModel, ABC):
                 % {"cls": cls.__name__}
             )
 
+        # Pydantic creates a real class for each parameterized generic
+        # (e.g. HorusTask[PythonFunctionRuntime]). That intermediate class has
+        # no discriminator value and must not be registered — only the
+        # developer-defined concrete subclass should be.
+        # Check cls.__name__ for "[" as a reliable fallback: getattr picks up
+        # the parent's __pydantic_generic_metadata__ (origin=None) rather than
+        # the newly created parameterized class's own metadata.
+        if "[" in cls.__name__ or cls._get_pydantic_meta_origin() is not None:
+            return
+
         # Abstract classes and opted-out classes are never registered as
         # concrete implementations.
         if isabstract(cls) or not cls.add_to_registry:
@@ -233,8 +243,7 @@ class AutoRegistry(BaseModel, ABC):
         transparently deserialise into ``S3Artifact``, ``LocalArtifact``, etc.
         without any per-model boilerplate.
         """
-        pydantic_meta = getattr(cls, "__pydantic_generic_metadata__", {})
-        origin = pydantic_meta.get("origin") or cls
+        origin = cls._get_pydantic_meta_origin() or cls
 
         # Non-root classes (concrete subclasses) must use Pydantic's default
         # schema generation. If we intercepted here we would recurse infinitely
@@ -281,6 +290,20 @@ class AutoRegistry(BaseModel, ABC):
             return target_origin.__pydantic_validator__.validate_python(data)
 
         return core_schema.no_info_plain_validator_function(validate)
+
+    @classmethod
+    def _get_pydantic_meta_origin(
+        cls: type["AutoRegistry"],
+    ) -> type["AutoRegistry"] | None:
+        """
+        Helper function to get the Pydantic generic metadata from a class, if
+        it exists. This is used to determine whether a class is a parameterized
+        generic (e.g. HorusTask[PythonFunctionRuntime]) and should be excluded
+        from registration.
+        """
+        return getattr(cls, "__pydantic_generic_metadata__", {}).get(
+            "origin", None
+        )
 
     @staticmethod
     def init_registry(bases: list[type["AutoRegistry"]] | None = None) -> None:

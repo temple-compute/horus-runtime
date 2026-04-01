@@ -287,12 +287,12 @@ class TestHorusTaskExecution:
             await task.run()
 
     async def test_horus_task_increases_runs_count(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test that HorusTask.run() increases the runs count.
         """
-        task = make_task(cmd="echo 'Hello World'")
+        task = make_shell_task(cmd="echo 'Hello World'")
 
         initial_runs = task.runs
 
@@ -305,12 +305,12 @@ class TestHorusTaskExecution:
             assert task.runs == initial_runs + 1
 
     async def test_horus_task_resets_runs_on_reset(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test that HorusTask.reset() resets the runs count.
         """
-        task = make_task(cmd="echo 'Hello World'")
+        task = make_shell_task(cmd="echo 'Hello World'")
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0

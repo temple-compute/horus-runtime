@@ -19,7 +19,7 @@
 Command implementation for the runtime.
 """
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from horus_runtime.core.runtime.base import BaseRuntime
 
@@ -27,14 +27,11 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-BR = TypeVar("BR", bound="CommandRuntime")
-
-
 # Create a namespace object to allow for attribute-style access to task
 # variables and inputs in the command formatting. This allows users to
 # write commands like "echo {task.input1.path}" in the workflow yaml
 class _TaskNamespace:
-    def __init__(self, task: "BaseTask[BR]"):
+    def __init__(self, task: "BaseTask"):
         for name, value in vars(task).items():
             setattr(self, name, value)
         for name, artifact in task.inputs.items():
@@ -62,7 +59,7 @@ class CommandRuntime(BaseRuntime[str]):
     The formatted command after processing any placeholders.
     """
 
-    def setup_runtime(self, task: "BaseTask[CommandRuntime]") -> str:
+    def setup_runtime(self, task: "BaseTask") -> str:
         """
         For the CommandRuntime, setting up the runtime simply involves
         returning the command as is, since there are no placeholders to

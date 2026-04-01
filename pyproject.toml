@@ -41,10 +41,12 @@ folder = "horus_builtin.artifact.folder"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"
-python = "horus_builtin.executor.python"
+python_exec = "horus_builtin.executor.python_exec"
+python_fn = "horus_builtin.executor.python_fn"
 
 [project.entry-points."horus.runtime"]
 command = "horus_builtin.runtime.command"
+python_string = "horus_builtin.runtime.python_string"
 python = "horus_builtin.runtime.python"
 
 [project.entry-points."horus.task"]

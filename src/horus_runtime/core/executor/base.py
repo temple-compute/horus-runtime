@@ -35,9 +35,7 @@ if TYPE_CHECKING:
 RuntimeFilterType = tuple[type[BaseRuntime], ...]
 
 
-class BaseExecutor[R: BaseRuntime = BaseRuntime](
-    AutoRegistry, entry_point="executor"
-):
+class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
     The base executor represents the abstract concept of an executor in the
     Horus runtime. An executor is on charge of actually running the task in the
@@ -58,7 +56,7 @@ class BaseExecutor[R: BaseRuntime = BaseRuntime](
     """
 
     @abstractmethod
-    def execute(self, task: "BaseTask[R]") -> int:
+    def execute(self, task: "BaseTask") -> int:
         """
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific

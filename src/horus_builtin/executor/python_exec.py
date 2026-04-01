@@ -17,13 +17,13 @@
 #
 """
 Defines the PythonExecExecutor class, which represents an executor that runs a
-a python code task in-process in the Horus runtime.
+a Python code task in-process in the Horus runtime.
 """
 
 import traceback
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar
 
-from horus_builtin.runtime.python import PythonCodeStringRuntime
+from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 
@@ -31,24 +31,23 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class PythonExecExecutor(BaseExecutor[PythonCodeStringRuntime]):
+class PythonExecExecutor(BaseExecutor):
     """
     Run the tasks locally in the horus-runtime instance.
     """
 
-    kind: Literal["python"] = "python"
+    kind: str = "python"
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
 
-    def execute(self, task: "BaseTask[PythonCodeStringRuntime]") -> int:
+    def execute(self, task: "BaseTask") -> int:
         """
         Runs the task in-process by executing the Python code specified in the
         task's runtime.
         """
-        code = task.runtime.format_runtime(task)
+        assert isinstance(task.runtime, PythonCodeStringRuntime)
+        code = task.runtime.setup_runtime(task)
 
-        # Security Warning:
-        # This method uses exec
         ctx = HorusContext.get_context()
 
         scope = {
@@ -57,6 +56,8 @@ class PythonExecExecutor(BaseExecutor[PythonCodeStringRuntime]):
         }
 
         try:
+            # Security Warning: using exec to execute arbitrary code can be
+            # dangerous and should be done with caution.
             exec(code, scope)
             return 0
         except Exception:

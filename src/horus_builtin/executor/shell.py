@@ -49,6 +49,7 @@ class ShellExecutor(BaseExecutor):
         Returns:
             int: The return code of the executed command.
         """
+        assert isinstance(task.runtime, CommandRuntime)
         prepared_command = task.runtime.setup_runtime(task)
 
         # Security Warning:
