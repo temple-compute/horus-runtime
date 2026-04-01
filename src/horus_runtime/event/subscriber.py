@@ -21,25 +21,30 @@ Base event subscriber class for horus-runtime.
 """
 
 from abc import abstractmethod
-from typing import ClassVar, Generic
-
-from typing_extensions import TypeVar
+from typing import ClassVar
 
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
-EventFilterType = tuple[type[BaseEvent], ...] | None
-E = TypeVar("E", bound=BaseEvent, default=BaseEvent)
+EventFilterType = tuple[type[BaseEvent], ...]
 
 
-class BaseEventSubscriber(AutoRegistry, Generic[E], entry_point="subscriber"):
+class BaseEventSubscriber[E: BaseEvent = BaseEvent](
+    AutoRegistry, entry_point="subscriber"
+):
     """
     Base class for event subscribers.
     """
 
     registry_key: ClassVar[str] = "subscriber_type"
 
-    events: ClassVar[EventFilterType] = None
+    subscriber_type: str | None = None
+    """
+    The 'subscriber_type' field is used to identify the specific type
+    of subscriber.
+    """
+
+    events: ClassVar[EventFilterType] = (BaseEvent,)
     """
     Which event types this subscriber is interested in.
     If None, the subscriber will receive all events.

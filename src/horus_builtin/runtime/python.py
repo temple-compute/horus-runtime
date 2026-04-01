@@ -16,18 +16,32 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+Python runtime implementation for in-memory workflows.
 """
 
-from horus_runtime.event.base import BaseEvent
+from collections.abc import Callable
+from typing import Any
+
+from pydantic import ConfigDict, Field
+
+from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.task.base import BaseTask
 
 
-class HorusTaskEvent(BaseEvent):
+class PythonFunctionRuntime(BaseRuntime[Callable[..., Any]]):
     """
-    Event emitted when a HorusTask is executed.
+    Executes a python function.
     """
 
-    event_type: str = "horus_task_event"
+    kind: str = "python_function"
 
-    task_id: str | None = None
-    task_name: str
+    # Allow callable types in the runtime configuration
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    func: Callable[..., Any] = Field(..., exclude=True)
+
+    def setup_runtime(self, task: "BaseTask") -> Callable[..., Any]:
+        """
+        Nothing to be done for the PythonFunctionRuntime.
+        """
+        return self.func

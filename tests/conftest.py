@@ -61,13 +61,13 @@ class MakeTaskType(Protocol):
 
 
 @pytest.fixture
-def make_task() -> MakeTaskType:
+def make_shell_task() -> MakeTaskType:
     """
     Fixture to create HorusTask instances with CommandRuntime for testing.
     """
 
     # Factory function to create a HorusTask with a given command
-    def _make_task(
+    def _make_shell_task(
         cmd: str = "echo 'Hello World'",
         inputs: dict[str, "BaseArtifact"] | None = None,
         task_class: type["HorusTask"] = HorusTask,
@@ -83,7 +83,7 @@ def make_task() -> MakeTaskType:
             executor=ShellExecutor(),
         )
 
-    return _make_task
+    return _make_shell_task
 
 
 class MakeWorkflowFileType(Protocol):

@@ -103,30 +103,30 @@ class TestCommandRuntime:
         assert runtime.kind == "command"
 
     def test_command_runtime_formats_command_with_inputs(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test that CommandRuntime properly formats commands with task inputs.
         """
-        task = make_task(
+        task = make_shell_task(
             cmd="echo 'Input artifact path is {input1.path}'",
             inputs={"input1": FileArtifact(uri="test")},
         )
 
-        formatted_cmd = task.runtime.format_runtime(task)
+        formatted_cmd = task.runtime.setup_runtime(task)
 
         assert "Input artifact path is" in formatted_cmd
         assert "{input1.path}" not in formatted_cmd
 
     def test_command_runtime_formats_command_with_task_variables(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test that CommandRuntime can access task variables in command
         formatting.
         """
-        task = make_task("echo 'Task kind is {task.kind}'")
+        task = make_shell_task("echo 'Task kind is {task.kind}'")
 
-        formatted_cmd = task.runtime.format_runtime(task)
+        formatted_cmd = task.runtime.setup_runtime(task)
 
         assert "Task kind is horus_task" in formatted_cmd

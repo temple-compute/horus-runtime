@@ -105,7 +105,7 @@ class TestShellExecutor:
 
     @patch("subprocess.run")
     def test_execute_successful_command(
-        self, mock_run: Mock, make_task: MakeTaskType
+        self, mock_run: Mock, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test executing a successful command returns correct exit code.
@@ -115,7 +115,7 @@ class TestShellExecutor:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
 
-        hello_world_task = make_task("echo 'Hello World'")
+        hello_world_task = make_shell_task("echo 'Hello World'")
 
         executor = ShellExecutor()
         result = executor.execute(hello_world_task)
@@ -137,7 +137,7 @@ class TestShellExecutorIntegration:
     """
 
     def test_execute_real_successful_command(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test executing a real successful command (echo).
@@ -145,28 +145,28 @@ class TestShellExecutorIntegration:
         executor = ShellExecutor()
 
         # Use a simple, cross-platform command that should always work
-        hello_world_task = make_task("echo 'Hello World'")
+        hello_world_task = make_shell_task("echo 'Hello World'")
         result = executor.execute(hello_world_task)
 
         # Echo should return 0 on success
         assert result == 0
 
     def test_execute_real_failed_command(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test executing a real command that fails.
         """
         executor = ShellExecutor()
 
-        task = make_task("nonexistent_command_xyz_that_should_not_exist")
+        task = make_shell_task("nonexistent_command_xyz_that_should_not_exist")
 
         # Use a command that should fail (exit with non-zero code)
         result = executor.execute(task)
         assert result != 0
 
     def test_execute_real_command_with_exit_code(
-        self, make_task: MakeTaskType
+        self, make_shell_task: MakeTaskType
     ) -> None:
         """
         Test executing a real command with specific exit code.
@@ -174,6 +174,6 @@ class TestShellExecutorIntegration:
         executor = ShellExecutor()
 
         # Use 'true' command which should always exit with 0
-        task = make_task("true")
+        task = make_shell_task("true")
         result = executor.execute(task)
         assert result == 0

@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from horus_builtin.event.log_subscriber import LogsSubscriber
-from horus_runtime.event.bus import HorusEventBus
+from horus_runtime.logging import horus_logger
 from tests.unit.event.common import _TestEvent
 
 
@@ -51,11 +51,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            args, _ = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            args = mock_opt.return_value.log.call_args[0]
             assert args[0] == event.level
 
     def test_handle_logs_event_type(self) -> None:
@@ -64,11 +64,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            _, kwargs = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            _, kwargs = mock_opt.return_value.log.call_args
             assert kwargs["event_type"] == event.event_type
 
     def test_handle_logs_event_source(self) -> None:
@@ -77,11 +77,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            _, kwargs = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            _, kwargs = mock_opt.return_value.log.call_args
             assert kwargs["source"] == event.source
 
     def test_handle_logs_event_message(self) -> None:
@@ -90,11 +90,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent(message="something happened")
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            _, kwargs = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            _, kwargs = mock_opt.return_value.log.call_args
             assert kwargs["safe_message"] == "something happened"
 
     def test_handle_escapes_markup_in_message(self) -> None:
@@ -104,11 +104,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent(message="<danger>")
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            _, kwargs = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            _, kwargs = mock_opt.return_value.log.call_args
 
             assert r"\<" in kwargs["safe_message"]
 
@@ -118,11 +118,11 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            _, kwargs = self._call_args(mock_log)
+            mock_opt.assert_called_once_with(colors=True)
+            _, kwargs = mock_opt.return_value.log.call_args
             assert kwargs["safe_message"] == ""
 
     def test_handle_calls_opt_with_colors(self) -> None:
@@ -131,18 +131,7 @@ class TestLogsSubscriber:
         """
         sub = LogsSubscriber()
         event = _TestEvent()
-        with patch(
-            "horus_builtin.event.log_subscriber.horus_logger"
-        ) as mock_log:
+        with patch.object(horus_logger.log, "opt") as mock_opt:
+            mock_opt.return_value.log = MagicMock()
             sub.handle(event)
-            mock_log.opt.assert_called_once_with(colors=True)
-
-    def test_register_on_subscribes_to_all_events(self) -> None:
-        """
-        Test that subscribing LogsSubscriber to the bus adds it to the
-        wildcard handlers the bus.
-        """
-        sub = LogsSubscriber()
-        bus = HorusEventBus()
-        bus.subscribe(sub)
-        assert sub in bus._wildcard_handlers
+            mock_opt.assert_called_once_with(colors=True)

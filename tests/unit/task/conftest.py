@@ -15,19 +15,19 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+Shared fixtures for task unit tests.
 """
 
-from horus_runtime.event.base import BaseEvent
+import pytest
+
+from horus_runtime.context import HorusContext
 
 
-class HorusTaskEvent(BaseEvent):
+@pytest.fixture(autouse=True)
+def horus_context() -> HorusContext:
     """
-    Event emitted when a HorusTask is executed.
+    Fixture to provide a HorusContext for testing.
     """
-
-    event_type: str = "horus_task_event"
-
-    task_id: str | None = None
-    task_name: str
+    return HorusContext.boot()

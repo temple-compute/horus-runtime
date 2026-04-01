@@ -16,18 +16,34 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+CLI Input implementation for horus-runtime.
 """
 
-from horus_runtime.event.base import BaseEvent
+from horus_runtime.input.base import BaseInput
 
 
-class HorusTaskEvent(BaseEvent):
+class CLIInput(BaseInput):
     """
-    Event emitted when a HorusTask is executed.
+    CLI input implementation. Prompts the user for input using the built-in
+    input() function.
     """
 
-    event_type: str = "horus_task_event"
+    kind: str = "cli"
 
-    task_id: str | None = None
-    task_name: str
+    def ask(
+        self,
+        prompt: str,
+        *,
+        default: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> str | None:
+        """
+        Prompt the user for input using the built-in input() function and
+        return their response.
+        """
+        if default is not None:
+            prompt = f"{prompt} [{default}]: "
+
+        value = input(prompt) or default
+
+        return value

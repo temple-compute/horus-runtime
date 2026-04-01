@@ -23,7 +23,7 @@ runtime. An artifact is a piece of data that is produced or consumed by a task.
 import uuid
 from abc import abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from pydantic import Field
 
@@ -73,7 +73,7 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
     reference to an artifact in a registry.
     """
 
-    kind: Any = ...
+    kind: str
     """
     Type of the artifact, such as 'file', 'folder', 'dataset', 'model', etc.
 

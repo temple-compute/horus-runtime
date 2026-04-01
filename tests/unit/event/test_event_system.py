@@ -23,7 +23,7 @@ BaseBusTransport).
 import datetime
 import threading
 import uuid
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import pytest
 from pydantic import Field, ValidationError
@@ -190,7 +190,7 @@ class TestHorusEventBusEmit:
         """
 
         class _FailingTransport(BaseBusTransport):
-            transport_type: Literal["failing"] = "failing"
+            transport_type: str = "failing"
 
             async def publish(self, event: BaseEvent) -> None:
                 raise RuntimeError("transport down")
@@ -215,7 +215,7 @@ class TestHorusEventBusEmit:
         bus = HorusEventBus()
 
         class _RecordingTransport(BaseBusTransport):
-            transport_type: Literal["recording"] = "recording"
+            transport_type: str = "recording"
             published_events: list[BaseEvent] = Field(default_factory=list)
             event_published: ClassVar[threading.Event] = threading.Event()
 

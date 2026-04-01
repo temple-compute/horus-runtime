@@ -20,8 +20,6 @@ Implementation of the FileArtifact class, which represents a local
 file artifact in the Horus runtime.
 """
 
-from typing import Literal
-
 from horus_builtin.artifact.local_base import LocalPathArtifactBase
 
 
@@ -32,7 +30,7 @@ class FileArtifact(LocalPathArtifactBase):
 
     add_to_registry = True
 
-    kind: Literal["file"] = "file"
+    kind: str = "file"
 
     @property
     def hash(self) -> str | None:

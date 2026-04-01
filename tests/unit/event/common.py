@@ -19,8 +19,6 @@
 Common TestEvent.
 """
 
-from typing import Literal
-
 from pydantic import Field
 
 from horus_runtime.event.base import BaseEvent
@@ -32,11 +30,11 @@ class _TestEvent(BaseEvent):
     Concrete event for testing purposes.
     """
 
-    event_type: Literal["test.event"] = "test.event"
+    event_type: str = "test.event"
 
 
 class _OtherEvent(BaseEvent):
-    event_type: Literal["other.event"] = "other.event"
+    event_type: str = "other.event"
 
 
 class _CollectingAllSubscriber(BaseEventSubscriber):
@@ -45,7 +43,7 @@ class _CollectingAllSubscriber(BaseEventSubscriber):
     Accepts an optional events filter; defaults to wildcard (no filter).
     """
 
-    subscriber_type: Literal["collecting"] = "collecting"
+    subscriber_type: str = "collecting"
     received: list[BaseEvent] = Field(default_factory=list)
 
     def setup(self) -> None:
@@ -61,7 +59,7 @@ class _CollectingTestSubscriber(BaseEventSubscriber):
     Only accepts events of type _TestEvent.
     """
 
-    subscriber_type: Literal["collecting_test"] = "collecting_test"
+    subscriber_type: str = "collecting_test"
     received: list[BaseEvent] = Field(default_factory=list)
 
     events = (_TestEvent,)
@@ -79,7 +77,7 @@ class _CollectingOtherSubscriber(BaseEventSubscriber):
     Only accepts events of type _OtherEvent.
     """
 
-    subscriber_type: Literal["collecting_other"] = "collecting_other"
+    subscriber_type: str = "collecting_other"
     received: list[BaseEvent] = Field(default_factory=list)
 
     events = (_OtherEvent,)

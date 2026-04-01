@@ -22,12 +22,13 @@ executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -43,7 +44,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The 'registry_key' field is used to identify the specific type of task.
     """
 
-    kind: Any = ...
+    kind: str
     """
     The 'kind' field is used to identify the specific type of task.
     """
@@ -95,8 +96,24 @@ class BaseTask(AutoRegistry, entry_point="task"):
     debugging purposes.
     """
 
+    skip_if_complete: bool = True
+    """
+    Whether to skip execution of this task if it is already complete.
+    """
+
+    @model_validator(mode="after")
+    def _validate_runtime_compatibility(self) -> Self:
+        if not isinstance(self.runtime, self.executor.runtimes):
+            raise IncompatibleRuntimeError(
+                f"Runtime '{type(self.runtime).__name__}' is not compatible "
+                f"with executor '{type(self.executor).__name__}'. "
+                f"Expected one of: "
+                f"{[r.__name__ for r in self.executor.runtimes]}"
+            )
+        return self
+
     @abstractmethod
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Run the task. This method should be implemented by subclasses to define
         the specific logic for running the task based on its context and

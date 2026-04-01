@@ -19,7 +19,7 @@
 Unit tests for AutoRegistry class.
 """
 
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import pytest
 
@@ -45,7 +45,7 @@ class ConcreteRegistryItem(RegistryBaseTest):
     Concrete implementation for testing.
     """
 
-    test_type: Literal["concrete"] = "concrete"
+    test_type: str = "concrete"
     add_to_registry: ClassVar[bool] = True
 
 
@@ -54,7 +54,7 @@ class AnotherConcreteItem(RegistryBaseTest):
     Another concrete implementation for testing.
     """
 
-    test_type: Literal["another"] = "another"
+    test_type: str = "another"
     add_to_registry: ClassVar[bool] = True
 
 
@@ -63,7 +63,7 @@ class AbstractTestItem(RegistryBaseTest):
     Abstract class that should not be registered.
     """
 
-    test_type: Literal["abstract"] = "abstract"
+    test_type: str = "abstract"
     add_to_registry: ClassVar[bool] = False
 
 
@@ -117,7 +117,7 @@ class TestAutoRegistry:
             Test class.
             """
 
-            different_key: Literal["diff"] = "diff"
+            different_key: str = "diff"
             add_to_registry: ClassVar[bool] = True
 
         # Should have separate registries
@@ -138,7 +138,7 @@ class TestAutoRegistry:
             """
 
             registry_key: ClassVar[str] = "my_key"
-            my_key: Literal["test_value"] = "test_value"
+            my_key: str = "test_value"
             add_to_registry: ClassVar[bool] = True
 
         assert "test_value" in TestKeyItem.registry
@@ -161,7 +161,7 @@ class TestAutoRegistry:
             Test class for multiple inheritance scenarios.
             """
 
-            test_type: Literal["multi"] = "multi"
+            test_type: str = "multi"
             add_to_registry: ClassVar[bool] = True
 
         assert "multi" in MultiInheritItem.registry
@@ -177,7 +177,7 @@ class TestAutoRegistry:
             First class to register.
             """
 
-            test_type: Literal["duplicate"] = "duplicate"
+            test_type: str = "duplicate"
             add_to_registry: ClassVar[bool] = True
 
         with pytest.raises(DuplicatedRegistryKeyError):
@@ -187,7 +187,7 @@ class TestAutoRegistry:
                 Second class to register.
                 """
 
-                test_type: Literal["duplicate"] = "duplicate"
+                test_type: str = "duplicate"
                 add_to_registry: ClassVar[bool] = True
 
     def test_no_key_attribute_defined(self) -> None:
@@ -244,7 +244,7 @@ class TestAutoRegistry:
             Class with only one registered subclass.
             """
 
-            test_type: Literal["only"] = "only"
+            test_type: str = "only"
             add_to_registry: ClassVar[bool] = True
 
         AutoRegistry.init_registry([BaseWithOneItem])

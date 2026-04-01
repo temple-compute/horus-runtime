@@ -233,49 +233,56 @@ class AutoRegistry(BaseModel, ABC):
         transparently deserialise into ``S3Artifact``, ``LocalArtifact``, etc.
         without any per-model boilerplate.
         """
+        # Check if this class is a registry root that should intercept
+        # validation
+        origin = (
+            getattr(cls, "__pydantic_generic_metadata__", {}).get("origin")
+            or cls
+        )
+
         # Non-root classes (concrete subclasses) must use Pydantic's default
         # schema generation. If we intercepted here we would recurse infinitely
         # because dispatching calls back into validation.
-        if cls not in cls._registry_roots:
+        if origin not in origin._registry_roots:
             return handler(source_type)
 
         def validate(data: Any) -> Any:
             # Already a valid instance of this hierarchy, pass through.
-            if isinstance(data, cls):
+            if isinstance(data, origin):
                 return data
 
             if not isinstance(data, dict):
                 raise TypeError(
-                    _("Expected dict or %(cls)s, got %(type)s")
-                    % {"cls": cls.__name__, "type": type(data)}
+                    _("Expected dict or %(origin)s, got %(type)s")
+                    % {"origin": origin.__name__, "type": type(data)}
                 )
 
-            discriminator = data.get(cls.registry_key)
+            discriminator = data.get(origin.registry_key)
             if not discriminator:
                 raise ValueError(
                     _("Missing '%(registry_key)s' discriminator in data")
-                    % {"registry_key": cls.registry_key}
+                    % {"registry_key": origin.registry_key}
                 )
 
-            target_cls = cls.registry.get(discriminator)
-            if target_cls is None:
+            target_origin = origin.registry.get(discriminator)
+            if target_origin is None:
                 raise ValueError(
                     _(
                         "Unknown %(registry_key)s='%(discriminator)s' for "
-                        "%(cls)s. Registered: %(registered)s"
+                        "%(origin)s. Registered: %(registered)s"
                     )
                     % {
-                        "registry_key": cls.registry_key,
+                        "registry_key": origin.registry_key,
                         "discriminator": discriminator,
-                        "cls": cls.__name__,
-                        "registered": tuple(cls.registry.keys()),
+                        "origin": origin.__name__,
+                        "registered": tuple(origin.registry.keys()),
                     }
                 )
 
             # Use the pre-built validator on the concrete class directly.
             # Calling model_validate() here would re-enter
             # __get_pydantic_core_schema__ and cause infinite recursion.
-            return target_cls.__pydantic_validator__.validate_python(data)
+            return target_origin.__pydantic_validator__.validate_python(data)
 
         return core_schema.no_info_plain_validator_function(validate)
 
@@ -308,12 +315,12 @@ class AutoRegistry(BaseModel, ABC):
             }
 
         for group in groups_to_load:
-            horus_logger.debug(
+            horus_logger.log.debug(
                 _("Initializing %(group)s registry.") % {"group": group}
             )
 
             for horus_plugin in entry_points(group=group):
-                horus_logger.debug(
+                horus_logger.log.debug(
                     _("- %(entry_point)s")
                     % {"entry_point": horus_plugin.value}
                 )
@@ -324,7 +331,7 @@ class AutoRegistry(BaseModel, ABC):
                 try:
                     horus_plugin.load()
                 except Exception as e:
-                    horus_logger.error(
+                    horus_logger.log.error(
                         _("Failed to load plugin %(entry_point)s: %(error)s")
                         % {"entry_point": horus_plugin.value, "error": str(e)}
                     )

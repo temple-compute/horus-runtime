@@ -15,45 +15,36 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Event bus transport base for horus-runtime.
+Defines the BaseInput class, which represents an interactive input that can be
+used in Horus workflows to ask users for information during execution.
 """
 
 from abc import abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from horus_runtime.event.base import BaseEvent
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseBusTransport(AutoRegistry, entry_point="transport"):
+class BaseInput(AutoRegistry, entry_point="input"):
     """
-    Defines how events move from emitter to subscribers.
-    Local: direct call. Remote: serialize → broker → deserialize.
+    Base class for workflow interactive inputs.
+
+    The implementation must block until a value is available. horus_builtin
+    provides a basic CLI input implementation.
     """
 
-    registry_key: ClassVar[str] = "transport_type"
-    transport_type: str | None = None
-    """
-    The 'transport_type' field is used to identify the specific type
-    of transport.
-    """
+    registry_key: ClassVar[str] = "kind"
+    kind: str
 
     @abstractmethod
-    async def publish(self, event: BaseEvent) -> None:
+    def ask(
+        self,
+        prompt: str,
+        *,
+        default: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
         """
-        Put the event into the transport.
-        """
-
-    @abstractmethod
-    async def start(self) -> None:
-        """
-        Initialize connections, start consumers, etc.
-        """
-
-    @abstractmethod
-    async def stop(self) -> None:
-        """
-        Graceful shutdown.
+        Ask the user for input with the given prompt and return their response.
         """

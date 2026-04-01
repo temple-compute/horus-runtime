@@ -21,9 +21,10 @@ task locally in the Horus runtime.
 """
 
 import subprocess
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar
 
-from horus_runtime.core.executor.base import BaseExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -34,7 +35,9 @@ class ShellExecutor(BaseExecutor):
     Run the tasks locally in the host machine.
     """
 
-    kind: Literal["shell"] = "shell"
+    kind: str = "shell"
+
+    runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 
     def execute(self, task: "BaseTask") -> int:
         """
@@ -46,7 +49,8 @@ class ShellExecutor(BaseExecutor):
         Returns:
             int: The return code of the executed command.
         """
-        prepared_command = task.runtime.format_runtime(task)
+        assert isinstance(task.runtime, CommandRuntime)
+        prepared_command = task.runtime.setup_runtime(task)
 
         # Security Warning:
         # This method uses `shell=True` with `subprocess.run`, which poses a

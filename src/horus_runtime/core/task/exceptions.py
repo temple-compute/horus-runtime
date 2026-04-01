@@ -30,3 +30,11 @@ class TaskExecutionError(BaseTaskError):
     """
     Exception raised when a task execution fails in the Horus runtime.
     """
+
+
+class TaskMissingIdError(BaseTaskError):
+    """
+    Exception raised when a task is about to be executed but has no task_id
+    assigned. This typically means the task was added to the workflow after
+    construction (e.g. via a decorator) without explicitly setting task_id.
+    """

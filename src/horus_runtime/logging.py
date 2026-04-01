@@ -39,7 +39,7 @@ LoggerLevel = Annotated[
 ]
 
 
-class HorusLoggerSettings(BaseSettings):
+class HorusLogger(BaseSettings):
     """
     Configuration for the loguru logger.
     """
@@ -62,38 +62,49 @@ class HorusLoggerSettings(BaseSettings):
     compression: str | None = None
     filename_template: str = "log_{time:YYYY-MM-DD}.log"
 
-    @classmethod
-    def setup(cls) -> "Logger":
+    @property
+    def log(self) -> "Logger":
+        """
+        Get the configured loguru logger instance.
+        """
+        return logger
+
+    def setup(self, level: LoggerLevel | None = None) -> None:
         """
         Set up the loguru logger with the current settings.
         """
         # Load the configuration from environment variables or defaults
-        config = cls()
+        self.level = level or self.level
 
         # Ensure the log directory exists
-        config.log_directory.mkdir(parents=True, exist_ok=True)
+        self.log_directory.mkdir(parents=True, exist_ok=True)
 
         # Remove the default logger and add a new one with our configuration
         logger.remove()
         logger.add(
-            sink=f"{config.log_directory}/{config.filename_template}",
-            format=config.format,
-            level=config.level,
-            rotation=config.rotation,
-            retention=config.retention,
-            compression=config.compression,
+            sink=f"{self.log_directory}/{self.filename_template}",
+            format=self.format,
+            level=self.level,
+            rotation=self.rotation,
+            retention=self.retention,
+            compression=self.compression,
             enqueue=True,
         )
 
         # Add terminal logging as well
         logger.add(
-            sink=sys.stderr,
-            format=config.format,
-            level=config.level,
+            sink=sys.stdout,
+            format=self.format,
+            level=self.level,
         )
 
-        return logger
+    def set_level(self, level: LoggerLevel) -> None:
+        """
+        Set the logging level at runtime.
+        """
+        self.setup(level=level)  # Re-setup to apply the new level
 
 
 # Instantiate a global logger ready to be used.
-horus_logger: "Logger" = HorusLoggerSettings.setup()
+horus_logger: "HorusLogger" = HorusLogger()
+horus_logger.setup()

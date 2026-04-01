@@ -2,7 +2,7 @@
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
 version = "0.0.1"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
@@ -20,6 +20,7 @@ dev = [
     "ruff~=0.15",
     "mypy~=1.19",
     "pytest~=9.0",
+    "pytest-asyncio~=1.3.0",
     "pytest-cov~=7.0",
     "pre_commit~=4.0",
     "licenseheaders~=0.8",
@@ -40,9 +41,13 @@ folder = "horus_builtin.artifact.folder"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"
+python_exec = "horus_builtin.executor.python_exec"
+python_fn = "horus_builtin.executor.python_fn"
 
 [project.entry-points."horus.runtime"]
 command = "horus_builtin.runtime.command"
+python_string = "horus_builtin.runtime.python_string"
+python = "horus_builtin.runtime.python"
 
 [project.entry-points."horus.task"]
 horus_task = "horus_builtin.task.horus_task"
@@ -52,6 +57,9 @@ horus_workflow = "horus_builtin.workflow.horus_workflow"
 
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"
+
+[project.entry-points."horus.input"]
+cli = "horus_builtin.input.cli"
 
 # ================
 
@@ -72,10 +80,11 @@ addopts = """
     --cov-report=term-missing
     --cov-fail-under=90
 """
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 79
-target-version = "py312"
+target-version = "py313"
 exclude = [".git", ".venv", "build", "dist", "__pycache__"]
 
 [tool.ruff.lint.pydocstyle]
@@ -109,7 +118,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 exclude = ["build", "dist"]
 plugins = ["pydantic.mypy"]

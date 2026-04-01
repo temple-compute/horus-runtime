@@ -16,18 +16,32 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+PythonCodeStringRuntime implementation for horus-runtime.
 """
 
-from horus_runtime.event.base import BaseEvent
+from typing import TYPE_CHECKING
+
+from horus_runtime.core.runtime.base import BaseRuntime
+
+if TYPE_CHECKING:
+    from horus_runtime.core.task.base import BaseTask
 
 
-class HorusTaskEvent(BaseEvent):
+class PythonCodeStringRuntime(BaseRuntime[str]):
     """
-    Event emitted when a HorusTask is executed.
+    Executes a Python code snippet.
     """
 
-    event_type: str = "horus_task_event"
+    kind: str = "python"
 
-    task_id: str | None = None
-    task_name: str
+    code: str
+    """
+    The Python code to execute.
+    """
+
+    def setup_runtime(self, task: "BaseTask") -> str:
+        """
+        For the PythonCodeStringRuntime, setting up the runtime simply involves
+        returning the code as is.
+        """
+        return self.code

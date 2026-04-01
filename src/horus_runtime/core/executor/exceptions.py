@@ -16,18 +16,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-HorusTaskEvent. Emitted when a HorusTask is executed.
+Exceptions related to executor operations in the Horus runtime.
 """
 
-from horus_runtime.event.base import BaseEvent
 
-
-class HorusTaskEvent(BaseEvent):
+class BaseExecutorError(Exception):
     """
-    Event emitted when a HorusTask is executed.
+    Base exception for executor-related errors in the Horus runtime.
     """
 
-    event_type: str = "horus_task_event"
 
-    task_id: str | None = None
-    task_name: str
+class IncompatibleRuntimeError(BaseExecutorError):
+    """
+    Exception raised when a task's runtime is not compatible with its executor.
+    """

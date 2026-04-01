@@ -50,16 +50,11 @@ class HorusEventBus:
     The transport mechanism for the event bus.
     """
 
-    _handlers: defaultdict[type[BaseEvent], list[BaseEventSubscriber]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    _handlers: defaultdict[
+        type[BaseEvent], list[BaseEventSubscriber[BaseEvent]]
+    ] = field(default_factory=lambda: defaultdict(list))
     """
     Mapping from event type to list of handler callables.
-    """
-
-    _wildcard_handlers: list[BaseEventSubscriber] = field(default_factory=list)
-    """
-    Handlers that receive all events regardless of type.
     """
 
     _started: bool = False
@@ -73,30 +68,23 @@ class HorusEventBus:
         """
         self._transports.append(transport)
 
-    def subscribe(self, subscriber: BaseEventSubscriber) -> None:
+    def subscribe(self, subscriber: BaseEventSubscriber[BaseEvent]) -> None:
         """
         Subscribe a handler to events it declares interest in.
         If no events are declared, subscribes to all events.
         """
-        if not subscriber.events:
-            horus_logger.debug(
-                _("Subscribing handler %(subscriber)s to all events")
-                % {"subscriber": subscriber.__class__.__name__}
-            )
-            self._wildcard_handlers.append(subscriber)
-        else:
-            for event_type in subscriber.events:
-                horus_logger.debug(
-                    _(
-                        "Subscribing handler %(subscriber)s to event "
-                        "type %(event_type)s"
-                    )
-                    % {
-                        "subscriber": subscriber.__class__.__name__,
-                        "event_type": event_type.__name__,
-                    }
+        for event_type in subscriber.events:
+            horus_logger.log.debug(
+                _(
+                    "Subscribing handler %(subscriber)s to event "
+                    "type %(event_type)s"
                 )
-                self._handlers[event_type].append(subscriber)
+                % {
+                    "subscriber": subscriber.__class__.__name__,
+                    "event_type": event_type.__name__,
+                }
+            )
+            self._handlers[event_type].append(subscriber)
 
     def emit(self, event: BaseEvent) -> None:
         """
@@ -112,21 +100,20 @@ class HorusEventBus:
         """
         Dispatch an event to all relevant handlers based on its type.
         """
-        for handler in self._handlers[type(event)]:
-            handler.handle(event)
-
-        for handler in self._wildcard_handlers:
-            handler.handle(event)
+        for event_type, handlers in self._handlers.items():
+            if isinstance(event, event_type):
+                for handler in handlers:
+                    handler.handle(event)
 
     def start(self) -> None:
         """
         Initializes transport and subscribers from the registry.
         """
         if self._started:
-            horus_logger.warning(_("Event bus is already started."))
+            horus_logger.log.warning(_("Event bus is already started."))
             return
 
-        horus_logger.debug(
+        horus_logger.log.debug(
             _("Initializing transport and subscribers from the registry.")
         )
 
@@ -136,7 +123,7 @@ class HorusEventBus:
             transport = transport_cls()
 
             # Start the transport
-            horus_logger.debug(
+            horus_logger.log.debug(
                 _("Starting transport: %(transport_type)s")
                 % {"transport_type": transport.transport_type}
             )
@@ -152,7 +139,7 @@ class HorusEventBus:
         for subscriber_cls in BaseEventSubscriber.registry.values():
             subscriber = subscriber_cls()
 
-            horus_logger.debug(
+            horus_logger.log.debug(
                 _("Subscribing handler: %(subscriber_cls)s")
                 % {"subscriber_cls": subscriber_cls.__name__}
             )
@@ -169,7 +156,7 @@ class HorusEventBus:
         """
         # Schedule transport shutdown on the event loop thread
         for transport in self._transports:
-            horus_logger.debug(
+            horus_logger.log.debug(
                 _("Stopping transport: %(transport_type)s")
                 % {"transport_type": transport.transport_type}
             )
@@ -178,7 +165,7 @@ class HorusEventBus:
             try:
                 future.result()  # Wait for the transport to stop
             except Exception as e:
-                horus_logger.error(
+                horus_logger.log.error(
                     _("Error stopping transport %(transport_type)s: %(error)s")
                     % {
                         "transport_type": transport.transport_type,

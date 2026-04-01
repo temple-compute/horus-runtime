@@ -24,12 +24,15 @@ a command or running it inside a SLURM job, either remote or locally.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
+from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
+
+RuntimeFilterType = tuple[type[BaseRuntime], ...]
 
 
 class BaseExecutor(AutoRegistry, entry_point="executor"):
@@ -41,9 +44,15 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
 
     registry_key: ClassVar[str] = "kind"
 
-    kind: Any = ...
+    kind: str
     """
     The 'kind' field is used to identify the specific type of executor.
+    """
+
+    runtimes: ClassVar[RuntimeFilterType] = (BaseRuntime,)
+    """
+    Which runtime types this executor can handle. By default, an executor can
+    handle any runtime type.
     """
 
     @abstractmethod

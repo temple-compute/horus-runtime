@@ -16,20 +16,31 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
+Python executor for in-memory workflows in horus-runtime. (Function
+executor).
 """
 
 from typing import ClassVar
 
-from horus_runtime.event.base import BaseEvent
+from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.core.task.base import BaseTask
 
 
-class ArtifactEvent(BaseEvent):
+class PythonFunctionExecutor(BaseExecutor):
     """
-    Event emitted when an artifact is created, updated, or deleted.
+    Executor for running Python functions in-memory.
     """
 
-    add_to_registry: ClassVar[bool] = True
-    event_type: str = "artifact_event"
+    kind: str = "python_function"
 
-    artifact_id: str
+    runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
+
+    def execute(self, task: "BaseTask") -> int:
+        """
+        Executes the Python function specified in the task's runtime.
+        """
+        assert isinstance(task.runtime, PythonFunctionRuntime)
+        func = task.runtime.setup_runtime(task)
+        func()
+        return 0

@@ -21,12 +21,12 @@ HorusWorkflow implementation for Horus built-in workflows.
 """
 
 from pathlib import Path
-from typing import Literal
 
 import yaml
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext
+from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 
@@ -42,7 +42,7 @@ class HorusWorkflow(BaseWorkflow):
     missing.
     """
 
-    kind: Literal["horus_workflow"] = "horus_workflow"
+    kind: str = "horus_workflow"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
@@ -53,7 +53,7 @@ class HorusWorkflow(BaseWorkflow):
         with Path(path).open("r", encoding="utf-8") as fh:
             return cls.model_validate(yaml.safe_load(fh))
 
-    def run(self) -> None:
+    async def run(self) -> None:
         """
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
@@ -61,7 +61,7 @@ class HorusWorkflow(BaseWorkflow):
         ctx = HorusContext.get_context()
 
         for task in self.tasks.values():
-            if task.is_complete():
+            if task.skip_if_complete and task.is_complete():
                 ctx.bus.emit(
                     HorusTaskEvent(
                         message=_(
@@ -75,7 +75,13 @@ class HorusWorkflow(BaseWorkflow):
                 )
                 continue
 
-            task.run()
+            if task.task_id is None:
+                raise TaskMissingIdError(
+                    f"Task '{task.name}' has no task_id. Ensure tasks added "
+                    "after workflow construction have task_id explicitly set."
+                )
+
+            await task.run()
 
     def reset(self) -> None:
         """
