@@ -29,7 +29,10 @@ import pytest
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import (
+    TaskExecutionError,
+    TaskMissingIdError,
+)
 from tests.conftest import MakeTaskType, MakeWorkflowFileType
 
 
@@ -148,7 +151,7 @@ class TestWorkflowRun:
         with patch.object(HorusTask, "run") as mock_run:
             await wf.run()
 
-        mock_run.assert_called_once()
+        mock_run.assert_awaited_once()
 
     async def test_run_skips_task_when_all_outputs_exist(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
@@ -241,3 +244,28 @@ class TestWorkflowRun:
 
         # Should complete without error
         await wf.run()
+
+    async def test_run_raises_when_task_has_no_id(
+        self, make_shell_task: MakeTaskType
+    ) -> None:
+        """
+        Test that running a workflow raises TaskMissingIdError when a task has
+        no task_id. This guards against tasks added after workflow construction
+        (e.g. via a decorator) without task_id being explicitly set.
+        """
+        task = make_shell_task(cmd="echo test")
+        task.task_id = None  # Simulate the pre-fix state
+
+        wf = HorusWorkflow.__new__(HorusWorkflow)
+        # Bypass model_validator (inject_task_ids) to preserve the None id
+        object.__setattr__(wf, "tasks", {"orphan": task})
+        object.__setattr__(wf, "name", "test_wf")
+
+        with (
+            patch(
+                "horus_builtin.workflow.horus_workflow.HorusContext"
+            ) as mock_ctx_cls,
+            pytest.raises(TaskMissingIdError),
+        ):
+            mock_ctx_cls.get_context.return_value = Mock()
+            await wf.run()

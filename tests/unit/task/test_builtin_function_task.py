@@ -161,6 +161,38 @@ class TestFunctionTaskDecorator:
 
         assert task.runtime.func is my_func
 
+    def test_decorator_sets_task_id_matching_workflow_key(self) -> None:
+        """
+        Test that decorator-registered tasks have a task_id equal to their
+        workflow key (i.e. task.task_id == task.name). This guards against
+        the regression where t.task_id was not explicitly assigned, leaving
+        it as the default UUID instead of the function name.
+        """
+        wf = HorusWorkflow(name="test_wf")
+
+        @FunctionTask.task(wf)
+        def my_step() -> None:
+            pass
+
+        task = wf.tasks["my_step"]
+        assert task.task_id == task.name
+
+    def test_decorator_custom_name_sets_task_id_matching_workflow_key(
+        self,
+    ) -> None:
+        """
+        Test that a custom-named decorator-registered task also has task_id
+        equal to the custom name, not the underlying function name.
+        """
+        wf = HorusWorkflow(name="test_wf")
+
+        @FunctionTask.task(wf, name="custom_step")
+        def my_func() -> None:
+            pass
+
+        task = wf.tasks["custom_step"]
+        assert task.task_id == "custom_step"
+
 
 @pytest.mark.unit
 class TestFunctionTaskExecution:

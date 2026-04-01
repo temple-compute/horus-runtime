@@ -64,7 +64,11 @@ class FunctionTask(HorusTask):
                 outputs=outputs or {},
             )
 
+            # Ensure decorator-registered tasks get a task_id consistent
+            # with the workflow key
+            t.task_id = t.name
             wf.tasks[t.name] = t
+
             return t
 
         return decorator

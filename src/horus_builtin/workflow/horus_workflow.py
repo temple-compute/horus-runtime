@@ -26,6 +26,7 @@ import yaml
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext
+from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 
@@ -73,6 +74,12 @@ class HorusWorkflow(BaseWorkflow):
                     )
                 )
                 continue
+
+            if task.task_id is None:
+                raise TaskMissingIdError(
+                    f"Task '{task.name}' has no task_id. Ensure tasks added "
+                    "after workflow construction have task_id explicitly set."
+                )
 
             await task.run()
 
