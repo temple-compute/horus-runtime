@@ -69,35 +69,33 @@ class HorusLogger(BaseSettings):
         """
         return logger
 
-    @classmethod
-    def setup(cls, level: LoggerLevel | None = None) -> None:
+    def setup(self, level: LoggerLevel | None = None) -> None:
         """
         Set up the loguru logger with the current settings.
         """
         # Load the configuration from environment variables or defaults
-        config = cls()
-        config.level = level or config.level
+        self.level = level or self.level
 
         # Ensure the log directory exists
-        config.log_directory.mkdir(parents=True, exist_ok=True)
+        self.log_directory.mkdir(parents=True, exist_ok=True)
 
         # Remove the default logger and add a new one with our configuration
         logger.remove()
         logger.add(
-            sink=f"{config.log_directory}/{config.filename_template}",
-            format=config.format,
-            level=config.level,
-            rotation=config.rotation,
-            retention=config.retention,
-            compression=config.compression,
+            sink=f"{self.log_directory}/{self.filename_template}",
+            format=self.format,
+            level=self.level,
+            rotation=self.rotation,
+            retention=self.retention,
+            compression=self.compression,
             enqueue=True,
         )
 
         # Add terminal logging as well
         logger.add(
             sink=sys.stdout,
-            format=config.format,
-            level=config.level,
+            format=self.format,
+            level=self.level,
         )
 
     def set_level(self, level: LoggerLevel) -> None:

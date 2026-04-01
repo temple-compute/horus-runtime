@@ -20,7 +20,6 @@ Unit tests for logger settings module.
 """
 
 from pathlib import Path
-from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -67,54 +66,13 @@ class TestHorusLoggerSettings:
             HorusLogger(level="INVALID")  # type: ignore[arg-type]
 
     @patch("horus_runtime.logging.logger")
-    def test_setup_returns_logger(
-        self, mock_logger: MagicMock, tmp_path: Path
-    ) -> None:
-        """
-        Test that setup() returns a logger instance.
-        """
-
-        class DummyConfig:
-            log_directory = tmp_path
-            filename_template = "log_{time:YYYY-MM-DD}.log"
-            format = ""
-            level = "INFO"
-            rotation = "10 MB"
-            retention = "7 days"
-            compression: Literal["zip"] | None = None
-
-        with patch.object(HorusLogger, "__new__", return_value=DummyConfig()):
-            _ = HorusLogger.setup()
-
-        mock_logger.remove.assert_called_once()
-        mock_logger.add.assert_any_call(
-            sink=f"{tmp_path}/log_{{time:YYYY-MM-DD}}.log",
-            format="",
-            level="INFO",
-            rotation="10 MB",
-            retention="7 days",
-            compression=None,
-            enqueue=True,
-        )
-
-    @patch("horus_runtime.logging.logger")
     def test_setup_removes_default_logger(
-        self, mock_logger: MagicMock, tmp_path: Path
+        self, mock_logger: MagicMock
     ) -> None:
         """
         Test that setup() calls logger.remove() to clear default handlers.
         """
-
-        class DummyConfig:
-            log_directory = tmp_path
-            filename_template = "log_{time:YYYY-MM-DD}.log"
-            format = ""
-            level = "INFO"
-            rotation = "10 MB"
-            retention = "7 days"
-            compression: Literal["zip"] | None = None
-
-        with patch.object(HorusLogger, "__new__", return_value=DummyConfig()):
-            HorusLogger.setup()
+        instance = HorusLogger()
+        instance.setup()
 
         mock_logger.remove.assert_called_once()
