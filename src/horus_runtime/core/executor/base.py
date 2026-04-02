@@ -56,7 +56,7 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
 
     @abstractmethod
-    def execute(self, task: "BaseTask") -> int:
+    async def execute(self, task: "BaseTask") -> int:
         """
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific

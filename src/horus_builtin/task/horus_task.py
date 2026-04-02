@@ -65,7 +65,7 @@ class HorusTask(BaseTask):
 
         # Execute the command using the executor
         with timed() as get_elapsed:
-            return_code = self.executor.execute(self)
+            return_code = await self.executor.execute(self)
 
         # Get the elapsed time and emit the completion event
         elapsed = get_elapsed()

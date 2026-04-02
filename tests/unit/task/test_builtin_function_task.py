@@ -242,3 +242,21 @@ class TestFunctionTaskExecution:
 
         task.reset()
         assert task.runs == 0
+
+    async def test_run_awaits_async_function(self) -> None:
+        """
+        Test that run() awaits wrapped async Python functions.
+        """
+        called: list[str] = []
+
+        async def async_func() -> None:
+            called.append("done")
+
+        task = FunctionTask(
+            name="test_async_task",
+            runtime=PythonFunctionRuntime(func=async_func),
+        )
+
+        await task.run()
+
+        assert called == ["done"]
