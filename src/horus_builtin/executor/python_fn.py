@@ -20,6 +20,7 @@ Python executor for in-memory workflows in horus-runtime. (Function
 executor).
 """
 
+import inspect
 from inspect import isawaitable
 from typing import ClassVar
 
@@ -46,8 +47,12 @@ class PythonFunctionExecutor(BaseExecutor):
         # Get the function from the runtime.
         func = task.runtime.setup_runtime(task)
 
-        # Call the function and get the result.
-        result = func()
+        # Call the function, passing the task if accepted.
+        sig = inspect.signature(func)
+        if sig.parameters:
+            result = func(task)
+        else:
+            result = func()
 
         # If the result is awaitable, await it.
         if isawaitable(result):

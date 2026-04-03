@@ -49,6 +49,15 @@ command = "horus_builtin.runtime.command"
 python_string = "horus_builtin.runtime.python_string"
 python = "horus_builtin.runtime.python"
 
+[project.entry-points."horus.interaction"]
+common = "horus_builtin.interaction.common"
+
+[project.entry-points."horus.interaction_transport"]
+cli = "horus_builtin.interaction.cli"
+
+[project.entry-points."horus.interaction_renderer"]
+cli = "horus_builtin.interaction.cli"
+
 [project.entry-points."horus.task"]
 horus_task = "horus_builtin.task.horus_task"
 
