@@ -16,8 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Defines the BaseInput class, which represents an interactive input that can be
-used in Horus workflows to ask users for information during execution.
+Core interaction primitives.
 """
 
 from abc import abstractmethod
@@ -26,25 +25,23 @@ from typing import Any, ClassVar
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseInput(AutoRegistry, entry_point="input"):
+class BaseInteraction[T: Any = Any](AutoRegistry, entry_point="interaction"):
     """
-    Base class for workflow interactive inputs.
-
-    The implementation must block until a value is available. horus_builtin
-    provides a basic CLI input implementation.
+    Defines an interaction prompt plus its validation logic.
     """
 
     registry_key: ClassVar[str] = "kind"
+
     kind: str
+    value_key: str
+    title: str | None = None
+    prompt: str | None = None
+    description: str | None = None
+    default: T | None = None
+    value: T | None = None
 
     @abstractmethod
-    def ask(
-        self,
-        prompt: str,
-        *,
-        default: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> str | None:
+    async def parse(self, value: object) -> T:
         """
-        Ask the user for input with the given prompt and return their response.
+        Validate and coerce a raw renderer value.
         """

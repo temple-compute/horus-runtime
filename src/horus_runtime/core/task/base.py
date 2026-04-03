@@ -29,6 +29,7 @@ from pydantic import Field, model_validator
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
+from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -99,6 +100,11 @@ class BaseTask(AutoRegistry, entry_point="task"):
     skip_if_complete: bool = True
     """
     Whether to skip execution of this task if it is already complete.
+    """
+
+    interaction: BaseInteractionTransport | None = None
+    """
+    The interaction transport currently associated with the task run.
     """
 
     @model_validator(mode="after")

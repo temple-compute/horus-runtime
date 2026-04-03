@@ -46,7 +46,7 @@ class ConcreteTestExecutor(BaseExecutor):
     )
     kind: str = "test"
 
-    def execute(self, task: Union["BaseTask", str]) -> int:
+    async def execute(self, task: Union["BaseTask", str]) -> int:
         """
         Simple test implementation that returns success for non-empty commands.
         """
@@ -100,18 +100,18 @@ class TestBaseExecutor:
         abstract_methods = BaseExecutor.__abstractmethods__
         assert "execute" in abstract_methods
 
-    def test_concrete_executor_implementation(self) -> None:
+    async def test_concrete_executor_implementation(self) -> None:
         """
         Test that concrete implementation works correctly.
         """
         executor = ConcreteTestExecutor()
 
         # Test successful execution
-        result = executor.execute("some task")
+        result = await executor.execute("some task")
         assert result == 0
 
         # Test failure case
-        result = executor.execute("")
+        result = await executor.execute("")
         assert result == 1
 
     def test_kind_field_validation(self) -> None:
@@ -181,7 +181,7 @@ class TestBaseExecutorValidation:
                 Invalid executor implementation without kind field for testing.
                 """
 
-                def execute(self, task: "BaseTask") -> int:
+                async def execute(self, _task: "BaseTask") -> int:
                     return 0
 
     def test_model_validation_preserves_type_safety(self) -> None:

@@ -16,34 +16,28 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-CLI Input implementation for horus-runtime.
+String interaction and renderers.
 """
 
-from horus_runtime.input.base import BaseInput
+from horus_runtime.core.interaction.base import BaseInteraction
 
 
-class CLIInput(BaseInput):
+class StringInteraction(BaseInteraction[str]):
     """
-    CLI input implementation. Prompts the user for input using the built-in
-    input() function.
+    Free-form text input.
     """
 
-    kind: str = "cli"
+    kind: str = "string"
 
-    def ask(
-        self,
-        prompt: str,
-        *,
-        default: str | None = None,
-        metadata: dict[str, str] | None = None,
-    ) -> str | None:
+    placeholder: str | None = None
+    strip: bool = True
+
+    async def parse(self, value: object) -> str:
         """
-        Prompt the user for input using the built-in input() function and
-        return their response.
+        Coerce input to text, optionally applying the default.
         """
-        if default is not None:
-            prompt = f"{prompt} [{default}]: "
+        if value in (None, "") and self.default is not None:
+            return self.default
 
-        value = input(prompt) or default
-
-        return value
+        result = str(value)
+        return result.strip() if self.strip else result

@@ -24,11 +24,9 @@ horus-runtime.
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from horus_builtin.input.cli import CLIInput
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.event.bus import HorusEventBus
 from horus_runtime.i18n import tr as _
-from horus_runtime.input.base import BaseInput
 from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -69,11 +67,6 @@ class HorusContext:
     bus: HorusEventBus = field(default_factory=HorusEventBus)
     """
     Event bus for the horus runtime context.
-    """
-
-    input: BaseInput = field(default_factory=CLIInput)
-    """
-    Input handler for the horus runtime context.
     """
 
     @staticmethod

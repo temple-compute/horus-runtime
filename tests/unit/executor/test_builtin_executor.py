@@ -104,7 +104,7 @@ class TestShellExecutor:
         assert executor.kind == "shell"
 
     @patch("subprocess.run")
-    def test_execute_successful_command(
+    async def test_execute_successful_command(
         self, mock_run: Mock, make_shell_task: MakeTaskType
     ) -> None:
         """
@@ -118,7 +118,7 @@ class TestShellExecutor:
         hello_world_task = make_shell_task("echo 'Hello World'")
 
         executor = ShellExecutor()
-        result = executor.execute(hello_world_task)
+        result = await executor.execute(hello_world_task)
 
         assert result == 0
         mock_run.assert_called_once_with(
@@ -136,7 +136,7 @@ class TestShellExecutorIntegration:
     Integration tests for ShellExecutor with real subprocess calls.
     """
 
-    def test_execute_real_successful_command(
+    async def test_execute_real_successful_command(
         self, make_shell_task: MakeTaskType
     ) -> None:
         """
@@ -146,12 +146,12 @@ class TestShellExecutorIntegration:
 
         # Use a simple, cross-platform command that should always work
         hello_world_task = make_shell_task("echo 'Hello World'")
-        result = executor.execute(hello_world_task)
+        result = await executor.execute(hello_world_task)
 
         # Echo should return 0 on success
         assert result == 0
 
-    def test_execute_real_failed_command(
+    async def test_execute_real_failed_command(
         self, make_shell_task: MakeTaskType
     ) -> None:
         """
@@ -162,10 +162,10 @@ class TestShellExecutorIntegration:
         task = make_shell_task("nonexistent_command_xyz_that_should_not_exist")
 
         # Use a command that should fail (exit with non-zero code)
-        result = executor.execute(task)
+        result = await executor.execute(task)
         assert result != 0
 
-    def test_execute_real_command_with_exit_code(
+    async def test_execute_real_command_with_exit_code(
         self, make_shell_task: MakeTaskType
     ) -> None:
         """
@@ -175,5 +175,5 @@ class TestShellExecutorIntegration:
 
         # Use 'true' command which should always exit with 0
         task = make_shell_task("true")
-        result = executor.execute(task)
+        result = await executor.execute(task)
         assert result == 0

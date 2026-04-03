@@ -39,7 +39,7 @@ class ShellExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 
-    def execute(self, task: "BaseTask") -> int:
+    async def execute(self, task: "BaseTask") -> int:
         """
         Runs the task locally in the host machine.
 

@@ -40,7 +40,7 @@ class PythonExecExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
 
-    def execute(self, task: "BaseTask") -> int:
+    async def execute(self, task: "BaseTask") -> int:
         """
         Runs the task in-process by executing the Python code specified in the
         task's runtime.

@@ -23,9 +23,11 @@ from collections.abc import Callable
 from typing import Any
 
 from horus_builtin.executor.python_fn import PythonFunctionExecutor
+from horus_builtin.interaction.cli import CLIInteractionTransport
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.workflow.base import BaseWorkflow
 
 
@@ -39,6 +41,9 @@ class FunctionTask(HorusTask):
 
     runtime: PythonFunctionRuntime
     executor: PythonFunctionExecutor = PythonFunctionExecutor()
+
+    # Default to CLI transport for interactions in FunctionTasks.
+    interaction: BaseInteractionTransport = CLIInteractionTransport()
 
     @staticmethod
     def task(

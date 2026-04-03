@@ -242,3 +242,42 @@ class TestFunctionTaskExecution:
 
         task.reset()
         assert task.runs == 0
+
+    async def test_run_awaits_async_function(self) -> None:
+        """
+        Test that run() awaits wrapped async Python functions.
+        """
+        called: list[str] = []
+
+        async def async_func() -> None:
+            called.append("done")
+
+        task = FunctionTask(
+            name="test_async_task",
+            runtime=PythonFunctionRuntime(func=async_func),
+        )
+
+        await task.run()
+
+        assert called == ["done"]
+
+    async def test_run_passes_task_when_function_accepts_parameter(
+        self,
+    ) -> None:
+        """
+        Test that run() passes the task instance as the first function
+        argument when the wrapped callable accepts one.
+        """
+        received_tasks: list[BaseTask] = []
+
+        def task_aware_func(task: BaseTask) -> None:
+            received_tasks.append(task)
+
+        task = FunctionTask(
+            name="test_task",
+            runtime=PythonFunctionRuntime(func=task_aware_func),
+        )
+
+        await task.run()
+
+        assert received_tasks == [task]
