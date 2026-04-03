@@ -58,9 +58,6 @@ horus_workflow = "horus_builtin.workflow.horus_workflow"
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"
 
-[project.entry-points."horus.input"]
-cli = "horus_builtin.input.cli"
-
 # ================
 
 # Other tool configurations
