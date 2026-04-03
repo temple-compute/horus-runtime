@@ -56,7 +56,7 @@ class InteractionAskedEvent(BaseEvent):
     interaction_kind: str
     transport_kind: str
     renderer_key: str
-    batch_key: str
+    value_key: str
 
     @model_validator(mode="before")
     @classmethod
@@ -86,7 +86,7 @@ class InteractionAnsweredEvent(BaseEvent):
 
     interaction_kind: str
     transport_kind: str
-    batch_key: str
+    value_key: str
 
     @model_validator(mode="before")
     @classmethod
@@ -113,7 +113,7 @@ class InteractionRetryEvent(BaseEvent):
 
     interaction_kind: str
     transport_kind: str
-    batch_key: str
+    value_key: str
     attempt: int
     max_retries: int
 
@@ -146,7 +146,7 @@ class InteractionFailedEvent(BaseEvent):
 
     interaction_kind: str
     transport_kind: str
-    batch_key: str
+    value_key: str
     reason: str
 
     @model_validator(mode="before")
@@ -197,7 +197,7 @@ class BaseInteractionTransport(
                 InteractionFailedEvent(
                     interaction_kind=interaction.kind,
                     transport_kind=self.kind,
-                    batch_key=interaction.batch_key,
+                    value_key=interaction.value_key,
                     reason=_(
                         "No renderer registered for"
                         " %(transport)s:%(interaction)s"
@@ -217,7 +217,7 @@ class BaseInteractionTransport(
                 interaction_kind=interaction.kind,
                 transport_kind=self.kind,
                 renderer_key=renderer.render_key or "",
-                batch_key=interaction.batch_key,
+                value_key=interaction.value_key,
             )
         )
 
@@ -232,7 +232,7 @@ class BaseInteractionTransport(
                         InteractionRetryEvent(
                             interaction_kind=interaction.kind,
                             transport_kind=self.kind,
-                            batch_key=interaction.batch_key,
+                            value_key=interaction.value_key,
                             attempt=attempt + 1,
                             max_retries=max_retries,
                         )
@@ -243,7 +243,7 @@ class BaseInteractionTransport(
                     InteractionFailedEvent(
                         interaction_kind=interaction.kind,
                         transport_kind=self.kind,
-                        batch_key=interaction.batch_key,
+                        value_key=interaction.value_key,
                         reason=_("All %(retries)d retries exhausted.")
                         % {"retries": max_retries},
                     )
@@ -256,7 +256,7 @@ class BaseInteractionTransport(
                     InteractionAnsweredEvent(
                         interaction_kind=interaction.kind,
                         transport_kind=self.kind,
-                        batch_key=interaction.batch_key,
+                        value_key=interaction.value_key,
                     )
                 )
                 return result

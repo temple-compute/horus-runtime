@@ -91,7 +91,7 @@ class TestStringInteraction:
         """
         Test that parse() strips surrounding whitespace by default.
         """
-        interaction = StringInteraction(batch_key="batch")
+        interaction = StringInteraction(value_key="batch")
 
         assert await interaction.parse("  hello  ") == "hello"
 
@@ -101,7 +101,7 @@ class TestStringInteraction:
         """
         Test that parse() preserves whitespace when strip=False.
         """
-        interaction = StringInteraction(batch_key="batch", strip=False)
+        interaction = StringInteraction(value_key="batch", strip=False)
 
         assert await interaction.parse("  hello  ") == "  hello  "
 
@@ -110,7 +110,7 @@ class TestStringInteraction:
         Test that parse() returns the default for empty input.
         """
         interaction = StringInteraction(
-            batch_key="batch",
+            value_key="batch",
             default="fallback",
         )
 
@@ -127,7 +127,7 @@ class TestConfirmInteraction:
         """
         Test that parse() accepts common truthy inputs.
         """
-        interaction = ConfirmInteraction(batch_key="batch")
+        interaction = ConfirmInteraction(value_key="batch")
 
         assert await interaction.parse("yes") is True
         assert await interaction.parse("1") is True
@@ -136,7 +136,7 @@ class TestConfirmInteraction:
         """
         Test that parse() accepts common falsy inputs.
         """
-        interaction = ConfirmInteraction(batch_key="batch")
+        interaction = ConfirmInteraction(value_key="batch")
 
         assert await interaction.parse("no") is False
         assert await interaction.parse("0") is False
@@ -145,7 +145,7 @@ class TestConfirmInteraction:
         """
         Test that parse() returns the default for empty input.
         """
-        interaction = ConfirmInteraction(batch_key="batch", default=True)
+        interaction = ConfirmInteraction(value_key="batch", default=True)
 
         assert await interaction.parse("") is True
 
@@ -153,7 +153,7 @@ class TestConfirmInteraction:
         """
         Test that parse() raises ValueError for unknown inputs.
         """
-        interaction = ConfirmInteraction(batch_key="batch")
+        interaction = ConfirmInteraction(value_key="batch")
 
         with pytest.raises(ValueError, match="Cannot parse confirmation"):
             await interaction.parse("later")
@@ -170,7 +170,7 @@ class TestDropdownInteraction:
         Test that parse() accepts a configured option.
         """
         interaction = DropdownInteraction(
-            batch_key="batch",
+            value_key="batch",
             options=["red", "green", "blue"],
         )
 
@@ -181,7 +181,7 @@ class TestDropdownInteraction:
         Test that parse() returns the default for empty input.
         """
         interaction = DropdownInteraction(
-            batch_key="batch",
+            value_key="batch",
             options=["red", "green"],
             default="red",
         )
@@ -193,7 +193,7 @@ class TestDropdownInteraction:
         Test that parse() rejects selections outside the allowed options.
         """
         interaction = DropdownInteraction(
-            batch_key="batch",
+            value_key="batch",
             options=["red", "green"],
         )
 
@@ -216,7 +216,7 @@ class TestFileInteraction:
         """
         file_path = tmp_path / "example.txt"
         file_path.write_text("hello")
-        interaction = FileInteraction(batch_key="batch")
+        interaction = FileInteraction(value_key="batch")
 
         artifact = await interaction.parse(file_path)
 
@@ -233,7 +233,7 @@ class TestFileInteraction:
         file_path = tmp_path / "default.txt"
         file_path.write_text("hello")
         interaction = FileInteraction(
-            batch_key="batch",
+            value_key="batch",
             default=FileArtifact(path=file_path),
         )
 
@@ -245,7 +245,7 @@ class TestFileInteraction:
         """
         Test that parse() raises ValueError when the file does not exist.
         """
-        interaction = FileInteraction(batch_key="batch")
+        interaction = FileInteraction(value_key="batch")
 
         with pytest.raises(ValueError, match="File not found"):
             await interaction.parse("/tmp/does-not-exist.txt")
@@ -260,7 +260,7 @@ class TestFileInteraction:
         file_path = tmp_path / "example.txt"
         file_path.write_text("hello")
         interaction = FileInteraction(
-            batch_key="batch",
+            value_key="batch",
             accept=[".json"],
         )
 
@@ -321,7 +321,7 @@ class TestCLIRenderers:
         """
         transport = CLIInteractionTransport()
         interaction = StringInteraction(
-            batch_key="batch",
+            value_key="batch",
             title="Title",
             prompt="Prompt",
             default="fallback",
@@ -360,7 +360,7 @@ class TestCLIRenderers:
         Test that CLIConfirmRenderer maps boolean defaults to y/n strings.
         """
         transport = CLIInteractionTransport()
-        interaction = ConfirmInteraction(batch_key="batch", default=True)
+        interaction = ConfirmInteraction(value_key="batch", default=True)
         captured: dict[str, object] = {}
 
         def fake_ask_text(**kwargs: object) -> str:
@@ -394,7 +394,7 @@ class TestCLIRenderers:
         """
         transport = CLIInteractionTransport()
         interaction = DropdownInteraction(
-            batch_key="batch",
+            value_key="batch",
             options=["red", "green"],
             default="green",
         )
@@ -435,7 +435,7 @@ class TestCLIRenderers:
 
         artifact = FileArtifact(path=file_path)
         interaction = FileInteraction(
-            batch_key="batch",
+            value_key="batch",
             accept=[".json", ".yaml"],
             default=artifact,
         )

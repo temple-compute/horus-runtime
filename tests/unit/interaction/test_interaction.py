@@ -127,7 +127,7 @@ class TestBaseInteraction:
         Test that BaseInteraction cannot be instantiated directly.
         """
         with pytest.raises(TypeError):
-            BaseInteraction(kind="test", batch_key="batch")  # type: ignore
+            BaseInteraction(kind="test", value_key="batch")  # type: ignore
 
     def test_registry_key_is_kind(self) -> None:
         """
@@ -158,7 +158,7 @@ class TestBaseInteraction:
 
         expected_fields = {
             "kind",
-            "batch_key",
+            "value_key",
             "title",
             "prompt",
             "description",
@@ -172,7 +172,7 @@ class TestBaseInteraction:
         Test that a concrete interaction stores the configured metadata.
         """
         interaction = ConcreteTestInteraction(
-            batch_key="test_batch",
+            value_key="test_batch",
             title="Title",
             prompt="Prompt",
             description="Description",
@@ -180,7 +180,7 @@ class TestBaseInteraction:
         )
 
         assert interaction.kind == "test_interaction"
-        assert interaction.batch_key == "test_batch"
+        assert interaction.value_key == "test_batch"
         assert interaction.title == "Title"
         assert interaction.prompt == "Prompt"
         assert interaction.description == "Description"
@@ -227,7 +227,7 @@ class TestBaseInteractionRenderer:
         Test that get_from_registry returns the registered renderer class.
         """
         transport = CLIInteractionTransport()
-        interaction = StringInteraction(batch_key="batch")
+        interaction = StringInteraction(value_key="batch")
 
         renderer_cls = BaseInteractionRenderer.get_from_registry(
             transport, interaction
@@ -253,7 +253,7 @@ class TestBaseInteractionTransport:
         """
         transport = CLIInteractionTransport()
         interaction = StringInteraction(
-            batch_key="batch-1",
+            value_key="batch-1",
             title="Greeting",
             prompt="Enter text",
         )
@@ -284,7 +284,7 @@ class TestBaseInteractionTransport:
         assert isinstance(emitted_events[0], InteractionAskedEvent)
         assert emitted_events[0].renderer_key == "cli:string"
         assert isinstance(emitted_events[1], InteractionAnsweredEvent)
-        assert emitted_events[1].batch_key == "batch-1"
+        assert emitted_events[1].value_key == "batch-1"
 
     async def test_ask_retries_after_parse_error(
         self,
@@ -295,7 +295,7 @@ class TestBaseInteractionTransport:
         Test that ask() retries when parse() raises ValueError.
         """
         transport = CLIInteractionTransport()
-        interaction = ConfirmInteraction(batch_key="batch-2")
+        interaction = ConfirmInteraction(value_key="batch-2")
         answers = iter(["maybe", "yes"])
 
         def fake_ask_text(
@@ -337,7 +337,7 @@ class TestBaseInteractionTransport:
         renderer.
         """
         transport = ConcreteTestTransport()
-        interaction = ConcreteTestInteraction(batch_key="batch-3")
+        interaction = ConcreteTestInteraction(value_key="batch-3")
 
         with pytest.raises(RendererNotFoundError):
             await transport.ask(interaction)
@@ -357,7 +357,7 @@ class TestBaseInteractionTransport:
         retries.
         """
         transport = CLIInteractionTransport()
-        interaction = ConfirmInteraction(batch_key="batch-4")
+        interaction = ConfirmInteraction(value_key="batch-4")
 
         def fake_ask_text(
             self: CLIInteractionTransport,

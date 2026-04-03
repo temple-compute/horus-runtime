@@ -33,7 +33,7 @@ class BaseInteraction[T: Any = Any](AutoRegistry, entry_point="interaction"):
     registry_key: ClassVar[str] = "kind"
 
     kind: str
-    batch_key: str
+    value_key: str
     title: str | None = None
     prompt: str | None = None
     description: str | None = None
