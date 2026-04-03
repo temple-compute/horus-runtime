@@ -20,6 +20,7 @@ Common interaction.
 """
 
 from horus_runtime.core.interaction.base import BaseInteraction
+from horus_runtime.i18n import tr as _
 
 
 class ConfirmInteraction(BaseInteraction[bool]):
@@ -49,4 +50,6 @@ class ConfirmInteraction(BaseInteraction[bool]):
         if normalized in {"n", "no", "false", "0"}:
             return False
 
-        raise ValueError(f"Cannot parse confirmation value: {value!r}")
+        raise ValueError(
+            _("Cannot parse confirmation value: %(value)r") % {"value": value}
+        )

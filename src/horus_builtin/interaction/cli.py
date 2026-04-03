@@ -29,6 +29,7 @@ from horus_runtime.core.interaction.renderer import (
     BaseInteractionRenderer,
 )
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
+from horus_runtime.i18n import tr as _
 
 
 class CLIInteractionTransport(BaseInteractionTransport):
@@ -50,12 +51,20 @@ class CLIInteractionTransport(BaseInteractionTransport):
         """
         Ask for free-form text input.
         """
-        data = f"{title}\n{prompt}\n" if title or prompt else ""
+        lines = []
+        if title is not None:
+            lines.append(title)
+        if prompt is not None:
+            lines.append(prompt)
         if default is not None:
-            data += f"(default: {default})\n"
+            lines.append(_("(default: %(default)s)") % {"default": default})
         if placeholder is not None:
-            data += f"(placeholder: {placeholder})\n"
-        data += "> "
+            lines.append(
+                _("(placeholder: %(placeholder)s)")
+                % {"placeholder": placeholder}
+            )
+        lines.append("> ")
+        data = "\n".join(lines)
         return input(data)
 
 
@@ -111,7 +120,7 @@ class CLIConfirmRenderer(
         """
         return transport.ask_text(
             title=interaction.title,
-            prompt=interaction.prompt or "Confirm? (y/n)",
+            prompt=interaction.prompt or _("Confirm? (y/n)"),
             default=(
                 "y"
                 if interaction.default
@@ -148,7 +157,8 @@ class CLIDropdownRenderer(
             title=interaction.title,
             prompt=(
                 interaction.prompt
-                or f"Select one of: {', '.join(interaction.options)}"
+                or _("Select one of: %(options)s")
+                % {"options": ", ".join(interaction.options)}
             ),
             default=interaction.default,
         )
@@ -175,11 +185,15 @@ class CLIFileRenderer(
         Ask for a file path through the CLI I/O adapter.
         """
         hint = (
-            f" ({', '.join(interaction.accept)})" if interaction.accept else ""
+            _(" (%(extensions)s)")
+            % {"extensions": ", ".join(interaction.accept)}
+            if interaction.accept
+            else ""
         )
         return transport.ask_text(
             title=interaction.title,
-            prompt=interaction.prompt or f"Enter file path{hint}:",
+            prompt=interaction.prompt
+            or _("Enter file path%(hint)s:") % {"hint": hint},
             default=(
                 str(interaction.default.path)
                 if interaction.default is not None

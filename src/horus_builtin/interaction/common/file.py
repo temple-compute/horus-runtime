@@ -23,6 +23,7 @@ from pathlib import Path
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_runtime.core.interaction.base import BaseInteraction
+from horus_runtime.i18n import tr as _
 
 
 class FileInteraction(BaseInteraction[FileArtifact]):
@@ -47,11 +48,15 @@ class FileInteraction(BaseInteraction[FileArtifact]):
             path = Path(str(value))
 
         if self.must_exist and not path.exists():
-            raise ValueError(f"File not found: {path}")
+            raise ValueError(_("File not found: %(path)s") % {"path": path})
 
         if self.accept and path.suffix not in self.accept:
             raise ValueError(
-                f"Expected one of {self.accept}, got {path.suffix}"
+                _("Expected one of %(accepted)s, got %(actual)s")
+                % {
+                    "accepted": self.accept,
+                    "actual": path.suffix,
+                }
             )
 
         return FileArtifact(path=path)

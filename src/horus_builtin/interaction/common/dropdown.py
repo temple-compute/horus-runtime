@@ -19,9 +19,10 @@
 Dropdown interaction.
 """
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from horus_runtime.core.interaction.base import BaseInteraction
+from horus_runtime.i18n import tr as _
 
 
 class DropdownInteraction(BaseInteraction[str]):
@@ -36,6 +37,15 @@ class DropdownInteraction(BaseInteraction[str]):
     Options to present in the dropdown. If empty, any value is accepted.
     """
 
+    @model_validator(mode="after")
+    def non_empty_options(self) -> "DropdownInteraction":
+        """
+        Validate that options are non-empty strings.
+        """
+        if len(self.options) == 0:
+            raise ValueError(_("Dropdown options cannot be empty."))
+        return self
+
     async def parse(self, value: object) -> str:
         """
         Validate that the selected value is one of the available options.
@@ -46,7 +56,10 @@ class DropdownInteraction(BaseInteraction[str]):
         result = str(value)
         if self.options and result not in self.options:
             raise ValueError(
-                f"Invalid selection: {result}. "
-                f"Must be one of: {', '.join(self.options)}"
+                _("Invalid selection: %(result)s. Must be one of: %(options)s")
+                % {
+                    "result": result,
+                    "options": ", ".join(self.options),
+                }
             )
         return result

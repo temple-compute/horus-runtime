@@ -186,6 +186,10 @@ class BaseInteractionTransport(
         """
         Ask one interaction through the matching renderer.
         """
+        # Validate max_retries before attempting to get the renderer
+        if max_retries < 1:
+            raise ValueError(_("max_retries must be at least 1."))
+
         ctx = HorusContext.get_context()
 
         renderer_cls = BaseInteractionRenderer.get_from_registry(

@@ -51,7 +51,7 @@ class BaseInteractionRenderer[
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """
-        Automatically intiialize the render_key based on the transport and
+        Automatically initialize the render_key based on the transport and
         interaction types.
         """
         # Only set the render_key for fully defined subclasses,

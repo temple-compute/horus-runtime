@@ -102,10 +102,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Whether to skip execution of this task if it is already complete.
     """
 
-    interaction: BaseInteractionTransport | None = Field(
-        default=None,
-        exclude=True,
-    )
+    interaction: BaseInteractionTransport | None = None
     """
     The interaction transport currently associated with the task run.
     """
