@@ -181,7 +181,7 @@ class CLIFileRenderer(
             title=interaction.title,
             prompt=interaction.prompt or f"Enter file path{hint}:",
             default=(
-                str(interaction.default)
+                str(interaction.default.path)
                 if interaction.default is not None
                 else None
             ),

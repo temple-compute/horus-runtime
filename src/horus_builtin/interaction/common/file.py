@@ -41,7 +41,11 @@ class FileInteraction(BaseInteraction[FileArtifact]):
         if value in (None, "") and self.default is not None:
             value = self.default
 
-        path = Path(str(value))
+        if isinstance(value, FileArtifact):
+            path = value.path
+        else:
+            path = Path(str(value))
+
         if self.must_exist and not path.exists():
             raise ValueError(f"File not found: {path}")
 
