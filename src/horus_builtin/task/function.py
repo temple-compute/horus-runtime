@@ -20,7 +20,9 @@ Specific task implementations for in-memory workflows in horus-runtime.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Self
+
+from pydantic import model_validator
 
 from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.interaction.cli import CLIInteractionTransport
@@ -39,11 +41,27 @@ class FunctionTask(HorusTask):
 
     kind: str = "function_task"
 
+    task_id: str = ""
+    """
+    Override task_id to be derived from the function name. This ensures that
+    the task_id is consistent with the workflow key when using the decorator.
+    """
+
     runtime: PythonFunctionRuntime
     executor: PythonFunctionExecutor = PythonFunctionExecutor()
 
     # Default to CLI transport for interactions in FunctionTasks.
     interaction: BaseInteractionTransport = CLIInteractionTransport()
+
+    @model_validator(mode="after")
+    def sync_task_id(self) -> Self:
+        """
+        Ensure that the task_id is consistent with the name, which is derived
+        from the function name. This is important for decorator-registered
+        tasks to ensure their task_id matches the workflow key.
+        """
+        self.task_id = self.name
+        return self
 
     @staticmethod
     def task(
@@ -52,6 +70,7 @@ class FunctionTask(HorusTask):
         name: str | None = None,
         inputs: dict[str, BaseArtifact] | None = None,
         outputs: dict[str, BaseArtifact] | None = None,
+        variables: dict[str, Any] | None = None,
     ) -> Callable[[Callable[..., Any]], "FunctionTask"]:
         """
         Decorator factory. The natural home for this is here — FunctionTask
@@ -67,12 +86,10 @@ class FunctionTask(HorusTask):
                 runtime=PythonFunctionRuntime(func=func),
                 inputs=inputs or {},
                 outputs=outputs or {},
+                variables=variables or {},
             )
 
-            # Ensure decorator-registered tasks get a task_id consistent
-            # with the workflow key
-            t.task_id = t.name
-            wf.tasks[t.name] = t
+            wf.tasks[t.task_id] = t
 
             return t
 

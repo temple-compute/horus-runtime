@@ -20,6 +20,7 @@ Python runtime implementation for in-memory workflows.
 """
 
 from collections.abc import Callable
+from inspect import Parameter, signature
 from typing import Any
 
 from pydantic import ConfigDict, Field
@@ -27,8 +28,10 @@ from pydantic import ConfigDict, Field
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 
+PythonFunctionSetupTuple = tuple[Callable[..., Any], dict[str, Any]]
 
-class PythonFunctionRuntime(BaseRuntime[Callable[..., Any]]):
+
+class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     """
     Executes a python function.
     """
@@ -40,8 +43,42 @@ class PythonFunctionRuntime(BaseRuntime[Callable[..., Any]]):
 
     func: Callable[..., Any] = Field(..., exclude=True)
 
-    def setup_runtime(self, task: "BaseTask") -> Callable[..., Any]:
+    def setup_runtime(self, task: "BaseTask") -> PythonFunctionSetupTuple:
         """
-        Nothing to be done for the PythonFunctionRuntime.
+        Prepare the runtime for execution. Checks the function signature,
+        ensuring that all parameters are accounted for by the task's inputs,
+        outputs, or variables.
         """
-        return self.func
+        # Get the function signature (args and kwargs)
+        sig = signature(self.func)
+
+        # Define the allowed parameter names for the function:
+        # task, inputs, outputs, variables
+        kwargs = {
+            "task": task,
+            **task.inputs,
+            **task.outputs,
+            **task.variables,
+        }
+
+        # Check that all parameters in the function signature are accounted for
+        accepts_kwargs = any(
+            param.kind is Parameter.VAR_KEYWORD  # literally '**kwargs'
+            for param in sig.parameters.values()
+        )
+
+        # If the function accepts **kwargs, we can pass all available kwargs.
+        # Otherwise, we filter to only the parameters explicitly defined in the
+        # function signature.
+        if accepts_kwargs:
+            call_kwargs = kwargs
+        else:
+            # Only pass the kwargs that match the function signature
+            # parameters.
+            call_kwargs = {
+                name: value
+                for name, value in kwargs.items()
+                if name in sig.parameters
+            }
+
+        return self.func, call_kwargs

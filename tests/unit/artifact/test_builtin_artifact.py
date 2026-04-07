@@ -475,20 +475,6 @@ class TestLocalPathArtifactBase:
         artifact = ConcreteLocalArtifact(uri="/nonexistent/path/file.txt")
         assert artifact.exists() is False
 
-    def test_materialize_method_returns_path(self) -> None:
-        """
-        Test materialize method returns the correct path.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_file = Path(temp_dir) / "test.txt"
-            test_file.write_text("content")
-
-            artifact = ConcreteLocalArtifact(uri=str(test_file))
-            materialized_path = artifact.materialize()
-
-            assert isinstance(materialized_path, Path)
-            assert materialized_path == artifact.path
-
     def test_hash_file_static_method(self) -> None:
         """
         Test the static hash_file method.

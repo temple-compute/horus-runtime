@@ -21,7 +21,6 @@ Unit tests for BaseArtifact class.
 
 import uuid
 from abc import ABC
-from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -49,12 +48,6 @@ class ConcreteTestArtifact(BaseArtifact):
         Test exists.
         """
         return True
-
-    def materialize(self) -> Path:
-        """
-        Test materialize.
-        """
-        return Path("/tmp/test")
 
     @property
     def hash(self) -> str | None:
@@ -116,18 +109,20 @@ class TestBaseArtifact:
         artifact1 = ConcreteTestArtifact(uri="test://uri1")
         artifact2 = ConcreteTestArtifact(uri="test://uri2")
 
-        assert artifact1.id != artifact2.id
-        assert isinstance(artifact1.id, uuid.UUID)
-        assert isinstance(artifact2.id, uuid.UUID)
+        assert artifact1.internal_id != artifact2.internal_id
+        assert isinstance(artifact1.internal_id, uuid.UUID)
+        assert isinstance(artifact2.internal_id, uuid.UUID)
 
     def test_custom_uuid_accepted(self) -> None:
         """
         Test that custom UUID is accepted when provided.
         """
         custom_id = uuid.uuid4()
-        artifact = ConcreteTestArtifact(uri="test://uri", id=custom_id)
+        artifact = ConcreteTestArtifact(
+            uri="test://uri", internal_id=custom_id
+        )
 
-        assert artifact.id == custom_id
+        assert artifact.internal_id == custom_id
 
     def test_uri_field_required(self) -> None:
         """
@@ -161,11 +156,6 @@ class TestBaseArtifact:
         # Test exists method
         assert artifact.exists() is True
 
-        # Test materialize method
-        path = artifact.materialize()
-        assert isinstance(path, Path)
-        assert path == Path("/tmp/test")
-
         # Test hash property
         assert artifact.hash == "test_hash"
 
@@ -187,11 +177,15 @@ class TestBaseArtifact:
         Test that artifacts can be deserialized from dict.
         """
         test_id = uuid.uuid4()
-        data = {"id": str(test_id), "uri": "test://uri", "kind": "test"}
+        data = {
+            "internal_id": str(test_id),
+            "uri": "test://uri",
+            "kind": "test",
+        }
 
         artifact = ConcreteTestArtifact.model_validate(data)
 
-        assert artifact.id == test_id
+        assert artifact.internal_id == test_id
         assert artifact.uri == "test://uri"
         assert artifact.kind == "test"
 
@@ -222,9 +216,6 @@ class TestBaseArtifactValidation:
                 def exists(self) -> bool:
                     return False
 
-                def materialize(self) -> Path:
-                    return Path("/tmp")
-
                 @property
                 def hash(self) -> str | None:
                     return None
@@ -243,7 +234,7 @@ class TestBaseArtifactValidation:
             # is raised at runtime.
             ConcreteTestArtifact(
                 uri="test://uri",
-                id="not-a-uuid",  # type: ignore[arg-type]
+                internal_id="not-a-uuid",  # type: ignore[arg-type]
             )
 
     def test_extra_fields_handling(self) -> None:
