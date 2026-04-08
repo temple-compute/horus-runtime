@@ -108,6 +108,7 @@ select = [
     "B",   # flake8-bugbear
     "PL",  # pylint
     "RUF", # ruff-specific
+    "ARG", # ruff-arglint
 ]
 extend-select = ["T201"] # Prevent use of print()
 

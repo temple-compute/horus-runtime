@@ -192,7 +192,7 @@ class TestHorusEventBusEmit:
         class _FailingTransport(BaseBusTransport):
             transport_type: str = "failing"
 
-            async def publish(self, event: BaseEvent) -> None:
+            async def publish(self, _: BaseEvent) -> None:
                 raise RuntimeError("transport down")
 
             async def start(self) -> None:

@@ -39,7 +39,7 @@ class PythonCodeStringRuntime(BaseRuntime[str]):
     The Python code to execute.
     """
 
-    def setup_runtime(self, task: "BaseTask") -> str:
+    def setup_runtime(self, _: "BaseTask") -> str:
         """
         For the PythonCodeStringRuntime, setting up the runtime simply involves
         returning the code as is.

@@ -339,7 +339,7 @@ class TestCLIRenderers:
         monkeypatch.setattr(
             CLIInteractionTransport,
             "ask_text",
-            lambda self, **kwargs: fake_ask_text(**kwargs),
+            lambda _, **kwargs: fake_ask_text(**kwargs),
         )
 
         result = await CLIStringRenderer().render(transport, interaction)
@@ -373,7 +373,7 @@ class TestCLIRenderers:
         monkeypatch.setattr(
             CLIInteractionTransport,
             "ask_text",
-            lambda self, **kwargs: fake_ask_text(**kwargs),
+            lambda _, **kwargs: fake_ask_text(**kwargs),
         )
 
         result = await CLIConfirmRenderer().render(transport, interaction)
@@ -410,7 +410,7 @@ class TestCLIRenderers:
         monkeypatch.setattr(
             CLIInteractionTransport,
             "ask_text",
-            lambda self, **kwargs: fake_ask_text(**kwargs),
+            lambda _, **kwargs: fake_ask_text(**kwargs),
         )
 
         result = await CLIDropdownRenderer().render(transport, interaction)
@@ -451,7 +451,7 @@ class TestCLIRenderers:
         monkeypatch.setattr(
             CLIInteractionTransport,
             "ask_text",
-            lambda self, **kwargs: fake_ask_text(**kwargs),
+            lambda _, **kwargs: fake_ask_text(**kwargs),
         )
 
         result = await CLIFileRenderer().render(transport, interaction)
