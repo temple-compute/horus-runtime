@@ -45,21 +45,40 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
 
     def setup_runtime(self, task: "BaseTask") -> PythonFunctionSetupTuple:
         """
-        Prepare the runtime for execution. Checks the function signature,
-        ensuring that all parameters are accounted for by the task's inputs,
-        outputs, or variables.
+        Prepares the runtime for execution by inspecting the function signature
+        and collecting arguments from the task's inputs, outputs, and
+        variables.
+
+        Arguments:
+          task: The task for which the runtime is being set up.
+
+        Raises:
+          `ValueError` if the function requires parameters not provided by the
+          task.
         """
         # Get the function signature (args and kwargs)
         sig = signature(self.func)
 
         # Define the allowed parameter names for the function:
-        # task, inputs, outputs, variables
+        # inputs, outputs, variables
         kwargs = {
-            "task": task,
             **task.inputs,
             **task.outputs,
             **task.variables,
         }
+
+        # Verify that there is no argument that will override the "task"
+        # parameter
+        if "task" in sig.parameters and "task" in kwargs:
+            raise ValueError(
+                f"Function {self.func} has a 'task' parameter that conflicts "
+                f"with the task context. Please rename the parameter or avoid "
+                f"providing a 'task' variable."
+            )
+
+        # Add the task itself to the kwargs so it can be injected if the
+        # function accepts a "task" parameter.
+        kwargs["task"] = task
 
         # Check that all parameters in the function signature are accounted for
         accepts_kwargs = any(

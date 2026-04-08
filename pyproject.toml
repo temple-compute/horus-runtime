@@ -64,9 +64,6 @@ horus_task = "horus_builtin.task.horus_task"
 [project.entry-points."horus.workflow"]
 horus_workflow = "horus_builtin.workflow.horus_workflow"
 
-[project.entry-points."horus.sync"]
-local_path = "horus_builtin.sync.local_path"
-
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"
 
