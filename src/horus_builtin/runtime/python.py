@@ -73,6 +73,15 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
         if accepts_kwargs:
             call_kwargs = kwargs
         else:
+            # Check that the function signature parameters are a subset of the
+            # available kwargs.
+            missing_params = set(sig.parameters) - set(kwargs)
+            if missing_params:
+                raise ValueError(
+                    f"Function {self.func} is missing required parameters: "
+                    f"{missing_params}"
+                )
+
             # Only pass the kwargs that match the function signature
             # parameters.
             call_kwargs = {
