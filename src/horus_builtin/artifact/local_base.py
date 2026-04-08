@@ -101,12 +101,6 @@ class LocalPathArtifactBase(BaseArtifact):
         """
         return self.path.exists()
 
-    def materialize(self) -> Path:
-        """
-        Materializes the artifact by returning the resolved absolute path.
-        """
-        return self.path
-
     @staticmethod
     def hash_file(path: Path) -> bytes:
         """
@@ -136,6 +130,6 @@ class LocalPathArtifactBase(BaseArtifact):
             ArtifactEvent(
                 message=_("Deleted artifact at %(path)s.")
                 % {"path": self.path},
-                artifact_id=str(self.id),
+                artifact_id=str(self.internal_id),
             )
         )

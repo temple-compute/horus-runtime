@@ -20,8 +20,11 @@
 Unit tests for FunctionTask.
 """
 
+from pathlib import Path
+
 import pytest
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.task.function import FunctionTask
@@ -193,6 +196,21 @@ class TestFunctionTaskDecorator:
         task = wf.tasks["custom_step"]
         assert task.task_id == "custom_step"
 
+    async def test_decorator_raises_for_unknown_parameter_name(self) -> None:
+        """
+        Declared function parameters must be injectable from task context.
+        """
+        wf = HorusWorkflow(name="test_wf")
+        with pytest.raises(ValueError, match="wrong_name"):
+
+            @FunctionTask.task(wf, variables={"data": "test"})
+            def my_func(wrong_name: FileArtifact) -> None:
+                pass
+
+            # Try to run the task to trigger the setup_runtime logic that
+            # checks parameter names.
+            await wf.tasks["my_func"].run()
+
 
 @pytest.mark.unit
 class TestFunctionTaskExecution:
@@ -281,3 +299,37 @@ class TestFunctionTaskExecution:
         await task.run()
 
         assert received_tasks == [task]
+
+    async def test_run_passes_declared_artifacts_by_name(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        Declared inputs and outputs should be injected by key name.
+        """
+        input_artifact = FileArtifact(
+            id="input",
+            path=tmp_path / "input.txt",
+        )
+        output_artifact = FileArtifact(
+            id="output",
+            path=tmp_path / "output.txt",
+        )
+        input_artifact.path.write_text("hello")
+
+        def artifact_aware_func(
+            input_file: FileArtifact,
+            output_file: FileArtifact,
+        ) -> None:
+            output_file.path.write_text(input_file.path.read_text().upper())
+
+        task = FunctionTask(
+            name="artifact_task",
+            runtime=PythonFunctionRuntime(func=artifact_aware_func),
+            inputs={"input_file": input_artifact},
+            outputs={"output_file": output_artifact},
+        )
+
+        await task.run()
+
+        assert output_artifact.path.read_text() == "HELLO"

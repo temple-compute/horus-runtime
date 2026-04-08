@@ -22,10 +22,9 @@ runtime. An artifact is a piece of data that is produced or consumed by a task.
 
 import uuid
 from abc import abstractmethod
-from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -55,7 +54,7 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
     # to determine how to register subclasses of Artifact in the registry.
     registry_key: ClassVar[str] = "kind"
 
-    id: uuid.UUID = Field(
+    internal_id: uuid.UUID = Field(
         default_factory=uuid.uuid4,
         description=(
             "Unique identifier for the artifact. This can be generated using "
@@ -66,6 +65,22 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
     Unique identifier for the artifact. This can be generated using
     uuid.uuid4() when creating a new artifact.
     """
+
+    id: str = ""
+    """
+    The artifact's user-friendly ID. This Id is used to sort task dependencies
+    and should be unique within a workflow. If not provided, it will be set to
+    the string representation of the internal_id.
+    """
+
+    @model_validator(mode="after")
+    def set_id(self) -> Self:
+        """
+        If the user did not provide an 'id', set it to the string
+        representation of 'internal_id'.
+        """
+        self.id = str(self.internal_id) if not self.id else self.id
+        return self
 
     uri: str
     """
@@ -89,12 +104,6 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
         Checks if the artifact exists at the specified path. This method should
         be implemented to check for the existence of the artifact based on its
         path.
-        """
-
-    @abstractmethod
-    def materialize(self) -> Path:
-        """
-        Materializes the artifact to a local path and returns it.
         """
 
     @property
