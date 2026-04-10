@@ -20,6 +20,7 @@
 Test configuration for pytest.
 """
 
+from collections.abc import Generator
 from pathlib import Path
 from typing import Protocol
 
@@ -27,7 +28,9 @@ import pytest
 
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.context import HorusContext, _runtime_ctx
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -43,20 +46,16 @@ def pytest_configure(config: pytest.Config) -> None:
 
 class MakeTaskType(Protocol):
     """
-    Protocol for a factory function that creates HorusTask instances for
-    testing.
+    Protocol for a factory function that creates ``HorusTask`` instances
+    for testing.
     """
 
     def __call__(
         self,
         cmd: str = ...,
-        inputs: dict[str, "BaseArtifact"] | None = None,
-        task_class: type["HorusTask"] = ...,
-    ) -> "HorusTask":
-        """
-        Create a HorusTask instance with the given command, inputs,
-        and task class.
-        """
+        inputs: dict[str, BaseArtifact] | None = ...,
+    ) -> HorusTask:
+        """Create a HorusTask with the given command and inputs."""
         ...
 
 
@@ -66,21 +65,17 @@ def make_shell_task() -> MakeTaskType:
     Fixture to create HorusTask instances with CommandRuntime for testing.
     """
 
-    # Factory function to create a HorusTask with a given command
     def _make_shell_task(
         cmd: str = "echo 'Hello World'",
-        inputs: dict[str, "BaseArtifact"] | None = None,
-        task_class: type["HorusTask"] = HorusTask,
-    ) -> "HorusTask":
-
-        runtime = CommandRuntime(command=cmd)
-
-        return task_class(
+        inputs: dict[str, BaseArtifact] | None = None,
+    ) -> HorusTask:
+        return HorusTask(
             name="test_task",
             inputs=inputs or {},
             outputs={},
-            runtime=runtime,
+            runtime=CommandRuntime(command=cmd),
             executor=ShellExecutor(),
+            target=LocalTarget(),
         )
 
     return _make_shell_task
@@ -119,3 +114,18 @@ def init_registry() -> None:
     Load all built-in plugins once for the entire test session.
     """
     AutoRegistry.init_registry()
+
+
+@pytest.fixture
+def horus_context() -> Generator[HorusContext]:
+    """
+    Boot a fresh HorusContext for a test and reset the context variable
+    afterwards so tests do not leak state into each other.
+    """
+    ctx = HorusContext()
+    ctx.bus.start()
+    token = _runtime_ctx.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _runtime_ctx.reset(token)

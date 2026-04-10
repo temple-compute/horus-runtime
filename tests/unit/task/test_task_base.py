@@ -31,6 +31,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
 )
@@ -61,6 +62,20 @@ class ConcreteTestTask(BaseTask):
         Do nothing for testing purposes.
         """
         pass
+
+
+def _make_concrete_task(cmd: str = "echo test") -> ConcreteTestTask:
+    """
+    Build a ``ConcreteTestTask`` with sensible defaults.
+    """
+    return ConcreteTestTask(
+        name="test_task",
+        inputs={},
+        outputs={},
+        runtime=CommandRuntime(command=cmd),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+    )
 
 
 @pytest.mark.unit
@@ -251,3 +266,38 @@ class TestBaseTaskValidation:
         assert "output1" in task.outputs
         assert isinstance(task.inputs["input1"], FileArtifact)
         assert isinstance(task.outputs["output1"], FileArtifact)
+
+
+@pytest.mark.unit
+class TestBaseTaskReset:
+    """
+    Tests for the reset / _reset contract on BaseTask.
+    """
+
+    def test_reset_sets_status_to_idle(
+        self,
+    ) -> None:
+        """
+        reset() must restore status to IDLE regardless of the current state.
+        """
+        task = _make_concrete_task()
+        task.status = TaskStatus.COMPLETED
+
+        task.reset()
+
+        assert task.status == TaskStatus.IDLE
+
+    def test_default_reset_is_noop(
+        self,
+    ) -> None:
+        """
+        The default _reset() implementation does not raise and leaves task
+        state intact (beyond what reset() itself changes).
+        """
+        task = _make_concrete_task()
+        task.variables["x"] = 1
+
+        # Should not raise
+        task._reset()
+
+        assert task.variables["x"] == 1
