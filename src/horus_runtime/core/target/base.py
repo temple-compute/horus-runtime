@@ -20,7 +20,7 @@ The Horus target indicates where a task should be dispatched and executed.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -57,11 +57,23 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             ``horus-agent://agent-42``
         """
 
-    @abstractmethod
+    @final
     async def dispatch(self, task: "BaseTask") -> None:
         """
         Run the task to completion on this target.
         Raises ``TaskExecutionError`` on failure.
+        """
+        # Set the task to "PENDING" status before dispatching
+        task.status = TaskStatus.PENDING
+
+        await self._dispatch(task)
+
+    @abstractmethod
+    async def _dispatch(self, task: "BaseTask") -> None:
+        """
+        Internal dispatch method to be implemented by subclasses. This is
+        called by the public dispatch() method, which handles common logic like
+        retries and error handling.
         """
 
     @abstractmethod

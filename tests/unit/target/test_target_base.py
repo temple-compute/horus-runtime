@@ -45,7 +45,7 @@ class ConcreteTestTarget(BaseTarget):
         """
         return "test://localhost"
 
-    async def dispatch(self, task: BaseTask) -> None:
+    async def _dispatch(self, task: BaseTask) -> None:
         """
         Simulate dispatching a task to this target.
         """

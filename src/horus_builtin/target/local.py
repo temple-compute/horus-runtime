@@ -52,7 +52,7 @@ class LocalTarget(BaseTarget):
         """
         return f"local://{socket.gethostname()}"
 
-    async def dispatch(self, task: BaseTask) -> None:
+    async def _dispatch(self, task: BaseTask) -> None:
         """
         Schedule the task as a running ``asyncio.Task`` in the current event
         loop. The task starts executing immediately; call ``wait()`` to block
