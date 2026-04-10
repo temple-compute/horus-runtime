@@ -32,7 +32,7 @@ responsibility when writing the workflow YAML file.
 from abc import abstractmethod
 from asyncio import CancelledError
 from pathlib import Path
-from typing import ClassVar, Self
+from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
@@ -96,6 +96,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             A fully constructed :class:`BaseWorkflow` instance.
         """
 
+    @final
     async def run(self) -> None:
         """
         Execute the workflow, managing status transitions automatically.
@@ -143,8 +144,23 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Do not set ``self.status`` here; ``run()`` manages it.
         """
 
-    @abstractmethod
+    @final
     def reset(self) -> None:
         """
-        Reset the workflow by resetting all tasks.
+        Reset the workflow by deleting all output artifacts of all tasks in the
+        workflow. This allows the workflow to be re-run from scratch.
+        """
+        self.status = WorkflowStatus.IDLE
+        horus_logger.log.debug(
+            _("Resetting workflow %(workflow_name)s.")
+            % {"workflow_name": self.name}
+        )
+        self._reset()
+
+    @abstractmethod
+    def _reset(self) -> None:
+        """
+        Subclass-specific reset logic. Override this in subclasses when
+        additional state must be cleared on reset. Do not set ``self.status``
+        here; ``reset()`` manages it.
         """

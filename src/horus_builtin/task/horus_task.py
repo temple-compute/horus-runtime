@@ -115,7 +115,7 @@ class HorusTask(BaseTask):
 
         return True
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Reset the task by deleting all output artifacts. This allows the task
         to be re-run from scratch.

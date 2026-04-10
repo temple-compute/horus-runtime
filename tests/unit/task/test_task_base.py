@@ -298,6 +298,6 @@ class TestBaseTaskReset:
         task.variables["x"] = 1
 
         # Should not raise
-        task._reset()
+        task.reset()
 
         assert task.variables["x"] == 1

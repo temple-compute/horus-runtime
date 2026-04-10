@@ -26,7 +26,9 @@ from unittest.mock import Mock
 import pytest
 
 from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
+from horus_builtin.task.function import FunctionTask
 from horus_runtime.context import HorusContext
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
@@ -146,25 +148,32 @@ class TestLocalTargetDispatch:
         assert status == TaskStatus.COMPLETED
 
     async def test_cancel_stops_running_task(
-        self, make_shell_task: MakeTaskType
+        self, horus_context: HorusContext
     ) -> None:
         """
         cancel() cancels a still-running task and does not raise.
         """
-        target = LocalTarget()
+        del horus_context  # Fixture is required to set up the runtime context
 
-        # Use a task that blocks indefinitely so cancel() arrives while running
-        async def _slow_run() -> None:
-            await asyncio.sleep(9999)
+        async def run_slow_task() -> None:
+            # Simulate a long-running task by sleeping for a while
+            await asyncio.sleep(10)
 
-        task = make_shell_task()
-        task.target = target
-        task._run = _slow_run  # type: ignore[method-assign]
+        task = FunctionTask(
+            name="slow_task",
+            inputs={},
+            outputs={},
+            runtime=PythonFunctionRuntime(func=run_slow_task),
+        )
 
-        await target.dispatch(task)
+        # Dispatch the task to the LocalTarget
+        await task.target.dispatch(task)
+
         # Yield to the event loop so task.run() can start and reach its first
         # await point before we cancel it.
         await asyncio.sleep(0)
-        await target.cancel()
+
+        # Now cancel the task while it's still running
+        await task.target.cancel()
 
         assert task.status == TaskStatus.CANCELED

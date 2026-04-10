@@ -243,7 +243,7 @@ class AutoRegistry(BaseModel, ABC):
         # Non-root classes (concrete subclasses) must use Pydantic's default
         # schema generation. If we intercepted here we would recurse infinitely
         # because dispatching calls back into validation.
-        if origin not in origin._registry_roots:
+        if origin not in origin._registry_roots:  # noqa: SLF001
             return handler(source_type)
 
         def validate(data: Any) -> Any:

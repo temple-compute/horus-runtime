@@ -91,7 +91,7 @@ class HorusWorkflow(BaseWorkflow):
             # Wait for the task to complete and check for failure
             await task.target.wait()
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Reset the workflow by deleting all output artifacts of all tasks in the
         workflow. This allows the workflow to be re-run from scratch.

@@ -23,7 +23,7 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
@@ -133,6 +133,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
             )
         return self
 
+    @final
     async def run(self) -> None:
         """
         Execute the task, managing status transitions automatically.
@@ -200,6 +201,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         based on its outputs.
         """
 
+    @final
     def reset(self) -> None:
         """
         Reset the task. This allows the task to be re-run from scratch.
@@ -213,6 +215,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         )
         self._reset()
 
+    @abstractmethod
     def _reset(self) -> None:
         """
         Subclass-specific reset logic. Override this in subclasses when

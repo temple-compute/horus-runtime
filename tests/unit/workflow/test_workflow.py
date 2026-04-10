@@ -52,7 +52,7 @@ class ConcreteWorkflow(BaseWorkflow):
         Run the workflow by executing all its tasks.
         """
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Reset the workflow to its initial state.
         """

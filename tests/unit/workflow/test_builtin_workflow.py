@@ -222,8 +222,8 @@ class TestWorkflowRun:
         class TaskWithFailure(HorusTask):
             add_to_registry: ClassVar[bool] = False
 
-            async def run(self) -> None:
-                await super().run()  # Here it calls +1 run count
+            async def _run(self) -> None:
+                await super()._run()  # Here it calls +1 run count
                 raise TaskExecutionError("fail")
 
         task_a = TaskWithFailure(
