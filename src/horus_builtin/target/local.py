@@ -31,6 +31,8 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 
 
 class LocalTarget(BaseTarget):
@@ -61,6 +63,10 @@ class LocalTarget(BaseTarget):
 
         self._task = task
         self._task_future = asyncio.create_task(self._task.run())
+        horus_logger.log.debug(
+            _("Dispatched task '%(task_name)s' to local target")
+            % {"task_name": task.name}
+        )
 
     async def wait(self) -> None:
         """
@@ -70,8 +76,12 @@ class LocalTarget(BaseTarget):
             TaskExecutionError: If the task has not been dispatched yet.
         """
         if self._task_future is None:
-            raise TaskExecutionError("Task has not been dispatched yet.")
+            raise TaskExecutionError(_("Task has not been dispatched yet."))
 
+        horus_logger.log.debug(
+            _("Waiting for task '%(task_name)s' to complete on local target")
+            % {"task_name": self._task.name if self._task else "unknown"}
+        )
         await self._task_future
 
     async def cancel(self) -> None:
@@ -81,6 +91,10 @@ class LocalTarget(BaseTarget):
         """
         if self._task_future is None or self._task_future.done():
             return
+        horus_logger.log.debug(
+            _("Cancelling task '%(task_name)s' on local target")
+            % {"task_name": self._task.name if self._task else "unknown"}
+        )
         self._task_future.cancel()
         try:
             await self._task_future
@@ -92,7 +106,7 @@ class LocalTarget(BaseTarget):
         Get the current status of the task.
         """
         if self._task is None:
-            raise TaskExecutionError("Task has not been dispatched yet.")
+            raise TaskExecutionError(_("Task has not been dispatched yet."))
         return self._task.status
 
     def access_cost(self, artifact: BaseArtifact) -> float | None:

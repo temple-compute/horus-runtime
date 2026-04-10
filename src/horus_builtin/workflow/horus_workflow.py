@@ -77,8 +77,12 @@ class HorusWorkflow(BaseWorkflow):
 
             if task.task_id is None:
                 raise TaskMissingIdError(
-                    f"Task '{task.name}' has no task_id. Ensure tasks added "
-                    "after workflow construction have task_id explicitly set."
+                    _(
+                        "Task '%(task_name)s' has no task_id. Ensure tasks"
+                        " added after workflow construction have task_id"
+                        " explicitly set."
+                    )
+                    % {"task_name": task.name}
                 )
 
             # Execute the task on its target

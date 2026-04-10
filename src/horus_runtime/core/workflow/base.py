@@ -38,6 +38,8 @@ from pydantic import Field, model_validator
 
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.workflow.status import WorkflowStatus
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -107,16 +109,32 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         - ``FAILED``    — set on any other exception (re-raised after)
         """
         self.status = WorkflowStatus.RUNNING
+        horus_logger.log.debug(
+            _("Workflow %(workflow_name)s status → RUNNING")
+            % {"workflow_name": self.name}
+        )
         try:
             await self._run()
         except CancelledError:
             self.status = WorkflowStatus.CANCELED
+            horus_logger.log.debug(
+                _("Workflow %(workflow_name)s status → CANCELED")
+                % {"workflow_name": self.name}
+            )
             raise
         except Exception:
             self.status = WorkflowStatus.FAILED
+            horus_logger.log.debug(
+                _("Workflow %(workflow_name)s status → FAILED")
+                % {"workflow_name": self.name}
+            )
             raise
         else:
             self.status = WorkflowStatus.COMPLETED
+            horus_logger.log.debug(
+                _("Workflow %(workflow_name)s status → COMPLETED")
+                % {"workflow_name": self.name}
+            )
 
     @abstractmethod
     async def _run(self) -> None:

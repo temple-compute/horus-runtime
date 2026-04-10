@@ -34,6 +34,8 @@ from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -144,16 +146,31 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``FAILED``    — set on any other exception (re-raised after)
         """
         self.status = TaskStatus.RUNNING
+        horus_logger.log.debug(
+            _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}
+        )
         try:
             await self._run()
         except CancelledError:
             self.status = TaskStatus.CANCELED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → CANCELED")
+                % {"task_name": self.name}
+            )
             raise
         except Exception:
             self.status = TaskStatus.FAILED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → FAILED")
+                % {"task_name": self.name}
+            )
             raise
         else:
             self.status = TaskStatus.COMPLETED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → COMPLETED")
+                % {"task_name": self.name}
+            )
 
     async def sync_status(self) -> TaskStatus:
         """
@@ -191,6 +208,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
         reset logic to ``_reset()``.
         """
         self.status = TaskStatus.IDLE
+        horus_logger.log.debug(
+            _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
+        )
         self._reset()
 
     def _reset(self) -> None:

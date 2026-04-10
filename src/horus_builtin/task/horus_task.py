@@ -67,7 +67,8 @@ class HorusTask(BaseTask):
         ) in self.inputs.items():
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
-                    f"Input artifact {input_name} does not exist"
+                    _("Input artifact %(input_name)s does not exist")
+                    % {"input_name": input_name}
                 )
 
         # Execute the command using the executor
@@ -94,7 +95,8 @@ class HorusTask(BaseTask):
 
         if return_code != 0:
             raise TaskExecutionError(
-                f"Task execution failed with return code {return_code}"
+                _("Task execution failed with return code %(return_code)s")
+                % {"return_code": return_code}
             )
 
     def is_complete(self) -> bool:
