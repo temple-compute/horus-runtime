@@ -256,10 +256,13 @@ class TestWorkflowRun:
         task = make_shell_task(cmd="echo test")
         task.task_id = None  # Simulate the pre-fix state
 
-        wf = HorusWorkflow.__new__(HorusWorkflow)
-        # Bypass model_validator (inject_task_ids) to preserve the None id
-        object.__setattr__(wf, "tasks", {"orphan": task})
-        object.__setattr__(wf, "name", "test_wf")
+        wf = HorusWorkflow(
+            name="missing_id",
+            tasks={"orphan": task},
+        )
+
+        # Manually patch the task to remove the ID
+        wf.tasks["orphan"].task_id = None
 
         with (
             patch(
