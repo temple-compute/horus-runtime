@@ -128,4 +128,5 @@ def horus_context() -> Generator[HorusContext]:
     try:
         yield ctx
     finally:
+        ctx.shutdown()
         _runtime_ctx.reset(token)

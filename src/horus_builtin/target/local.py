@@ -57,9 +57,19 @@ class LocalTarget(BaseTarget):
         Schedule the task as a running ``asyncio.Task`` in the current event
         loop. The task starts executing immediately; call ``wait()`` to block
         until it finishes.
+
+        Raises:
+            TaskExecutionError: If the task is already running on this target.
         """
         # TODO: Implement transfer_strategy to ensure artifacts are
         # available to the task.
+
+        # If the task is already running, don't start it again
+        if self._task_future is not None and not self._task_future.done():
+            raise TaskExecutionError(
+                _("Task '%(task_name)s' is already running on this target.")
+                % {"task_name": task.name}
+            )
 
         self._task = task
         self._task_future = asyncio.create_task(self._task.run())

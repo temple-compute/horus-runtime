@@ -60,8 +60,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     @final
     async def dispatch(self, task: "BaseTask") -> None:
         """
-        Run the task to completion on this target.
-        Raises ``TaskExecutionError`` on failure.
+        Start executing the given task on this target.
         """
         # Set the task to "PENDING" status before dispatching
         task.status = TaskStatus.PENDING
