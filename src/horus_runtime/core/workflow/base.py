@@ -30,12 +30,14 @@ responsibility when writing the workflow YAML file.
 """
 
 from abc import abstractmethod
+from asyncio import CancelledError
 from pathlib import Path
 from typing import ClassVar, Self
 
 from pydantic import Field, model_validator
 
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -63,6 +65,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Ordered mapping of task names to task instances.
     """
 
+    status: WorkflowStatus = WorkflowStatus.IDLE
+    """
+    Current execution state of the workflow. Updated automatically by
+    ``run()``; do not set manually.
+    """
+
     @model_validator(mode="after")
     def inject_task_ids(self) -> Self:
         """
@@ -86,10 +94,35 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             A fully constructed :class:`BaseWorkflow` instance.
         """
 
-    @abstractmethod
     async def run(self) -> None:
         """
-        Execute the workflow.
+        Execute the workflow, managing status transitions automatically.
+
+        Subclasses must implement ``_run()`` instead of overriding this method.
+        Status is driven entirely here:
+
+        - ``RUNNING``   — set immediately on entry
+        - ``COMPLETED`` — set on clean exit
+        - ``CANCELED``  — set when ``CancelledError`` is raised
+        - ``FAILED``    — set on any other exception (re-raised after)
+        """
+        self.status = WorkflowStatus.RUNNING
+        try:
+            await self._run()
+        except CancelledError:
+            self.status = WorkflowStatus.CANCELED
+            raise
+        except Exception:
+            self.status = WorkflowStatus.FAILED
+            raise
+        else:
+            self.status = WorkflowStatus.COMPLETED
+
+    @abstractmethod
+    async def _run(self) -> None:
+        """
+        Workflow-specific execution logic. Implement this in subclasses.
+        Do not set ``self.status`` here; ``run()`` manages it.
         """
 
     @abstractmethod

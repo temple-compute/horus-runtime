@@ -20,8 +20,10 @@ Default Horus task implementation.
 """
 
 from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
@@ -35,7 +37,12 @@ class HorusTask(BaseTask):
 
     kind: str = "horus_task"
 
-    async def run(self) -> None:
+    target: BaseTarget = LocalTarget()
+    """
+    The default target for a HorusTask is LocalTarget (in-process).
+    """
+
+    async def _run(self) -> None:
         """
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.

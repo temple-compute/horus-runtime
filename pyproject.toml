@@ -61,6 +61,9 @@ cli = "horus_builtin.interaction.cli"
 [project.entry-points."horus.task"]
 horus_task = "horus_builtin.task.horus_task"
 
+[project.entry-points."horus.target"]
+local = "horus_builtin.target.local"
+
 [project.entry-points."horus.workflow"]
 horus_workflow = "horus_builtin.workflow.horus_workflow"
 
