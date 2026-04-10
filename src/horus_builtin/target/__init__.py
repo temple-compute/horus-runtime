@@ -15,33 +15,3 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""
-PythonCodeStringRuntime implementation for horus-runtime.
-"""
-
-from typing import TYPE_CHECKING
-
-from horus_runtime.core.runtime.base import BaseRuntime
-
-if TYPE_CHECKING:
-    from horus_runtime.core.task.base import BaseTask
-
-
-class PythonCodeStringRuntime(BaseRuntime[str]):
-    """
-    Executes a Python code snippet.
-    """
-
-    kind: str = "python"
-
-    code: str
-    """
-    The Python code to execute.
-    """
-
-    def setup_runtime(self, _: "BaseTask") -> str:
-        """
-        For the PythonCodeStringRuntime, setting up the runtime simply involves
-        returning the code as is.
-        """
-        return self.code

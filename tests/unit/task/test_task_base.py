@@ -19,7 +19,6 @@
 Unit tests for BaseTask abstract base class.
 """
 
-import inspect
 from abc import ABC
 from typing import ClassVar
 
@@ -29,7 +28,10 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.target.local import LocalTarget
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
 )
@@ -42,8 +44,9 @@ class ConcreteTestTask(BaseTask):
     """
 
     kind: str = "test_task"
+    target: BaseTarget = LocalTarget()
 
-    async def run(self) -> None:
+    async def _run(self) -> None:
         """
         Test implementation of run method.
         """
@@ -54,11 +57,25 @@ class ConcreteTestTask(BaseTask):
         """
         return True
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Do nothing for testing purposes.
         """
         pass
+
+
+def _make_concrete_task(cmd: str = "echo test") -> ConcreteTestTask:
+    """
+    Build a ``ConcreteTestTask`` with sensible defaults.
+    """
+    return ConcreteTestTask(
+        name="test_task",
+        inputs={},
+        outputs={},
+        runtime=CommandRuntime(command=cmd),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+    )
 
 
 @pytest.mark.unit
@@ -94,23 +111,6 @@ class TestBaseTask:
         # autoregistry. For task, the registry key is 'kind',
         # so we want to make sure that this is set correctly in the base class.
         assert BaseTask.registry_key == "kind"
-
-    def test_run_method_is_abstract(self) -> None:
-        """
-        Test that run method is marked as abstract.
-        """
-        # Check that the run method is in the abstract methods
-        abstract_methods = BaseTask.__abstractmethods__
-        assert "run" in abstract_methods
-
-    def test_run_method_signature(self) -> None:
-        """
-        Test that run method has correct signature.
-        """
-        sig = inspect.signature(BaseTask.run)
-
-        params = list(sig.parameters.keys())
-        assert params == ["self"]
 
     def test_base_task_has_required_fields(self) -> None:
         """
@@ -163,15 +163,18 @@ class TestBaseTaskValidation:
             class InvalidTask(BaseTask):
                 """
                 Invalid task that does not set 'kind' field.
+
+                # Note: We have to define the abstract methods
+                # for the autoregistry to work.
                 """
 
                 def is_complete(self) -> bool:
                     return True
 
-                def reset(self) -> None:
+                def _reset(self) -> None:
                     pass
 
-                async def run(self) -> None:
+                async def _run(self) -> None:
                     pass
 
     def test_model_validation_preserves_type_safety(self) -> None:
@@ -263,3 +266,38 @@ class TestBaseTaskValidation:
         assert "output1" in task.outputs
         assert isinstance(task.inputs["input1"], FileArtifact)
         assert isinstance(task.outputs["output1"], FileArtifact)
+
+
+@pytest.mark.unit
+class TestBaseTaskReset:
+    """
+    Tests for the reset / _reset contract on BaseTask.
+    """
+
+    def test_reset_sets_status_to_idle(
+        self,
+    ) -> None:
+        """
+        reset() must restore status to IDLE regardless of the current state.
+        """
+        task = _make_concrete_task()
+        task.status = TaskStatus.COMPLETED
+
+        task.reset()
+
+        assert task.status == TaskStatus.IDLE
+
+    def test_default_reset_is_noop(
+        self,
+    ) -> None:
+        """
+        The default _reset() implementation does not raise and leaves task
+        state intact (beyond what reset() itself changes).
+        """
+        task = _make_concrete_task()
+        task.variables["x"] = 1
+
+        # Should not raise
+        task.reset()
+
+        assert task.variables["x"] == 1

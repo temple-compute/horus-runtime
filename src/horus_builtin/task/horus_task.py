@@ -20,8 +20,10 @@ Default Horus task implementation.
 """
 
 from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
@@ -35,7 +37,12 @@ class HorusTask(BaseTask):
 
     kind: str = "horus_task"
 
-    async def run(self) -> None:
+    target: BaseTarget = LocalTarget()
+    """
+    The default target for a HorusTask is LocalTarget (in-process).
+    """
+
+    async def _run(self) -> None:
         """
         For a HorusTask, nothing needs to be done here, as the command is
         already specified in the runtime and will be executed by the executor.
@@ -60,7 +67,8 @@ class HorusTask(BaseTask):
         ) in self.inputs.items():
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
-                    f"Input artifact {input_name} does not exist"
+                    _("Input artifact %(input_name)s does not exist")
+                    % {"input_name": input_name}
                 )
 
         # Execute the command using the executor
@@ -87,7 +95,8 @@ class HorusTask(BaseTask):
 
         if return_code != 0:
             raise TaskExecutionError(
-                f"Task execution failed with return code {return_code}"
+                _("Task execution failed with return code %(return_code)s")
+                % {"return_code": return_code}
             )
 
     def is_complete(self) -> bool:
@@ -106,7 +115,7 @@ class HorusTask(BaseTask):
 
         return True
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Reset the task by deleting all output artifacts. This allows the task
         to be re-run from scratch.

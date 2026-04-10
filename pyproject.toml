@@ -61,6 +61,9 @@ cli = "horus_builtin.interaction.cli"
 [project.entry-points."horus.task"]
 horus_task = "horus_builtin.task.horus_task"
 
+[project.entry-points."horus.target"]
+local = "horus_builtin.target.local"
+
 [project.entry-points."horus.workflow"]
 horus_workflow = "horus_builtin.workflow.horus_workflow"
 
@@ -108,8 +111,11 @@ select = [
     "B",   # flake8-bugbear
     "PL",  # pylint
     "RUF", # ruff-specific
+    "ARG", # ruff-arglint
+    "SLF", # ruff-slf
 ]
 extend-select = ["T201"] # Prevent use of print()
+
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
@@ -118,6 +124,9 @@ ignore = [
     "D212", # Multi-line docstring summary should start at the first line
     "D200", # One-line docstring should fit on one line
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["SLF001"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -16,32 +16,43 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-PythonCodeStringRuntime implementation for horus-runtime.
+TaskStatus represents the current state of a task's execution.
 """
 
-from typing import TYPE_CHECKING
-
-from horus_runtime.core.runtime.base import BaseRuntime
-
-if TYPE_CHECKING:
-    from horus_runtime.core.task.base import BaseTask
+from enum import Enum
 
 
-class PythonCodeStringRuntime(BaseRuntime[str]):
+class TaskStatus(Enum):
     """
-    Executes a Python code snippet.
+    Enumeration of possible task statuses.
     """
 
-    kind: str = "python"
-
-    code: str
+    IDLE = "idle"
     """
-    The Python code to execute.
+    The task has been created but not yet dispatched.
     """
 
-    def setup_runtime(self, _: "BaseTask") -> str:
-        """
-        For the PythonCodeStringRuntime, setting up the runtime simply involves
-        returning the code as is.
-        """
-        return self.code
+    PENDING = "pending"
+    """
+    The task is dispatched, but has not started executing yet.
+    """
+
+    RUNNING = "running"
+    """
+    The task is currently executing.
+    """
+
+    COMPLETED = "completed"
+    """
+    The task has finished executing successfully.
+    """
+
+    FAILED = "failed"
+    """
+    The task has encountered an error during execution.
+    """
+
+    CANCELED = "canceled"
+    """
+    The task has been canceled before completion.
+    """

@@ -27,6 +27,9 @@ from unittest.mock import Mock, patch
 import pytest
 
 from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.task.exceptions import (
@@ -219,11 +222,18 @@ class TestWorkflowRun:
         class TaskWithFailure(HorusTask):
             add_to_registry: ClassVar[bool] = False
 
-            async def run(self) -> None:
-                await super().run()  # Here it calls +1 run count
+            async def _run(self) -> None:
+                await super()._run()  # Here it calls +1 run count
                 raise TaskExecutionError("fail")
 
-        task_a = make_shell_task(cmd="echo A", task_class=TaskWithFailure)
+        task_a = TaskWithFailure(
+            name="test_task",
+            inputs={},
+            outputs={},
+            runtime=CommandRuntime(command="echo A"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+        )
         task_b = make_shell_task(cmd="echo B")
 
         wf = HorusWorkflow(name="stop_test", tasks={"a": task_a, "b": task_b})
@@ -256,10 +266,13 @@ class TestWorkflowRun:
         task = make_shell_task(cmd="echo test")
         task.task_id = None  # Simulate the pre-fix state
 
-        wf = HorusWorkflow.__new__(HorusWorkflow)
-        # Bypass model_validator (inject_task_ids) to preserve the None id
-        object.__setattr__(wf, "tasks", {"orphan": task})
-        object.__setattr__(wf, "name", "test_wf")
+        wf = HorusWorkflow(
+            name="missing_id",
+            tasks={"orphan": task},
+        )
+
+        # Manually patch the task to remove the ID
+        wf.tasks["orphan"].task_id = None
 
         with (
             patch(

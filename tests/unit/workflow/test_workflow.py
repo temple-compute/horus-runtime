@@ -47,12 +47,12 @@ class ConcreteWorkflow(BaseWorkflow):
             data = yaml.safe_load(fh)
             return cls.model_validate(data)
 
-    async def run(self) -> None:
+    async def _run(self) -> None:
         """
         Run the workflow by executing all its tasks.
         """
 
-    def reset(self) -> None:
+    def _reset(self) -> None:
         """
         Reset the workflow to its initial state.
         """

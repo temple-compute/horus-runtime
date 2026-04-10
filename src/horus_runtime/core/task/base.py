@@ -22,7 +22,8 @@ executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import Any, ClassVar, Self
+from asyncio import CancelledError
+from typing import Any, ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
@@ -31,6 +32,10 @@ from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -91,6 +96,16 @@ class BaseTask(AutoRegistry, entry_point="task"):
     the actual command, program or script to run.
     """
 
+    target: BaseTarget
+    """
+    The target that indicates where this task should be dispatched.
+    """
+
+    status: TaskStatus = TaskStatus.IDLE
+    """
+    The current status of the task's execution.
+    """
+
     runs: int = 0
     """
     Number of times this task has been run. This can be used for tracking and
@@ -118,12 +133,63 @@ class BaseTask(AutoRegistry, entry_point="task"):
             )
         return self
 
-    @abstractmethod
+    @final
     async def run(self) -> None:
         """
-        Run the task. This method should be implemented by subclasses to define
-        the specific logic for running the task based on its context and
-        environment.
+        Execute the task, managing status transitions automatically.
+
+        Subclasses must implement ``_run()`` instead of overriding this method.
+        Status is driven entirely here:
+
+        - ``RUNNING``   — set immediately on entry
+        - ``COMPLETED`` — set on clean exit
+        - ``CANCELED``  — set when ``CancelledError`` is raised
+        - ``FAILED``    — set on any other exception (re-raised after)
+        """
+        self.status = TaskStatus.RUNNING
+        horus_logger.log.debug(
+            _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}
+        )
+        try:
+            await self._run()
+        except CancelledError:
+            self.status = TaskStatus.CANCELED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → CANCELED")
+                % {"task_name": self.name}
+            )
+            raise
+        except Exception:
+            self.status = TaskStatus.FAILED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → FAILED")
+                % {"task_name": self.name}
+            )
+            raise
+        else:
+            self.status = TaskStatus.COMPLETED
+            horus_logger.log.debug(
+                _("Task %(task_name)s status → COMPLETED")
+                % {"task_name": self.name}
+            )
+
+    async def sync_status(self) -> TaskStatus:
+        """
+        Refresh ``self.status`` from the target and return the updated value.
+
+        For local in-process targets this is a no-op read. For remote targets
+        (SSH, agent) this performs whatever async probe the target requires
+        (HTTP poll, SSH check, etc.) and caches the result in ``self.status``
+        so that synchronous callers can read it without I/O.
+        """
+        self.status = await self.target.get_status()
+        return self.status
+
+    @abstractmethod
+    async def _run(self) -> None:
+        """
+        Task-specific execution logic. Implement this in subclasses.
+        Do not set ``self.status`` here; ``run()`` manages it.
         """
 
     @abstractmethod
@@ -135,8 +201,24 @@ class BaseTask(AutoRegistry, entry_point="task"):
         based on its outputs.
         """
 
-    @abstractmethod
+    @final
     def reset(self) -> None:
         """
         Reset the task. This allows the task to be re-run from scratch.
+
+        Resets ``self.status`` to ``IDLE`` and delegates subclass-specific
+        reset logic to ``_reset()``.
+        """
+        self.status = TaskStatus.IDLE
+        horus_logger.log.debug(
+            _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
+        )
+        self._reset()
+
+    @abstractmethod
+    def _reset(self) -> None:
+        """
+        Subclass-specific reset logic. Override this in subclasses when
+        additional state must be cleared on reset. Do not set ``self.status``
+        here; ``reset()`` manages it.
         """

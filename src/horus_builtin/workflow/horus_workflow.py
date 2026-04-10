@@ -53,7 +53,7 @@ class HorusWorkflow(BaseWorkflow):
         with Path(path).open("r", encoding="utf-8") as fh:
             return cls.model_validate(yaml.safe_load(fh))
 
-    async def run(self) -> None:
+    async def _run(self) -> None:
         """
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
@@ -77,13 +77,21 @@ class HorusWorkflow(BaseWorkflow):
 
             if task.task_id is None:
                 raise TaskMissingIdError(
-                    f"Task '{task.name}' has no task_id. Ensure tasks added "
-                    "after workflow construction have task_id explicitly set."
+                    _(
+                        "Task '%(task_name)s' has no task_id. Ensure tasks"
+                        " added after workflow construction have task_id"
+                        " explicitly set."
+                    )
+                    % {"task_name": task.name}
                 )
 
-            await task.run()
+            # Execute the task on its target
+            await task.target.dispatch(task)
 
-    def reset(self) -> None:
+            # Wait for the task to complete and check for failure
+            await task.target.wait()
+
+    def _reset(self) -> None:
         """
         Reset the workflow by deleting all output artifacts of all tasks in the
         workflow. This allows the workflow to be re-run from scratch.
