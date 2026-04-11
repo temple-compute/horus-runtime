@@ -25,9 +25,9 @@ new type to a central registry.
 from abc import ABC
 from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, Unpack, final
 
-from pydantic import BaseModel, GetCoreSchemaHandler
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
 from horus_runtime.i18n import tr as _
@@ -109,7 +109,7 @@ class AutoRegistry(BaseModel, ABC):
     def __init_subclass__(
         cls: type[Self],
         entry_point: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[ConfigDict],
     ) -> None:
         """
         Called automatically when a subclass is defined.
@@ -215,6 +215,7 @@ class AutoRegistry(BaseModel, ABC):
         # Register the concrete subclass under its discriminator value.
         cls.registry[key_value] = cls
 
+    @final
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
@@ -246,7 +247,7 @@ class AutoRegistry(BaseModel, ABC):
         if origin not in origin._registry_roots:  # noqa: SLF001
             return handler(source_type)
 
-        def validate(data: Any) -> Any:
+        def validate(data: object) -> object:
             # Already a valid instance of this hierarchy, pass through.
             if isinstance(data, origin):
                 return data
@@ -286,6 +287,7 @@ class AutoRegistry(BaseModel, ABC):
 
         return core_schema.no_info_plain_validator_function(validate)
 
+    @final
     @staticmethod
     def init_registry(bases: list[type["AutoRegistry"]] | None = None) -> None:
         """

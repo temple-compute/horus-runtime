@@ -68,6 +68,15 @@ class ConcreteTestTransport(BaseInteractionTransport):
     kind: str = "test_transport"
 
 
+class ConcreteTestTransport2(BaseInteractionTransport):
+    """
+    Concrete transport used to validate BaseInteractionTransport behavior.
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_transport2"
+
+
 class ConcreteTestRenderer(
     BaseInteractionRenderer[
         ConcreteTestTransport,
@@ -89,6 +98,37 @@ class ConcreteTestRenderer(
     async def render(
         self,
         transport: ConcreteTestTransport,
+        interaction: ConcreteTestInteraction,
+    ) -> object:
+        """
+        Return a fixed raw value for testing.
+        """
+        del transport
+        del interaction
+        return "rendered"
+
+
+class ConcreteTestRendererAddedToRegistry(
+    BaseInteractionRenderer[
+        ConcreteTestTransport2,
+        ConcreteTestInteraction,
+    ]
+):
+    """
+    Concrete renderer that adds itself to the registry.
+    """
+
+    handles_transport: ClassVar[type[ConcreteTestTransport2]] = (
+        ConcreteTestTransport2
+    )
+
+    handles_interaction: ClassVar[type[ConcreteTestInteraction]] = (
+        ConcreteTestInteraction
+    )
+
+    async def render(
+        self,
+        transport: ConcreteTestTransport2,
         interaction: ConcreteTestInteraction,
     ) -> object:
         """
@@ -204,9 +244,14 @@ class TestBaseInteractionRenderer:
 
     def test_registry_key_is_render_key(self) -> None:
         """
-        Test that BaseInteractionRenderer uses 'render_key' as registry key.
+        Test that BaseInteractionRenderer exposes the plain field name as
+        registry_key so that AutoRegistry dispatch uses it as the dict key,
+        and that the full composition template is preserved separately.
         """
         assert BaseInteractionRenderer.registry_key == "render_key"
+        assert BaseInteractionRenderer._product_key_template == (
+            "render_key:handles_transport.handles_interaction"
+        )
 
     def test_render_method_is_abstract(self) -> None:
         """
@@ -218,8 +263,8 @@ class TestBaseInteractionRenderer:
         """
         Test that render_key is derived from transport and interaction kinds.
         """
-        assert ConcreteTestRenderer.model_fields["render_key"].default == (
-            "test_transport:test_interaction"
+        assert ConcreteTestRendererAddedToRegistry().render_key == (
+            "test_transport2.test_interaction"
         )
 
     def test_get_from_registry_returns_matching_renderer(self) -> None:
@@ -234,7 +279,7 @@ class TestBaseInteractionRenderer:
         )
 
         assert renderer_cls is not None
-        assert renderer_cls.model_fields["render_key"].default == "cli:string"
+        assert renderer_cls.model_fields["render_key"].default == "cli.string"
 
 
 @pytest.mark.unit
@@ -282,7 +327,7 @@ class TestBaseInteractionTransport:
         assert result == "hello world"
         assert len(emitted_events) == no_emitted_events
         assert isinstance(emitted_events[0], InteractionAskedEvent)
-        assert emitted_events[0].renderer_key == "cli:string"
+        assert emitted_events[0].renderer_key == "cli.string"
         assert isinstance(emitted_events[1], InteractionAnsweredEvent)
         assert emitted_events[1].value_key == "batch-1"
 

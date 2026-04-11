@@ -24,13 +24,16 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.registry.auto_registry_product import AutoRegistryProduct
 
 if TYPE_CHECKING:
     from horus_runtime.core.interaction.base import BaseInteraction
     from horus_runtime.core.interaction.transport import (
         BaseInteractionTransport,
     )
-# Type aliases for renderer class attributes.
+
+# Type aliases for the renderer class attributes that identify which
+# transport and interaction types a renderer handles.
 HandlesTransportType = type["BaseInteractionTransport"]
 HandlesInteractionType = type["BaseInteraction[Any]"]
 
@@ -38,51 +41,18 @@ HandlesInteractionType = type["BaseInteraction[Any]"]
 class BaseInteractionRenderer[
     T: "BaseInteractionTransport" = "BaseInteractionTransport",
     I: "BaseInteraction[Any]" = "BaseInteraction[Any]",
-](AutoRegistry, entry_point="interaction_renderer"):
+](AutoRegistryProduct, AutoRegistry, entry_point="interaction_renderer"):
     """
     Maps one interaction type to one transport type. Defines how to render
     an interaction and collect a raw answer from the user.
     """
 
-    registry_key: ClassVar[str] = "render_key"
+    registry_key: ClassVar[str] = (
+        "render_key:handles_transport.handles_interaction"
+    )
     render_key: str | None = None
-    handles_transport: ClassVar[type[T]]
-    handles_interaction: ClassVar[type[I]]
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """
-        Automatically initialize the render_key based on the transport and
-        interaction types.
-        """
-        # Only set the render_key for fully defined subclasses,
-        # not for intermediate ones.
-        if not hasattr(cls, "handles_transport") or not hasattr(
-            cls, "handles_interaction"
-        ):
-            return
-
-        # `kind` is a Pydantic model field (not a ClassVar), so it is not
-        # accessible as a class attribute. Read the registered default value
-        # via model_fields instead.
-        transport_fields = getattr(cls.handles_transport, "model_fields", {})
-        interaction_fields = getattr(
-            cls.handles_interaction, "model_fields", {}
-        )
-
-        if "kind" not in transport_fields or "kind" not in interaction_fields:
-            return
-
-        transport_kind = transport_fields["kind"].default
-        interaction_kind = interaction_fields["kind"].default
-
-        if not transport_kind or not interaction_kind:
-            return
-
-        # Automatically set the render_key based on the transport and
-        # interaction kinds.
-        cls.render_key = f"{transport_kind}:{interaction_kind}"
-
-        super().__init_subclass__(**kwargs)
+    handles_transport: ClassVar[HandlesTransportType]
+    handles_interaction: ClassVar[HandlesInteractionType]
 
     @classmethod
     def get_from_registry(
@@ -93,7 +63,7 @@ class BaseInteractionRenderer[
         """
         Look up the renderer that handles the given transport/interaction pair.
         """
-        return cls.registry.get(f"{transport.kind}:{interaction.kind}")
+        return cls.registry.get(f"{transport.kind}.{interaction.kind}")
 
     @abstractmethod
     async def render(
