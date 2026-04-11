@@ -34,7 +34,7 @@ class AutoRegistryProduct:
     Mixin that derives a registry key by composing the discriminator defaults
     of other ``AutoRegistry`` types referenced as ClassVar attributes.
 
-    ``registry_key`` format::
+    ``registry_key`` format (declared on the root/abstract class)::
 
         "<field_name>:<attr1>.<attr2>"
 
@@ -43,6 +43,12 @@ class AutoRegistryProduct:
     ``AutoRegistry`` subclasses; their discriminator field defaults are joined
     with ``:`` to form the registry key.
 
+    When a class explicitly declares this composite format, this mixin
+    normalises ``registry_key`` to just ``<field_name>`` immediately (so that
+    ``AutoRegistry`` always sees a plain field name as the discriminator) and
+    stores the full template in ``_product_key_template``, which concrete
+    subclasses inherit and use to drive composition.
+
     Put this mixin before ``AutoRegistry`` in the base list so the derived key
     is committed to the class **before** ``super().__init_subclass__`` hands
     control to ``AutoRegistry``, which reads the key for registration.
@@ -50,6 +56,7 @@ class AutoRegistryProduct:
 
     _KEY_SEPARATOR: ClassVar[str] = ":"
     _ATTR_SEPARATOR: ClassVar[str] = "."
+    _product_key_template: ClassVar[str]
 
     def __init_subclass__(cls, **kwargs: Unpack[ConfigDict]) -> None:
         """
@@ -62,27 +69,38 @@ class AutoRegistryProduct:
                 "inherit from AutoRegistry."
             )
 
+        # If this class explicitly declares a composite registry_key (one that
+        # contains the separator), normalise it to just the field name so that
+        # AutoRegistry always uses a plain field name as the discriminator.
+        # The full template is preserved in _product_key_template so that
+        # concrete subclasses can inherit and use it for composition.
+        if "registry_key" in cls.__dict__:
+            raw_key: str = cls.__dict__["registry_key"]
+            if cls._KEY_SEPARATOR in raw_key:
+                cls._product_key_template = raw_key
+                cls.registry_key = raw_key.split(cls._KEY_SEPARATOR, 1)[0]
+
         # Abstract classes and opted-out classes are never registered as
         # concrete implementations.
         if isabstract(cls) or not cls.add_to_registry:
             # Proceed with normal AutoRegistry processing,
             # which will skip registration for this case, but delegate
-            # other sublcass initialization processing (pydantic model setup,
+            # other subclass initialization processing (pydantic model setup,
             # etc).
             cast(AutoRegistry, super()).__init_subclass__(**kwargs)
             return
 
-        if cls._KEY_SEPARATOR not in cls.registry_key:
-            # Warn the user that AutoRegistryProduct is being used without a
-            # composite registry_key, which is useless and likely a mistake.
+        # Retrieve the composition template stored by the root/intermediate
+        # class that declared the composite registry_key.
+        template: str | None = getattr(cls, "_product_key_template", None)
+        if not template or cls._KEY_SEPARATOR not in template:
             raise ValueError(
-                f"{cls.__name__} uses AutoRegistryProduct but registry_key "
-                "is not in the expected 'field_name:attr1' format."
+                f"{cls.__name__} uses AutoRegistryProduct but no composite "
+                "registry_key template was found. Make sure a base class "
+                "defines registry_key in 'field_name:attr1.attr2' format."
             )
 
-        field_name, raw_attrs = cls.registry_key.split(
-            cls._KEY_SEPARATOR, maxsplit=1
-        )
+        field_name, raw_attrs = template.split(cls._KEY_SEPARATOR, maxsplit=1)
 
         parts: list[str] = []
         for attr in raw_attrs.split(cls._ATTR_SEPARATOR):
@@ -110,7 +128,7 @@ class AutoRegistryProduct:
 
         # All attrs resolved: commit the composed key to the class so
         # AutoRegistry reads it during super().__init_subclass__.
-        setattr(cls, field_name, cls._KEY_SEPARATOR.join(parts))
+        setattr(cls, field_name, cls._ATTR_SEPARATOR.join(parts))
         cls.registry_key = field_name
 
         # Proceed with normal AutoRegistry processing, which will read the

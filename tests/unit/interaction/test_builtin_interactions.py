@@ -67,16 +67,16 @@ class TestInitRegistry:
         """
         Test that CLI renderers are registered under the expected keys.
         """
-        assert BaseInteractionRenderer.registry["cli:string"] is (
+        assert BaseInteractionRenderer.registry["cli.string"] is (
             CLIStringRenderer
         )
-        assert BaseInteractionRenderer.registry["cli:confirm"] is (
+        assert BaseInteractionRenderer.registry["cli.confirm"] is (
             CLIConfirmRenderer
         )
-        assert BaseInteractionRenderer.registry["cli:dropdown"] is (
+        assert BaseInteractionRenderer.registry["cli.dropdown"] is (
             CLIDropdownRenderer
         )
-        assert BaseInteractionRenderer.registry["cli:file"] is (
+        assert BaseInteractionRenderer.registry["cli.file"] is (
             CLIFileRenderer
         )
 

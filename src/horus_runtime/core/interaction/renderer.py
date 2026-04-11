@@ -63,7 +63,7 @@ class BaseInteractionRenderer[
         """
         Look up the renderer that handles the given transport/interaction pair.
         """
-        return cls.registry.get(f"{transport.kind}:{interaction.kind}")
+        return cls.registry.get(f"{transport.kind}.{interaction.kind}")
 
     @abstractmethod
     async def render(
