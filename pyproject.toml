@@ -119,7 +119,8 @@ extend-select = ["T201"] # Prevent use of print()
 
 ignore = [
     "E203", # Whitespace before ':', conflicts with formatter
-    "D104", # Missing docstring in __init__ (often redundant)
+    "D104", # Missing docstring in class __init__
+    "D107", # Missing docstring in __init__.py
     "D205", # 1 blank line required between summary line and description
     "D212", # Multi-line docstring summary should start at the first line
     "D200", # One-line docstring should fit on one line

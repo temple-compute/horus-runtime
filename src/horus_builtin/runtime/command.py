@@ -69,7 +69,6 @@ class CommandRuntime(BaseRuntime[str]):
             "task": _TaskNamespace(task),
             **task.inputs,
             **task.outputs,
-            **task.variables,
         }
 
         fmt = self.command.format(**fmt_kwargs)

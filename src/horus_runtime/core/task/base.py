@@ -23,7 +23,7 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
-from typing import Any, ClassVar, Self, final
+from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
@@ -75,12 +75,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
     Output artifacts for this task. These are the artifacts that the task
     produces.
-    """
-
-    variables: dict[str, Any] = Field(default_factory=dict)
-    """
-    Variables for this task. These are the variables that the task can use
-    during its execution.
     """
 
     executor: BaseExecutor

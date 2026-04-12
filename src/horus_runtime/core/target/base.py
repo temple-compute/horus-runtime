@@ -65,6 +65,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         # Set the task to "PENDING" status before dispatching
         task.status = TaskStatus.PENDING
 
+        # Sync task artifacts on this target
+
         await self._dispatch(task)
 
     @abstractmethod

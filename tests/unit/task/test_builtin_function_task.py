@@ -93,7 +93,6 @@ class TestFunctionTask:
         assert task.name == "test_task"
         assert not task.inputs
         assert not task.outputs
-        assert not task.variables
 
 
 @pytest.mark.unit
@@ -202,8 +201,12 @@ class TestFunctionTaskDecorator:
         """
         wf = HorusWorkflow(name="test_wf")
         with pytest.raises(ValueError, match="wrong_name"):
+            tmp_file = Path("/tmp/test.txt")
+            tmp_file.write_text("test")
 
-            @FunctionTask.task(wf, variables={"data": "test"})
+            @FunctionTask.task(
+                wf, inputs={"data": FileArtifact(path=tmp_file)}
+            )
             def my_func(wrong_name: FileArtifact) -> None:
                 pass
 

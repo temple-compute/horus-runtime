@@ -141,7 +141,6 @@ class TestHorusTask:
         assert task.kind == "horus_task"
         assert not task.inputs
         assert not task.outputs
-        assert not task.variables
 
     def test_horus_task_creation_with_all_fields(self) -> None:
         """
@@ -156,13 +155,11 @@ class TestHorusTask:
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={"input1": input_artifact},
             outputs={"output1": output_artifact},
-            variables={"var1": "value1"},
         )
 
         assert task.kind == "horus_task"
         assert "input1" in task.inputs
         assert "output1" in task.outputs
-        assert task.variables["var1"] == "value1"
 
 
 @pytest.mark.unit

@@ -25,7 +25,9 @@ from pathlib import Path
 import yaml
 
 from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
@@ -43,6 +45,12 @@ class HorusWorkflow(BaseWorkflow):
     """
 
     kind: str = "horus_workflow"
+
+    orchestrator_target: BaseTarget = LocalTarget()
+    """
+    The orchestrator runs locally; root input artifacts (those not produced by
+    any upstream task) are sourced from the local filesystem.
+    """
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
@@ -84,6 +92,9 @@ class HorusWorkflow(BaseWorkflow):
                     )
                     % {"task_name": task.name}
                 )
+
+            # Transfer input artifacts to the task's target as needed.
+            await self.transfer_artifacts(task)
 
             # Execute the task on its target
             await task.target.dispatch(task)

@@ -70,7 +70,6 @@ class FunctionTask(HorusTask):
         name: str | None = None,
         inputs: dict[str, BaseArtifact] | None = None,
         outputs: dict[str, BaseArtifact] | None = None,
-        variables: dict[str, Any] | None = None,
     ) -> Callable[[Callable[..., Any]], "FunctionTask"]:
         """
         Decorator factory. The natural home for this is here — FunctionTask
@@ -86,7 +85,6 @@ class FunctionTask(HorusTask):
                 runtime=PythonFunctionRuntime(func=func),
                 inputs=inputs or {},
                 outputs=outputs or {},
-                variables=variables or {},
             )
 
             wf.tasks[t.task_id] = t
