@@ -21,7 +21,7 @@ registered.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from horus_runtime.registry.auto_registry import AutoRegistry
 from horus_runtime.registry.auto_registry_product import AutoRegistryProduct
@@ -53,17 +53,6 @@ class BaseInteractionRenderer[
     render_key: str | None = None
     handles_transport: ClassVar[HandlesTransportType]
     handles_interaction: ClassVar[HandlesInteractionType]
-
-    @classmethod
-    def get_from_registry(
-        cls,
-        transport: T,
-        interaction: I,
-    ) -> type[Self] | None:
-        """
-        Look up the renderer that handles the given transport/interaction pair.
-        """
-        return cls.registry.get(f"{transport.kind}.{interaction.kind}")
 
     @abstractmethod
     async def render(
