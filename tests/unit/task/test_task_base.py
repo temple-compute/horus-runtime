@@ -20,6 +20,7 @@ Unit tests for BaseTask abstract base class.
 """
 
 from abc import ABC
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -251,8 +252,8 @@ class TestBaseTaskValidation:
         """
         Test that a task can be created with input and output artifacts.
         """
-        input_artifact = FileArtifact(uri="test_input.txt")
-        output_artifact = FileArtifact(uri="test_output.txt")
+        input_artifact = FileArtifact(path=Path("test_input.txt"))
+        output_artifact = FileArtifact(path=Path("test_output.txt"))
 
         task = ConcreteTestTask(
             name="test_task",

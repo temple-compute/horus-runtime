@@ -19,6 +19,8 @@
 Unit tests for CommandRuntime builtin runtime.
 """
 
+from pathlib import Path
+
 import pytest
 from pydantic import BaseModel, ValidationError
 
@@ -110,7 +112,7 @@ class TestCommandRuntime:
         """
         task = make_shell_task(
             cmd="echo 'Input artifact path is {input1.path}'",
-            inputs={"input1": FileArtifact(uri="test")},
+            inputs={"input1": FileArtifact(path=Path("test"))},
         )
 
         formatted_cmd = task.runtime.setup_runtime(task)

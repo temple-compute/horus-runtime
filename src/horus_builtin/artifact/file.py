@@ -20,31 +20,32 @@ Implementation of the FileArtifact class, which represents a local
 file artifact in the Horus runtime.
 """
 
-from horus_builtin.artifact.local_base import LocalPathArtifactBase
+from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.core.artifact.base import BaseArtifact
 
 
-class FileArtifact(LocalPathArtifactBase):
+class FileArtifact(BaseArtifact[str]):
     """
     Represents a local file artifact.
     """
 
-    add_to_registry = True
-
     kind: str = "file"
 
-    @property
-    def hash(self) -> str | None:
+    def read(self) -> str:
         """
-        Computes the hash of the file based on its contents. Returns None if
-        the file does not exist.
-        """
-        return self.hash_file(self.path).hex() if self.exists() else None
+        Read and deserialize the contents of the file artifact.
 
-    def delete(self) -> None:
+        Returns:
+            The full text content of the file.
         """
-        Deletes the artifact from its location by deleting the file at the
-        specified path.
+        txt = self.path.read_text()
+        self._emit_event(ArtifactEventsEnum.READ)
+        return txt
+
+    def write(self, value: str) -> None:
         """
-        if self.exists():
-            self.path.unlink()
-            super().delete()  # Emit the deletion event
+        Write text content to the file artifact path.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(value)
+        self._emit_event(ArtifactEventsEnum.WRITE)
