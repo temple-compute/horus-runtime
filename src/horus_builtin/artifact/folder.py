@@ -21,6 +21,7 @@ folder/directory artifact in the Horus runtime.
 """
 
 import hashlib
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -100,16 +101,27 @@ class FolderArtifact(BaseArtifact[Path]):
         if not self.exists():
             raise FileNotFoundError(self.path)
 
-        archive_base = Path(tempfile.mkdtemp()) / self.path.name
-        path_packaged = Path(
-            shutil.make_archive(
-                base_name=str(archive_base),
-                format="zip",
-                root_dir=self.path,
-            )
+        # Create a temporary file to be used as the archive path.
+        # shutil.make_archive requires a base name without extension,
+        # so we create a temp file and then remove it after archiving.
+        fd, arch_p = tempfile.mkstemp()
+        os.close(fd)
+        archive_path = Path(arch_p)
+
+        shutil.make_archive(
+            base_name=str(archive_path),
+            format="zip",
+            root_dir=self.path,
         )
+
+        # shutil.make_archive adds .zip, so remove the temp
+        # file and use the generated archive
+        archive_file = archive_path.with_suffix(".zip")
+        if archive_path.exists():
+            archive_path.unlink()
+
         self._emit_event(ArtifactEventsEnum.PACKAGE)
-        return path_packaged
+        return archive_file
 
     def unpackage(self, package_path: Path) -> None:
         """

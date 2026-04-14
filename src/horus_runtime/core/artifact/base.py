@@ -121,7 +121,7 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         """
         Checks if the artifact exists at the specified path.
         """
-        return self.path.exists()
+        return self.path.exists() and self.path.is_file()
 
     @property
     def hash(self) -> str | None:
@@ -188,8 +188,8 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         """
         HorusContext.get_context().bus.emit(
             ArtifactEvent(
-                message=_("Artifact at %(path)s was %(event)s.")
-                % {"path": self.path, "event": event_name.name.lower()},
+                message=_("Artifact at %(path)s. %(event)s")
+                % {"path": self.path, "event": event_name.name},
                 artifact_id=str(self.internal_id),
                 event_name=event_name,
             )
