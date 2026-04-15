@@ -41,7 +41,7 @@ class FolderArtifact(BaseArtifact[Path]):
         """
         Check if the folder specified by the path exists and is a directory.
         """
-        return super().exists() and self.path.is_dir()
+        return self.path.is_dir()
 
     @property
     def hash(self) -> str | None:

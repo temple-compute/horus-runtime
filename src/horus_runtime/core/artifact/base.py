@@ -121,7 +121,7 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         """
         Checks if the artifact exists at the specified path.
         """
-        return self.path.exists() and self.path.is_file()
+        return self.path.is_file()
 
     @property
     def hash(self) -> str | None:
