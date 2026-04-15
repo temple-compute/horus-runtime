@@ -109,7 +109,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         - ``None``  — not accessible; transfer required before dispatch
 
         Implementations must be synchronous and cheap (no I/O). Use
-        ``artifact.uri`` for location/protocol checks and ``artifact.kind``
+        the artifact metadata such as ``artifact.path`` and ``artifact.kind``
         (or the concrete artifact type) for kind-specific cost adjustments.
         """
 

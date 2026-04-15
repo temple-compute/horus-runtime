@@ -22,7 +22,6 @@ Local target implementation for executing tasks on the local machine
 
 import asyncio
 import socket
-from urllib.parse import urlparse
 
 from pydantic import PrivateAttr
 
@@ -121,11 +120,7 @@ class LocalTarget(BaseTarget):
 
     def access_cost(self, artifact: BaseArtifact) -> float | None:
         """
-        Return ``0.0`` for artifacts that are natively readable in-process:
-        local filesystem URIs (``file://`` scheme or bare paths). Returns
-        ``None`` for any other scheme, signalling that a transfer is required.
+        Return ``0.0`` for artifacts that already exist on this machine and
+        ``None`` otherwise.
         """
-        parsed = urlparse(artifact.uri)
-        if parsed.scheme in ("", "file"):
-            return 0.0
-        return None
+        return 0.0 if artifact.path.exists() else None

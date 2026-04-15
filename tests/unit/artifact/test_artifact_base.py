@@ -21,6 +21,7 @@ Unit tests for BaseArtifact class.
 
 import uuid
 from abc import ABC
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -33,7 +34,7 @@ from horus_runtime.registry.auto_registry import (
 from horus_runtime.registry.exceptions import RegistryKeyIsNoneError
 
 
-class ConcreteTestArtifact(BaseArtifact):
+class ConcreteTestArtifact(BaseArtifact[str]):
     """
     Concrete implementation of BaseArtifact for testing purposes.
     """
@@ -62,6 +63,18 @@ class ConcreteTestArtifact(BaseArtifact):
         """
         pass
 
+    def read(self) -> str:
+        """
+        Test read.
+        """
+        return "test_value"
+
+    def write(self, value: str) -> None:
+        """
+        Test write.
+        """
+        del value
+
 
 @pytest.mark.unit
 class TestBaseArtifact:
@@ -79,7 +92,7 @@ class TestBaseArtifact:
             # We use type:ignore because the linter correctly identifies that
             # BaseArtifact is abstract and cannot be instantiated, but we want
             # to test this behavior explicitly at runtime.
-            BaseArtifact(uri="test://uri")  # type: ignore
+            BaseArtifact(path=Path("test"))  # type: ignore
 
     def test_base_artifact_inherits_correctly(self) -> None:
         """
@@ -106,8 +119,8 @@ class TestBaseArtifact:
         """
         Test that UUID is automatically generated if not provided.
         """
-        artifact1 = ConcreteTestArtifact(uri="test://uri1")
-        artifact2 = ConcreteTestArtifact(uri="test://uri2")
+        artifact1 = ConcreteTestArtifact(path=Path("test1"))
+        artifact2 = ConcreteTestArtifact(path=Path("test2"))
 
         assert artifact1.internal_id != artifact2.internal_id
         assert isinstance(artifact1.internal_id, uuid.UUID)
@@ -119,39 +132,39 @@ class TestBaseArtifact:
         """
         custom_id = uuid.uuid4()
         artifact = ConcreteTestArtifact(
-            uri="test://uri", internal_id=custom_id
+            path=Path("test"), internal_id=custom_id
         )
 
         assert artifact.internal_id == custom_id
 
-    def test_uri_field_required(self) -> None:
+    def test_path_field_required(self) -> None:
         """
-        Test that uri field is required.
+        Test that path field is required.
         """
         with pytest.raises(ValidationError) as exc_info:
-            # This should fail because uri is a required field and we're
+            # This should fail because path is a required field and we're
             # not providing it. We use type:ignore because the linter will
             # complain about missing required fields, but we want to test this
             # validation at runtime.
             ConcreteTestArtifact()  # type: ignore
 
-        # Check that the validation error is for the 'uri' field
+        # Check that the validation error is for the 'path' field
         errors = exc_info.value.errors()
-        assert any(error["loc"] == ("uri",) for error in errors)
+        assert any(error["loc"] == ("path",) for error in errors)
 
     def test_kind_validation_in_subclass(self) -> None:
         """
         Test that kind field validation works in subclasses.
         """
         # This should work since ConcreteTestArtifact sets kind = "test"
-        artifact = ConcreteTestArtifact(uri="test://uri")
+        artifact = ConcreteTestArtifact(path=Path("test"))
         assert artifact.kind == "test"
 
     def test_abstract_methods_defined(self) -> None:
         """
         Test that abstract methods are properly defined in concrete class.
         """
-        artifact = ConcreteTestArtifact(uri="test://uri")
+        artifact = ConcreteTestArtifact(path=Path("test"))
 
         # Test exists method
         assert artifact.exists() is True
@@ -159,17 +172,20 @@ class TestBaseArtifact:
         # Test hash property
         assert artifact.hash == "test_hash"
 
+        # Test read method
+        assert artifact.read() == "test_value"
+
     def test_artifact_serialization(self) -> None:
         """
         Test that artifacts can be serialized to dict.
         """
-        artifact = ConcreteTestArtifact(uri="test://uri")
+        artifact = ConcreteTestArtifact(path=Path("test"))
         artifact_dict = artifact.model_dump()
 
         assert "id" in artifact_dict
-        assert "uri" in artifact_dict
+        assert "path" in artifact_dict
         assert "kind" in artifact_dict
-        assert artifact_dict["uri"] == "test://uri"
+        assert artifact_dict["path"] == Path("test").resolve()
         assert artifact_dict["kind"] == "test"
 
     def test_artifact_deserialization(self) -> None:
@@ -179,14 +195,14 @@ class TestBaseArtifact:
         test_id = uuid.uuid4()
         data = {
             "internal_id": str(test_id),
-            "uri": "test://uri",
+            "path": "test",
             "kind": "test",
         }
 
         artifact = ConcreteTestArtifact.model_validate(data)
 
         assert artifact.internal_id == test_id
-        assert artifact.uri == "test://uri"
+        assert artifact.path == Path("test").resolve()
         assert artifact.kind == "test"
 
 
@@ -206,12 +222,10 @@ class TestBaseArtifactValidation:
             match="must define a class property named 'kind'",
         ):
 
-            class InvalidArtifactNoKind(BaseArtifact):
+            class InvalidArtifactNoKind(BaseArtifact[None]):
                 """
                 Invalid artifact implementation without kind field for testing.
                 """
-
-                add_to_registry: ClassVar[bool] = True
 
                 def exists(self) -> bool:
                     return False
@@ -223,6 +237,12 @@ class TestBaseArtifactValidation:
                 def delete(self) -> None:
                     pass
 
+                def read(self) -> None:
+                    return
+
+                def write(self, _: None) -> None:
+                    return
+
     def test_model_validation_preserves_type_safety(self) -> None:
         """
         Test that Pydantic validation maintains type safety.
@@ -233,7 +253,7 @@ class TestBaseArtifactValidation:
             # about this, but we want to ensure that the validation error
             # is raised at runtime.
             ConcreteTestArtifact(
-                uri="test://uri",
+                path=Path("test"),
                 internal_id="not-a-uuid",  # type: ignore[arg-type]
             )
 
@@ -242,12 +262,12 @@ class TestBaseArtifactValidation:
         Test behavior with extra fields in model validation.
         """
         data = {
-            "uri": "test://uri",
+            "path": "test",
             "kind": "test",
             "extra_field": "should_be_ignored",
         }
 
         # Should work fine - extra fields are ignored by default
         artifact = ConcreteTestArtifact.model_validate(data)
-        assert artifact.uri == "test://uri"
+        assert artifact.path == Path("test").resolve()
         assert artifact.kind == "test"

@@ -16,36 +16,41 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Implementation of the FileArtifact class, which represents a local
-file artifact in the Horus runtime.
+Implementation of PickleArtifact, which serializes arbitrary Python objects
+to disk using the pickle protocol.
 """
+
+import pickle
+from typing import Any, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
 
 
-class FileArtifact(BaseArtifact[str]):
+class PickleArtifact[T: Any = Any](BaseArtifact[T]):
     """
-    Represents a local file artifact.
+    Represents a pickled Python object artifact.
+    The artifact is materialized as a pickle file on disk.
+
+    Warning: pickle is not secure against malformed or maliciously crafted
+    data. Never unpickle data from untrusted sources.
     """
 
-    kind: str = "file"
+    kind: str = "pickle"
 
-    def read(self) -> str:
+    def read(self) -> T:
         """
-        Read and deserialize the contents of the file artifact.
-
-        Returns:
-            The full text content of the file.
+        Deserialize the artifact from the pickle file.
         """
-        txt = self.path.read_text()
+        with open(self.path, "rb") as f:
+            obj = pickle.load(f)
         self._emit_event(ArtifactEventsEnum.READ)
-        return txt
+        return cast(T, obj)
 
-    def write(self, value: str) -> None:
+    def write(self, value: T) -> None:
         """
-        Write text content to the file artifact path.
+        Serialize and write the object to the pickle file.
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(value)
+        with open(self.path, "wb") as f:
+            pickle.dump(value, f)
         self._emit_event(ArtifactEventsEnum.WRITE)
