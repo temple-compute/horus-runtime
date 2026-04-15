@@ -27,6 +27,8 @@ from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
+from horus_builtin.event.task_event import HorusTaskEvent
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
@@ -140,6 +142,16 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
         """
+        ctx = HorusContext.get_context()
+        if self.skip_if_complete and self.is_complete():
+            ctx.bus.emit(
+                HorusTaskEvent(
+                    message=_("Skipping task %(task_name)s. Already complete.")
+                    % {"task_name": self.name},
+                    task_id=self.task_id,
+                    task_name=self.name,
+                )
+            )
         self.status = TaskStatus.RUNNING
         horus_logger.log.debug(
             _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}

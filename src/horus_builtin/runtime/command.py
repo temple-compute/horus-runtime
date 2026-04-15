@@ -22,6 +22,7 @@ Command implementation for the runtime.
 from typing import TYPE_CHECKING
 
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.logging import horus_logger
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -74,5 +75,9 @@ class CommandRuntime(BaseRuntime[str]):
         fmt = self.command.format(**fmt_kwargs)
 
         self.formatted_command = fmt
+
+        horus_logger.log.debug(
+            f"Formatted command for task {task.task_id}: {fmt}"
+        )
 
         return fmt

@@ -38,6 +38,8 @@ horus = "horus_runtime.cli:main"
 [project.entry-points."horus.artifact"]
 file = "horus_builtin.artifact.file"
 folder = "horus_builtin.artifact.folder"
+json = "horus_builtin.artifact.json"
+pickle = "horus_builtin.artifact.pickle"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"
@@ -69,6 +71,9 @@ horus_workflow = "horus_builtin.workflow.horus_workflow"
 
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"
+
+[project.entry-points."horus.transfer"]
+local_to_local = "horus_builtin.transfer.local_noop"
 
 # ================
 

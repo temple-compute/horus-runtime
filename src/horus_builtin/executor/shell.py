@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.logging import horus_logger
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -52,6 +53,10 @@ class ShellExecutor(BaseExecutor):
         assert isinstance(task.runtime, CommandRuntime)
         prepared_command = task.runtime.setup_runtime(task)
 
+        horus_logger.log.debug(
+            f"Executing command for task {task.task_id}: {prepared_command}"
+        )
+
         # Security Warning:
         # This method uses `shell=True` with `subprocess.run`, which poses a
         # security risk if `cmd` contains untrusted input. Shell injection
@@ -61,10 +66,22 @@ class ShellExecutor(BaseExecutor):
         # The local runtime intentionally allows this "free for all" for
         # maximum flexibility, assuming the user is executing commands on
         # their own machine.
-        return subprocess.run(
+        p = subprocess.run(
             prepared_command,
             shell=True,
             check=False,
             text=True,
             capture_output=True,
-        ).returncode
+        )
+
+        # Log the command's stdout and stderr for debugging purposes
+        if p.stdout:
+            horus_logger.log.debug(
+                f"Command stdout for task {task.task_id}:\n{p.stdout}"
+            )
+        if p.stderr:
+            horus_logger.log.debug(
+                f"Command stderr for task {task.task_id}:\n{p.stderr}"
+            )
+
+        return p.returncode

@@ -67,7 +67,7 @@ class HorusTask(BaseTask):
         ) in self.inputs.items():
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
-                    _("Input artifact %(input_name)s does not exist")
+                    _("Input artifact '%(input_name)s' does not exist")
                     % {"input_name": input_name}
                 )
 

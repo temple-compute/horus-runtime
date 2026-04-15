@@ -20,6 +20,8 @@ The Horus target indicates where a task should be dispatched and executed.
 """
 
 from abc import abstractmethod
+from os import getcwd
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_runtime.core.task.status import TaskStatus
@@ -38,6 +40,12 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
     registry_key: ClassVar[str] = "kind"
     kind: str
+
+    working_directory: Path = Path(getcwd())
+    """
+    Base directory on the remote host where per-task working directories are
+    created.
+    """
 
     @property
     @abstractmethod

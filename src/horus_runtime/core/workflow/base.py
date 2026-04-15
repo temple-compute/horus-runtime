@@ -139,33 +139,22 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             TransferStrategyNotFoundError: When no registered strategy handles
                 the resolved source → destination target pair.
         """
-        # Build a reverse map: artifact URI → the target of the task that
+        # Build a reverse map: artifact id → the target of the task that
         # produced it. This covers outputs of every task in the workflow,
         # not just the ones that have already run.
-        uri_to_source: dict[str, BaseTarget] = {}
+        id_to_source: dict[str, BaseTarget] = {}
         for t in self.tasks.values():
             for artifact in t.outputs.values():
-                uri_to_source[artifact.uri] = t.target
+                id_to_source[artifact.id] = t.target
 
         for artifact in task.inputs.values():
-            # Skip artifacts the destination can already access.
-            if task.target.access_cost(artifact) is not None:
-                horus_logger.log.debug(
-                    _(
-                        "Artifact '%(uri)s' is accessible by target"
-                        " '%(kind)s'; skipping transfer."
-                    )
-                    % {"uri": artifact.uri, "kind": task.target.kind}
-                )
-                continue
-
             # Resolve the source target.
-            source_target = uri_to_source.get(artifact.uri)
+            source_target = id_to_source.get(artifact.id)
             if source_target is None:
                 # Root artifact: must come from the orchestrator.
                 if self.orchestrator_target is None:
                     raise OrchestratorTargetNotSetError(
-                        artifact.uri, task.target.kind
+                        artifact.id, task.target.kind
                     )
                 source_target = self.orchestrator_target
 
@@ -180,14 +169,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
             horus_logger.log.debug(
                 _(
-                    "Transferring artifact '%(uri)s' from '%(src)s'"
+                    "Transferring artifact '%(id)s' from '%(src)s'"
                     " to '%(dst)s' via %(strategy)s."
                 )
                 % {
-                    "uri": artifact.uri,
+                    "id": artifact.id,
                     "src": source_target.kind,
                     "dst": task.target.kind,
-                    "strategy": type(strategy_cls).__name__,
+                    "strategy": strategy_cls.__name__,
                 }
             )
 

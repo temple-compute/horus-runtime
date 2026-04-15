@@ -27,9 +27,11 @@ from pydantic import model_validator
 from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.interaction.cli import CLIInteractionTransport
 from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow
 
 
@@ -70,11 +72,13 @@ class FunctionTask(HorusTask):
         name: str | None = None,
         inputs: dict[str, BaseArtifact] | None = None,
         outputs: dict[str, BaseArtifact] | None = None,
+        target: BaseTarget | None = None,
     ) -> Callable[[Callable[..., Any]], "FunctionTask"]:
         """
-        Decorator factory. The natural home for this is here — FunctionTask
-        owns the construction of runtime + executor together.
+        Decorator factory for registering a Python function as a Horus task
+        within a workflow.
 
+        Usage:
             @FunctionTask.task(wf, inputs={"data": my_artifact})
             def process(data: FileArtifact) -> None: ...
         """
@@ -85,6 +89,7 @@ class FunctionTask(HorusTask):
                 runtime=PythonFunctionRuntime(func=func),
                 inputs=inputs or {},
                 outputs=outputs or {},
+                target=target or LocalTarget(),
             )
 
             wf.tasks[t.task_id] = t

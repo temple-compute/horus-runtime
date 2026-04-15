@@ -24,9 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
-from horus_runtime.context import HorusContext
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
@@ -66,23 +64,7 @@ class HorusWorkflow(BaseWorkflow):
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
         """
-        ctx = HorusContext.get_context()
-
         for task in self.tasks.values():
-            if task.skip_if_complete and task.is_complete():
-                ctx.bus.emit(
-                    HorusTaskEvent(
-                        message=_(
-                            "Skipping task %(task_name)s: all output "
-                            "artifacts exist"
-                        )
-                        % {"task_name": task.name},
-                        task_id=task.task_id,
-                        task_name=task.name,
-                    )
-                )
-                continue
-
             if task.task_id is None:
                 raise TaskMissingIdError(
                     _(

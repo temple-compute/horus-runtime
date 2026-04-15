@@ -41,18 +41,17 @@ HandlesSourceType = type["BaseTarget"]
 HandlesDestinationType = type["BaseTarget"]
 
 
-class BaseTransferStrategy(
-    AutoRegistryProduct, AutoRegistry, entry_point="transfer"
-):
+class BaseTransferStrategy[
+    S: BaseTarget = BaseTarget,
+    D: BaseTarget = BaseTarget,
+](AutoRegistryProduct, AutoRegistry, entry_point="transfer"):
     """
     Maps a (source target kind, destination target kind) pair to a concrete
     transfer implementation.
     """
 
-    registry_key: ClassVar[str] = "transfer_key"
-    registry_product_attrs: ClassVar[tuple[str, str]] = (
-        "handles_source",
-        "handles_destination",
+    registry_key: ClassVar[str] = (
+        "transfer_key:handles_source.handles_destination"
     )
     transfer_key: str | None = None
     handles_source: ClassVar[HandlesSourceType]
@@ -62,8 +61,8 @@ class BaseTransferStrategy(
     async def transfer(
         self,
         artifact: "BaseArtifact",
-        source: "BaseTarget",
-        destination: "BaseTarget",
+        source: S,
+        destination: D,
     ) -> None:
         """
         Transfer *artifact* from *source* target to *destination* target.
