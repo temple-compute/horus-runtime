@@ -16,24 +16,44 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Defines the Artifact base class, which represents an artifact in the Horus
-runtime. An artifact is a piece of data that is produced or consumed by a task.
+Defines the Artifact base class, which represents a local file-backed
+artifact in the Horus runtime.
 """
 
+import hashlib
+import shutil
 import uuid
 from abc import abstractmethod
-from typing import ClassVar, Self
+from pathlib import Path
+from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import Field, model_validator
+from pydantic import BeforeValidator, Field, model_validator
 
+from horus_builtin.event.artifact_event import (
+    ArtifactEvent,
+    ArtifactEventsEnum,
+)
+from horus_runtime.context import HorusContext
+from horus_runtime.i18n import tr as _
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
-class BaseArtifact(AutoRegistry, entry_point="artifact"):
+def validate_path(path: Path | str) -> Path:
     """
-    Represents an artifact in the Horus runtime. An artifact is a piece of data
-    that is produced or consumed by a task. It can be a file, a dataset,
-    a model, a JSON file, pickled file or any other type of data.
+    Allow artifact paths to be provided as either strings or Path objects, but
+    normalize them to Path objects.
+    """
+    if isinstance(path, str):
+        path = Path(path)
+    return path
+
+
+class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
+    """
+    Represents a local file-backed artifact in the Horus runtime. An artifact
+    is a piece of data that is produced or consumed by a task. It can be a
+    file, a dataset, a model, a JSON file, pickled file or any other type of
+    data that materializes on disk.
 
     The artifact is identified by a unique ID.
 
@@ -82,10 +102,9 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
         self.id = str(self.internal_id) if not self.id else self.id
         return self
 
-    uri: str
+    path: Annotated[Path, BeforeValidator(validate_path)]
     """
-    URI to the artifact. This can be a local path, a remote URL, or a
-    reference to an artifact in a registry.
+    Absolute local filesystem path where the artifact materializes.
     """
 
     kind: str
@@ -98,27 +117,93 @@ class BaseArtifact(AutoRegistry, entry_point="artifact"):
     registry.
     """
 
-    @abstractmethod
     def exists(self) -> bool:
         """
-        Checks if the artifact exists at the specified path. This method should
-        be implemented to check for the existence of the artifact based on its
-        path.
+        Checks if the artifact exists at the specified path.
         """
+        return self.path.is_file()
 
     @property
-    @abstractmethod
     def hash(self) -> str | None:
         """
-        Computes the hash of the artifact based on its content or returns
-        None if the artifact does not exist.
+        Computes the hash of the file based on its contents. Returns None if
+        the file does not exist.
+        """
+        return self.hash_file(self.path).hex() if self.exists() else None
 
-        This method should be implemented to compute the hash based on the
-        actual content of the artifact.
+    def delete(self) -> None:
+        """
+        Deletes the artifact from its location by deleting the file at the
+        specified path.
+        """
+        if self.exists():
+            self.path.unlink()
+            self._emit_event(ArtifactEventsEnum.DELETE)
+
+    @model_validator(mode="after")
+    def resolve_path(self) -> Self:
+        """
+        Normalize artifact paths to absolute resolved paths.
+        """
+        self.path = self.path.resolve()
+        return self
+
+    @abstractmethod
+    def read(self) -> T:
+        """
+        Read and deserialize the artifact contents.
         """
 
     @abstractmethod
-    def delete(self) -> None:
+    def write(self, value: T) -> None:
         """
-        Deletes the artifact from its location.
+        Write the native artifact representation to its canonical path.
         """
+
+    def package(self) -> Path:
+        """
+        Return the single-file package that transports should move.
+        """
+        if not self.exists():
+            raise FileNotFoundError(self.path)
+
+        self._emit_event(ArtifactEventsEnum.PACKAGE)
+        return self.path
+
+    def unpackage(self, package_path: Path) -> None:
+        """
+        Materialize a packaged artifact file at the canonical path.
+        """
+        package_path = package_path.resolve()
+        if package_path == self.path:
+            return
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(package_path, self.path)
+        self._emit_event(ArtifactEventsEnum.UNPACKAGE)
+
+    def _emit_event(self, event_name: ArtifactEventsEnum) -> None:
+        """
+        Emit the standard artifact event.
+        """
+        HorusContext.get_context().bus.emit(
+            ArtifactEvent(
+                message=_("Artifact at %(path)s. %(event)s")
+                % {"path": self.path, "event": event_name.name},
+                artifact_id=str(self.internal_id),
+                event_name=event_name,
+            )
+        )
+
+    @staticmethod
+    def hash_file(path: Path) -> bytes:
+        """
+        Computes the hash of the file contents.
+        """
+        buffer = 65536
+        sha256 = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(buffer):
+                sha256.update(chunk)
+
+        return sha256.digest()

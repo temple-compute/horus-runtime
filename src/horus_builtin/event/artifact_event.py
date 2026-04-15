@@ -19,9 +19,22 @@
 ArtifactEvent. Emitted when an artifact is created, updated, or deleted.
 """
 
+from enum import Enum
 from typing import ClassVar
 
 from horus_runtime.event.base import BaseEvent
+
+
+class ArtifactEventsEnum(Enum):
+    """
+    Standard artifact events.
+    """
+
+    DELETE = "deleted"
+    PACKAGE = "packaged"
+    UNPACKAGE = "unpackaged"
+    READ = "read"
+    WRITE = "written"
 
 
 class ArtifactEvent(BaseEvent):
@@ -31,5 +44,5 @@ class ArtifactEvent(BaseEvent):
 
     add_to_registry: ClassVar[bool] = True
     event_type: str = "artifact_event"
-
+    event_name: ArtifactEventsEnum
     artifact_id: str

@@ -21,6 +21,8 @@ Unit tests for the LocalTarget builtin target.
 
 import asyncio
 import socket
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -54,28 +56,24 @@ class TestLocalTargetProperties:
         target = LocalTarget()
         assert target.location_id == f"local://{socket.gethostname()}"
 
-    def test_access_cost_zero_for_bare_path(self) -> None:
+    def test_access_cost_zero_for_existing_local_path(self) -> None:
         """
-        A bare filesystem path (no scheme) has zero access cost.
+        An existing local filesystem path has zero access cost.
         """
-        target = LocalTarget()
-        artifact = FileArtifact(uri="/tmp/some_file.txt")
-        assert target.access_cost(artifact) == 0.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "some_file.txt"
+            path.write_text("content")
 
-    def test_access_cost_zero_for_file_scheme(self) -> None:
-        """
-        A ``file://`` URI has zero access cost.
-        """
-        target = LocalTarget()
-        artifact = FileArtifact(uri="file:///tmp/some_file.txt")
-        assert target.access_cost(artifact) == 0.0
+            target = LocalTarget()
+            artifact = FileArtifact(path=path)
+            assert target.access_cost(artifact) == 0.0
 
-    def test_access_cost_none_for_remote_scheme(self) -> None:
+    def test_access_cost_none_for_missing_local_path(self) -> None:
         """
-        A remote URI (e.g. ``s3://``) returns None, signalling transfer needed.
+        A missing local path returns None, signalling transfer needed.
         """
         target = LocalTarget()
-        artifact = Mock(uri="s3://bucket/key")
+        artifact = Mock(path=Path("/definitely/nonexistent/file.txt"))
         assert target.access_cost(artifact) is None
 
 

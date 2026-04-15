@@ -20,6 +20,7 @@
 Unit tests for HorusTask builtin task.
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -146,8 +147,8 @@ class TestHorusTask:
         """
         Test that HorusTask can be created with all fields specified.
         """
-        input_artifact = FileArtifact(uri="input.txt")
-        output_artifact = FileArtifact(uri="output.txt")
+        input_artifact = FileArtifact(path=Path("input.txt"))
+        output_artifact = FileArtifact(path=Path("output.txt"))
 
         task = HorusTask(
             name="test_task",
@@ -174,7 +175,7 @@ class TestHorusTaskExecution:
         """
         # Use a path that definitely doesn't exist
         input_artifact = FileArtifact(
-            uri="/definitely/nonexistent/path/file.txt"
+            path=Path("/definitely/nonexistent/path/file.txt")
         )
 
         task = HorusTask(
@@ -257,10 +258,10 @@ class TestHorusTaskExecution:
         """
         # Use paths that definitely don't exist
         input_artifact1 = FileArtifact(
-            uri="/definitely/nonexistent/path/file1.txt"
+            path=Path("/definitely/nonexistent/path/file1.txt")
         )
         input_artifact2 = FileArtifact(
-            uri="/definitely/nonexistent/path/file2.txt"
+            path=Path("/definitely/nonexistent/path/file2.txt")
         )
 
         task = HorusTask(

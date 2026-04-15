@@ -131,6 +131,13 @@ class AutoRegistry(BaseModel, ABC):
         """
         super().__init_subclass__(**kwargs)
 
+        # Parameterized generic aliases (e.g. JSONArtifact[str]) are created
+        # by Pydantic's generic machinery at parameterization time. Their name
+        # always contains "[". Skip them entirely, the origin class is already
+        # registered and carries the correct discriminator value.
+        if "[" in cls.__name__:
+            return
+
         # Prefix the entry_point with "horus."
         prefixed_entry_point: str | None = (
             (HORUS_ENTRY_POINT_PREFIX + entry_point) if entry_point else None

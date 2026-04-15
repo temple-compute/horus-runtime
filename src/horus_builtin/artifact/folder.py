@@ -21,17 +21,19 @@ folder/directory artifact in the Horus runtime.
 """
 
 import hashlib
+import os
 import shutil
+import tempfile
+from pathlib import Path
 
-from horus_builtin.artifact.local_base import LocalPathArtifactBase
+from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.core.artifact.base import BaseArtifact
 
 
-class FolderArtifact(LocalPathArtifactBase):
+class FolderArtifact(BaseArtifact[Path]):
     """
     Represents a local folder artifact.
     """
-
-    add_to_registry = True
 
     kind: str = "folder"
 
@@ -39,7 +41,7 @@ class FolderArtifact(LocalPathArtifactBase):
         """
         Check if the folder specified by the path exists and is a directory.
         """
-        return super().exists() and self.path.is_dir()
+        return self.path.is_dir()
 
     @property
     def hash(self) -> str | None:
@@ -68,6 +70,75 @@ class FolderArtifact(LocalPathArtifactBase):
 
         return sha256.hexdigest()
 
+    def read(self) -> Path:
+        """
+        Return the canonical directory path for this artifact.
+        """
+        self._emit_event(ArtifactEventsEnum.READ)
+        return self.path
+
+    def write(self, value: Path) -> None:
+        """
+        Materialize this folder artifact from another local directory.
+
+        WARNING: THIS WILL OVERWRITE ANY EXISTING CONTENT AT THE ARTIFACT PATH.
+        """
+        source_path = Path(value).resolve()
+        if not source_path.is_dir():
+            raise ValueError(f"Expected directory path, got {source_path}")
+
+        if self.path.exists():
+            shutil.rmtree(self.path)
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_path, self.path)
+        self._emit_event(ArtifactEventsEnum.WRITE)
+
+    def package(self) -> Path:
+        """
+        Archive the folder into a zip file and return the archive path.
+        """
+        if not self.exists():
+            raise FileNotFoundError(self.path)
+
+        # Create a temporary file to be used as the archive path.
+        # shutil.make_archive requires a base name without extension,
+        # so we create a temp file and then remove it after archiving.
+        fd, arch_p = tempfile.mkstemp()
+        os.close(fd)
+        archive_path = Path(arch_p)
+
+        shutil.make_archive(
+            base_name=str(archive_path),
+            format="zip",
+            root_dir=self.path,
+        )
+
+        # shutil.make_archive adds .zip, so remove the temp
+        # file and use the generated archive
+        archive_file = archive_path.with_suffix(".zip")
+        if archive_path.exists():
+            archive_path.unlink()
+
+        self._emit_event(ArtifactEventsEnum.PACKAGE)
+        return archive_file
+
+    def unpackage(self, package_path: Path) -> None:
+        """
+        Extract a packaged folder archive into the canonical directory path.
+        """
+        package_path = Path(package_path).resolve()
+
+        if self.path.exists():
+            shutil.rmtree(self.path)
+
+        self.path.mkdir(parents=True, exist_ok=True)
+        shutil.unpack_archive(
+            filename=str(package_path),
+            extract_dir=str(self.path),
+        )
+        self._emit_event(ArtifactEventsEnum.UNPACKAGE)
+
     def delete(self) -> None:
         """
         Deletes the artifact from its location by deleting the folder at the
@@ -75,4 +146,4 @@ class FolderArtifact(LocalPathArtifactBase):
         """
         if self.exists():
             shutil.rmtree(self.path)
-            super().delete()  # Emit the deletion event
+            self._emit_event(ArtifactEventsEnum.DELETE)

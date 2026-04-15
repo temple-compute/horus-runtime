@@ -16,36 +16,44 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Implementation of the FileArtifact class, which represents a local
-file artifact in the Horus runtime.
+Implementation of the FolderArtifact class, which represents a local
+folder/directory artifact in the Horus runtime.
 """
+
+import json
+from typing import Any, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
 
 
-class FileArtifact(BaseArtifact[str]):
+class JSONArtifact[T: Any = Any](BaseArtifact[T]):
     """
-    Represents a local file artifact.
+    Represents a JSON-serializable Python object artifact.
+    The artifact is materialized as a JSON file on disk.
     """
 
-    kind: str = "file"
+    kind: str = "json"
 
-    def read(self) -> str:
+    def read(self) -> T:
         """
-        Read and deserialize the contents of the file artifact.
+        Read and deserialize the JSON artifact contents.
 
-        Returns:
-            The full text content of the file.
+        Warning: This method assumes that the JSON file is well-formed and that
+        the contents can be deserialized into the expected type `T`. For more
+        robust handling, consider using PydanticArtifact, which provides
+        validation and error handling for deserialization.
         """
-        txt = self.path.read_text()
+        with open(self.path) as f:
+            j_contet = json.load(f)
         self._emit_event(ArtifactEventsEnum.READ)
-        return txt
 
-    def write(self, value: str) -> None:
+        return cast(T, j_contet)
+
+    def write(self, value: T) -> None:
         """
-        Write text content to the file artifact path.
+        Serialize and write the JSON artifact contents.
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(value)
+        with open(self.path, "w") as f:
+            json.dump(value, f)
         self._emit_event(ArtifactEventsEnum.WRITE)
