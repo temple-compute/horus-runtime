@@ -152,6 +152,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     task_name=self.name,
                 )
             )
+            return
         self.status = TaskStatus.RUNNING
         horus_logger.log.debug(
             _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}
