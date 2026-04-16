@@ -74,7 +74,15 @@ class HorusContext:
         """
         Get the current HorusContext from the active context.
         """
-        return _runtime_ctx.get()
+        try:
+            return _runtime_ctx.get()
+        except LookupError as e:
+            raise RuntimeError(
+                _(
+                    "HorusContext is not set. Did you forget to call "
+                    "HorusContext.boot()?"
+                )
+            ) from e
 
     @staticmethod
     def boot() -> "HorusContext":

@@ -15,26 +15,3 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""
-Exceptions related to task execution in the Horus runtime.
-"""
-
-
-class BaseTaskError(Exception):
-    """
-    Base exception for task-related errors in the Horus runtime.
-    """
-
-
-class TaskExecutionError(BaseTaskError):
-    """
-    Exception raised when a task execution fails in the Horus runtime.
-    """
-
-
-class TaskMissingIdError(BaseTaskError):
-    """
-    Exception raised when a task is about to be executed but has no id
-    assigned. This typically means the task was added to the workflow after
-    construction (e.g. via a decorator) without explicitly setting id.
-    """

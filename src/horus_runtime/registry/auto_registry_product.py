@@ -21,7 +21,7 @@ values of other ``AutoRegistry`` types.
 """
 
 from inspect import isabstract
-from typing import ClassVar, Unpack, cast
+from typing import ClassVar, Self, Unpack, cast
 
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
@@ -134,3 +134,32 @@ class AutoRegistryProduct:
         # Proceed with normal AutoRegistry processing, which will read the
         # derived registry_key and register the class.
         cast(AutoRegistry, super()).__init_subclass__(**kwargs)
+
+    @classmethod
+    def get_from_registry(cls, *args: AutoRegistry) -> type[Self] | None:
+        """
+        Look up the matching class from the registry.
+
+        Positional args map in order to the attrs declared in the
+        ``registry_key`` template (``field:attr1.attr2``).  For each pair the
+        discriminator value is read from the arg using the attr type's own
+        ``registry_key``.
+        """
+        # We have to do some casting because AutoRegistryProduct is a mixin
+        # and doesn't know the exact types of AutoRegistry. But because we
+        # enforce the MRO, we are 100% sure that AutoRegistry methods are
+        # always available.
+        autoregistry_cls = cast(type[AutoRegistry], cls)
+
+        parts: list[str] = []
+        for arg in args:
+            parts.append(getattr(arg, type(arg).registry_key))
+
+        found_cls = autoregistry_cls.registry.get(
+            cls._ATTR_SEPARATOR.join(parts)
+        )
+
+        # In order to return of type [self] and not [AutoRegistry], we have to
+        # cast the result, but we are sure that if a class is returned
+        # from the registry, it will be of the correct type.
+        return cast(type[Self] | None, found_cls)

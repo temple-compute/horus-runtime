@@ -36,7 +36,13 @@ from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.transfer.exceptions import (
+    OrchestratorTargetNotSetError,
+    TransferStrategyNotFoundError,
+)
+from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -67,6 +73,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Ordered mapping of task names to task instances.
     """
 
+    orchestrator_target: BaseTarget | None = None
+    """
+    The target that represents the orchestrator (the machine running the
+    workflow itself). Used as the transfer source for root input artifacts:
+    those not produced by any upstream task. Must be set when the workflow
+    dispatches tasks to remote targets that cannot directly access local
+    artifacts.
+    """
+
     status: WorkflowStatus = WorkflowStatus.IDLE
     """
     Current execution state of the workflow. Updated automatically by
@@ -79,7 +94,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         After workflow initialization, inject task IDs to each task.
         """
         for tid, task in self.tasks.items():
-            task.task_id = tid
+            task.id = tid
 
         return self
 
@@ -95,6 +110,83 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Returns:
             A fully constructed :class:`BaseWorkflow` instance.
         """
+
+    async def transfer_artifacts(self, task: BaseTask) -> None:
+        """
+        Transfer the input artifacts of the given task to the target where the
+        task will run, using the appropriate transfer strategies.
+
+        Called by the workflow before dispatching a task to ensure all inputs
+        are available on the task's target. If the destination target can
+        already access an artifact (``access_cost`` returns a non-None value),
+        no transfer is performed for that artifact.
+
+        The source target for each artifact is resolved as follows:
+
+        1. If the artifact id matches an output of a previously defined task,
+           that task's target is used as the source.
+        2. Otherwise the artifact is treated as a root input (user-provided)
+           and ``self.orchestrator_target`` is used as the source. If
+           ``orchestrator_target`` is ``None`` a
+           :exc:`OrchestratorTargetNotSetError` is raised.
+
+        Args:
+            task: The task whose input artifacts should be transferred.
+
+        Raises:
+            OrchestratorTargetNotSetError: When a root artifact cannot be
+                accessed by the destination and no orchestrator_target is set.
+            TransferStrategyNotFoundError: When no registered strategy handles
+                the resolved source → destination target pair.
+        """
+        # Build a reverse map: artifact id → the target of the task that
+        # produced it. This covers outputs of every task in the workflow,
+        # not just the ones that have already run.
+        id_to_source: dict[str, BaseTarget] = {}
+        for t in self.tasks.values():
+            # Build the producer map only from tasks defined earlier than the
+            # task being dispatched.
+            # TODO: BUILD DAG
+            if t is task:
+                break
+            for artifact in t.outputs.values():
+                id_to_source[artifact.id] = t.target
+
+        for artifact in task.inputs.values():
+            # Resolve the source target.
+            source_target = id_to_source.get(artifact.id)
+            if source_target is None:
+                # Root artifact: must come from the orchestrator.
+                if self.orchestrator_target is None:
+                    raise OrchestratorTargetNotSetError(
+                        artifact.id, task.target
+                    )
+                source_target = self.orchestrator_target
+
+            # Look up the registered strategy for this (source, dest) pair.
+            strategy_cls = BaseTransferStrategy.get_from_registry(
+                source_target, task.target
+            )
+            if strategy_cls is None:
+                raise TransferStrategyNotFoundError(
+                    source_target.kind, task.target.kind
+                )
+
+            horus_logger.log.debug(
+                _(
+                    "Transferring artifact '%(id)s' from '%(src)s'"
+                    " to '%(dst)s' via %(strategy)s."
+                )
+                % {
+                    "id": artifact.id,
+                    "src": source_target.kind,
+                    "dst": task.target.kind,
+                    "strategy": strategy_cls.__name__,
+                }
+            )
+
+            # Perform the transfer.
+            await strategy_cls().transfer(artifact, source_target, task.target)
 
     @final
     async def run(self) -> None:

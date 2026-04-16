@@ -19,7 +19,6 @@
 Unit tests for BaseArtifact class.
 """
 
-import uuid
 from abc import ABC
 from pathlib import Path
 from typing import ClassVar
@@ -115,28 +114,6 @@ class TestBaseArtifact:
         # so we want to make sure that this is set correctly in the base class.
         assert BaseArtifact.registry_key == "kind"
 
-    def test_uuid_auto_generation(self) -> None:
-        """
-        Test that UUID is automatically generated if not provided.
-        """
-        artifact1 = ConcreteTestArtifact(path=Path("test1"))
-        artifact2 = ConcreteTestArtifact(path=Path("test2"))
-
-        assert artifact1.internal_id != artifact2.internal_id
-        assert isinstance(artifact1.internal_id, uuid.UUID)
-        assert isinstance(artifact2.internal_id, uuid.UUID)
-
-    def test_custom_uuid_accepted(self) -> None:
-        """
-        Test that custom UUID is accepted when provided.
-        """
-        custom_id = uuid.uuid4()
-        artifact = ConcreteTestArtifact(
-            path=Path("test"), internal_id=custom_id
-        )
-
-        assert artifact.internal_id == custom_id
-
     def test_path_field_required(self) -> None:
         """
         Test that path field is required.
@@ -157,14 +134,14 @@ class TestBaseArtifact:
         Test that kind field validation works in subclasses.
         """
         # This should work since ConcreteTestArtifact sets kind = "test"
-        artifact = ConcreteTestArtifact(path=Path("test"))
+        artifact = ConcreteTestArtifact(id="test_artifact", path=Path("test"))
         assert artifact.kind == "test"
 
     def test_abstract_methods_defined(self) -> None:
         """
         Test that abstract methods are properly defined in concrete class.
         """
-        artifact = ConcreteTestArtifact(path=Path("test"))
+        artifact = ConcreteTestArtifact(id="test_artifact", path=Path("test"))
 
         # Test exists method
         assert artifact.exists() is True
@@ -179,7 +156,7 @@ class TestBaseArtifact:
         """
         Test that artifacts can be serialized to dict.
         """
-        artifact = ConcreteTestArtifact(path=Path("test"))
+        artifact = ConcreteTestArtifact(id="test_artifact", path=Path("test"))
         artifact_dict = artifact.model_dump()
 
         assert "id" in artifact_dict
@@ -192,16 +169,15 @@ class TestBaseArtifact:
         """
         Test that artifacts can be deserialized from dict.
         """
-        test_id = uuid.uuid4()
         data = {
-            "internal_id": str(test_id),
+            "id": "test_artifact",
             "path": "test",
             "kind": "test",
         }
 
         artifact = ConcreteTestArtifact.model_validate(data)
 
-        assert artifact.internal_id == test_id
+        assert artifact.id == "test_artifact"
         assert artifact.path == Path("test").resolve()
         assert artifact.kind == "test"
 
@@ -243,25 +219,12 @@ class TestBaseArtifactValidation:
                 def write(self, _: None) -> None:
                     return
 
-    def test_model_validation_preserves_type_safety(self) -> None:
-        """
-        Test that Pydantic validation maintains type safety.
-        """
-        with pytest.raises(ValidationError):
-            # We use type:ignore here because we're intentionally passing
-            # the wrong type # for the 'id' field. The linter # will complain
-            # about this, but we want to ensure that the validation error
-            # is raised at runtime.
-            ConcreteTestArtifact(
-                path=Path("test"),
-                internal_id="not-a-uuid",  # type: ignore[arg-type]
-            )
-
     def test_extra_fields_handling(self) -> None:
         """
         Test behavior with extra fields in model validation.
         """
         data = {
+            "id": "test_artifact",
             "path": "test",
             "kind": "test",
             "extra_field": "should_be_ignored",
@@ -269,5 +232,6 @@ class TestBaseArtifactValidation:
 
         # Should work fine - extra fields are ignored by default
         artifact = ConcreteTestArtifact.model_validate(data)
+        assert artifact.id == "test_artifact"
         assert artifact.path == Path("test").resolve()
         assert artifact.kind == "test"

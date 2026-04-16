@@ -59,4 +59,4 @@ class FileInteraction(BaseInteraction[FileArtifact]):
                 }
             )
 
-        return FileArtifact(path=path)
+        return FileArtifact(id="file_artifact", path=path)

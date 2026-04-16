@@ -25,6 +25,7 @@ from typing import Any
 
 from pydantic import ConfigDict, Field
 
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 
@@ -60,11 +61,10 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
         sig = signature(self.func)
 
         # Define the allowed parameter names for the function:
-        # inputs, outputs, variables
-        kwargs = {
+        # inputs and outputs
+        kwargs: dict[str, BaseArtifact | BaseTask] = {
             **task.inputs,
             **task.outputs,
-            **task.variables,
         }
 
         # Verify that there is no argument that will override the "task"

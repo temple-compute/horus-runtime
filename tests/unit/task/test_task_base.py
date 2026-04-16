@@ -70,6 +70,7 @@ def _make_concrete_task(cmd: str = "echo test") -> ConcreteTestTask:
     Build a ``ConcreteTestTask`` with sensible defaults.
     """
     return ConcreteTestTask(
+        id="test_task_id",
         name="test_task",
         inputs={},
         outputs={},
@@ -124,7 +125,6 @@ class TestBaseTask:
             "kind",
             "inputs",
             "outputs",
-            "variables",
             "executor",
             "runtime",
         }
@@ -136,6 +136,7 @@ class TestBaseTask:
         """
         # Create a concrete task to test defaults
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
@@ -144,7 +145,6 @@ class TestBaseTask:
         # Test default values
         assert not task.inputs
         assert not task.outputs
-        assert not task.variables
         assert task.kind == "test_task"
 
 
@@ -235,27 +235,31 @@ class TestBaseTaskValidation:
         Test that a valid task can be created successfully.
         """
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
             inputs={},
             outputs={},
-            variables={"test_var": "test_value"},
         )
 
         assert task.kind == "test_task"
         assert isinstance(task.executor, ShellExecutor)
         assert isinstance(task.runtime, CommandRuntime)
-        assert task.variables["test_var"] == "test_value"
 
     def test_task_with_artifacts(self) -> None:
         """
         Test that a task can be created with input and output artifacts.
         """
-        input_artifact = FileArtifact(path=Path("test_input.txt"))
-        output_artifact = FileArtifact(path=Path("test_output.txt"))
+        input_artifact = FileArtifact(
+            id="input_file_artifact", path=Path("test_input.txt")
+        )
+        output_artifact = FileArtifact(
+            id="output_file_artifact", path=Path("test_output.txt")
+        )
 
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
@@ -296,9 +300,8 @@ class TestBaseTaskReset:
         state intact (beyond what reset() itself changes).
         """
         task = _make_concrete_task()
-        task.variables["x"] = 1
 
         # Should not raise
         task.reset()
 
-        assert task.variables["x"] == 1
+        assert task.status == TaskStatus.IDLE

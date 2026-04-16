@@ -26,6 +26,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executor.shell import ShellExecutor
+from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
 from tests.conftest import MakeTaskType
 
@@ -105,11 +106,15 @@ class TestShellExecutor:
 
     @patch("subprocess.run")
     async def test_execute_successful_command(
-        self, mock_run: Mock, make_shell_task: MakeTaskType
+        self,
+        mock_run: Mock,
+        make_shell_task: MakeTaskType,
+        horus_context: HorusContext,
     ) -> None:
         """
         Test executing a successful command returns correct exit code.
         """
+        del horus_context
         # Mock subprocess.run to return successful execution
         mock_result = Mock()
         mock_result.returncode = 0
@@ -137,11 +142,13 @@ class TestShellExecutorIntegration:
     """
 
     async def test_execute_real_successful_command(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test executing a real successful command (echo).
         """
+        del horus_context
+
         executor = ShellExecutor()
 
         # Use a simple, cross-platform command that should always work
@@ -152,11 +159,12 @@ class TestShellExecutorIntegration:
         assert result == 0
 
     async def test_execute_real_failed_command(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test executing a real command that fails.
         """
+        del horus_context
         executor = ShellExecutor()
 
         task = make_shell_task("nonexistent_command_xyz_that_should_not_exist")
@@ -166,11 +174,12 @@ class TestShellExecutorIntegration:
         assert result != 0
 
     async def test_execute_real_command_with_exit_code(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test executing a real command with specific exit code.
         """
+        del horus_context
         executor = ShellExecutor()
 
         # Use 'true' command which should always exit with 0

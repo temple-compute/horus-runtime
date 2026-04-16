@@ -61,6 +61,7 @@ class TestTaskRegistry:
         Test TaskUnion can validate HorusTask data.
         """
         data = {
+            "id": "test_task_id",
             "name": "test_task",
             "kind": "horus_task",
             "executor": {"kind": "shell"},
@@ -80,6 +81,7 @@ class TestTaskRegistry:
         Test that the task registry properly handles invalid kinds.
         """
         data = {
+            "id": "test_task_id",
             "kind": "invalid_task_kind",
             "executor": {"kind": "shell"},
             "runtime": {"kind": "command", "command": "echo 'Hello World'"},
@@ -109,6 +111,7 @@ class TestHorusTask:
         Test that HorusTask has the correct kind field.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -121,6 +124,7 @@ class TestHorusTask:
         Test that HorusTask implements the run method.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -134,6 +138,7 @@ class TestHorusTask:
         Test that HorusTask can be created with minimal required fields.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -142,28 +147,26 @@ class TestHorusTask:
         assert task.kind == "horus_task"
         assert not task.inputs
         assert not task.outputs
-        assert not task.variables
 
     def test_horus_task_creation_with_all_fields(self) -> None:
         """
         Test that HorusTask can be created with all fields specified.
         """
-        input_artifact = FileArtifact(path=Path("input.txt"))
-        output_artifact = FileArtifact(path=Path("output.txt"))
+        input_artifact = FileArtifact(id="input1", path=Path("input.txt"))
+        output_artifact = FileArtifact(id="output1", path=Path("output.txt"))
 
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
             inputs={"input1": input_artifact},
             outputs={"output1": output_artifact},
-            variables={"var1": "value1"},
         )
 
         assert task.kind == "horus_task"
         assert "input1" in task.inputs
         assert "output1" in task.outputs
-        assert task.variables["var1"] == "value1"
 
 
 @pytest.mark.unit
@@ -178,10 +181,11 @@ class TestHorusTaskExecution:
         """
         # Use a path that definitely doesn't exist
         input_artifact = FileArtifact(
-            path=Path("/definitely/nonexistent/path/file.txt")
+            id="input1", path=Path("/definitely/nonexistent/path/file.txt")
         )
 
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -196,6 +200,7 @@ class TestHorusTaskExecution:
         Test that HorusTask.run() executes the task via the executor.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -220,6 +225,7 @@ class TestHorusTaskExecution:
         returns non-zero.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -237,6 +243,7 @@ class TestHorusTaskExecution:
         Test that HorusTask.run() works correctly with no inputs.
         """
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
@@ -261,13 +268,14 @@ class TestHorusTaskExecution:
         """
         # Use paths that definitely don't exist
         input_artifact1 = FileArtifact(
-            path=Path("/definitely/nonexistent/path/file1.txt")
+            id="input1", path=Path("/definitely/nonexistent/path/file1.txt")
         )
         input_artifact2 = FileArtifact(
-            path=Path("/definitely/nonexistent/path/file2.txt")
+            id="input2", path=Path("/definitely/nonexistent/path/file2.txt")
         )
 
         task = HorusTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),

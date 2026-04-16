@@ -24,8 +24,8 @@ from pathlib import Path
 
 import yaml
 
-from horus_builtin.event.task_event import HorusTaskEvent
-from horus_runtime.context import HorusContext
+from horus_builtin.target.local import LocalTarget
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
@@ -44,6 +44,12 @@ class HorusWorkflow(BaseWorkflow):
 
     kind: str = "horus_workflow"
 
+    orchestrator_target: BaseTarget = LocalTarget()
+    """
+    The orchestrator runs locally; root input artifacts (those not produced by
+    any upstream task) are sourced from the local filesystem.
+    """
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
         """
@@ -58,24 +64,8 @@ class HorusWorkflow(BaseWorkflow):
         Tasks are executed in definition order. A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
         """
-        ctx = HorusContext.get_context()
-
         for task in self.tasks.values():
-            if task.skip_if_complete and task.is_complete():
-                ctx.bus.emit(
-                    HorusTaskEvent(
-                        message=_(
-                            "Skipping task %(task_name)s: all output "
-                            "artifacts exist"
-                        )
-                        % {"task_name": task.name},
-                        task_id=task.task_id,
-                        task_name=task.name,
-                    )
-                )
-                continue
-
-            if task.task_id is None:
+            if task.id is None:
                 raise TaskMissingIdError(
                     _(
                         "Task '%(task_name)s' has no task_id. Ensure tasks"
@@ -84,6 +74,9 @@ class HorusWorkflow(BaseWorkflow):
                     )
                     % {"task_name": task.name}
                 )
+
+            # Transfer input artifacts to the task's target as needed.
+            await self.transfer_artifacts(task)
 
             # Execute the task on its target
             await task.target.dispatch(task)

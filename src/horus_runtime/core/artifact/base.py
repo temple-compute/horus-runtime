@@ -22,12 +22,11 @@ artifact in the Horus runtime.
 
 import hashlib
 import shutil
-import uuid
 from abc import abstractmethod
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import BeforeValidator, model_validator
 
 from horus_builtin.event.artifact_event import (
     ArtifactEvent,
@@ -74,33 +73,11 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     # to determine how to register subclasses of Artifact in the registry.
     registry_key: ClassVar[str] = "kind"
 
-    internal_id: uuid.UUID = Field(
-        default_factory=uuid.uuid4,
-        description=(
-            "Unique identifier for the artifact. This can be generated using "
-            "uuid.uuid4() when creating a new artifact."
-        ),
-    )
-    """
-    Unique identifier for the artifact. This can be generated using
-    uuid.uuid4() when creating a new artifact.
-    """
-
-    id: str = ""
+    id: str
     """
     The artifact's user-friendly ID. This Id is used to sort task dependencies
-    and should be unique within a workflow. If not provided, it will be set to
-    the string representation of the internal_id.
+    and should be unique within a workflow.
     """
-
-    @model_validator(mode="after")
-    def set_id(self) -> Self:
-        """
-        If the user did not provide an 'id', set it to the string
-        representation of 'internal_id'.
-        """
-        self.id = str(self.internal_id) if not self.id else self.id
-        return self
 
     path: Annotated[Path, BeforeValidator(validate_path)]
     """
@@ -190,7 +167,7 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
             ArtifactEvent(
                 message=_("Artifact at %(path)s. %(event)s")
                 % {"path": self.path, "event": event_name.name},
-                artifact_id=str(self.internal_id),
+                artifact_id=str(self.id),
                 event_name=event_name,
             )
         )

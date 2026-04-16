@@ -23,10 +23,12 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
-from typing import Any, ClassVar, Self, final
+from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
+from horus_builtin.event.task_event import HorusTaskEvent
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
@@ -55,7 +57,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The 'kind' field is used to identify the specific type of task.
     """
 
-    task_id: str | None = None
+    id: str
     """
     The task ID
     """
@@ -75,12 +77,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
     Output artifacts for this task. These are the artifacts that the task
     produces.
-    """
-
-    variables: dict[str, Any] = Field(default_factory=dict)
-    """
-    Variables for this task. These are the variables that the task can use
-    during its execution.
     """
 
     executor: BaseExecutor
@@ -146,6 +142,17 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
         """
+        ctx = HorusContext.get_context()
+        if self.skip_if_complete and self.is_complete():
+            ctx.bus.emit(
+                HorusTaskEvent(
+                    message=_("Skipping task %(task_name)s. Already complete.")
+                    % {"task_name": self.name},
+                    task_id=self.id,
+                    task_name=self.name,
+                )
+            )
+            return
         self.status = TaskStatus.RUNNING
         horus_logger.log.debug(
             _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}

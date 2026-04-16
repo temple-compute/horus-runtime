@@ -16,25 +16,18 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Exceptions related to task execution in the Horus runtime.
+Runtime events. These events are emitted by the runtime during task execution.
 """
 
-
-class BaseTaskError(Exception):
-    """
-    Base exception for task-related errors in the Horus runtime.
-    """
+from horus_runtime.event.base import BaseEvent
 
 
-class TaskExecutionError(BaseTaskError):
+class RuntimeEvent(BaseEvent):
     """
-    Exception raised when a task execution fails in the Horus runtime.
+    Event emitted by the runtime during task execution.
     """
 
-
-class TaskMissingIdError(BaseTaskError):
-    """
-    Exception raised when a task is about to be executed but has no id
-    assigned. This typically means the task was added to the workflow after
-    construction (e.g. via a decorator) without explicitly setting id.
-    """
+    event_type: str = "runtime_event"
+    runtime_kind: str
+    task_id: str
+    details: dict[str, str] | None = None

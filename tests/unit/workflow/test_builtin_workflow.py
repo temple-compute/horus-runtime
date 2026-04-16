@@ -32,6 +32,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_runtime.context import HorusContext
 from horus_runtime.core.task.exceptions import (
     TaskExecutionError,
     TaskMissingIdError,
@@ -56,6 +57,7 @@ class TestWorkflowConstruction:
             kind: horus_workflow
             tasks:
               t1:
+                id: test_task_id
                 name: task1
                 kind: horus_task
                 runtime:
@@ -85,6 +87,7 @@ class TestWorkflowConstruction:
             kind: horus_workflow
             tasks:
               a:
+                id: task_a_id
                 name: A
                 kind: horus_task
                 runtime:
@@ -93,6 +96,7 @@ class TestWorkflowConstruction:
                 executor:
                   kind: shell
               b:
+                id: task_b_id
                 name: B
                 kind: horus_task
                 runtime:
@@ -101,6 +105,7 @@ class TestWorkflowConstruction:
                 executor:
                   kind: shell
               c:
+                id: task_c_id
                 name: C
                 kind: horus_task
                 runtime:
@@ -138,7 +143,8 @@ class TestWorkflowRun:
         name: run_test
         kind: horus_workflow
         tasks:
-            t:
+            test_task_id:
+                id: test_task_id
                 name: Task
                 kind: horus_task
                 runtime:
@@ -157,18 +163,24 @@ class TestWorkflowRun:
         mock_run.assert_awaited_once()
 
     async def test_run_skips_task_when_all_outputs_exist(
-        self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
+        self,
+        tmp_path: Path,
+        make_workflow_file: MakeWorkflowFileType,
+        horus_context: HorusContext,
     ) -> None:
         """
         Test that a task is skipped if all its outputs already exist.
         """
+        del horus_context
         wf_contents = textwrap.dedent("""\
             name: skip_test
             kind: horus_workflow
             tasks:
-                t:
+                test_task_id:
+                    id: test_task_id
                     name: Task
                     kind: horus_task
+                    skip_if_complete: True
                     runtime:
                         kind: command
                         command: "echo test"
@@ -176,6 +188,7 @@ class TestWorkflowRun:
                         kind: shell
                     outputs:
                         output_file:
+                            id: output_file
                             kind: file
                             path: /tmp/some_file.txt
             """)
@@ -184,7 +197,7 @@ class TestWorkflowRun:
 
         with (
             patch.object(FileArtifact, "exists", return_value=True),
-            patch.object(HorusTask, "run") as mock_run,
+            patch.object(HorusTask, "_run") as mock_run,
         ):
             await wf.run()
 
@@ -227,6 +240,7 @@ class TestWorkflowRun:
                 raise TaskExecutionError("fail")
 
         task_a = TaskWithFailure(
+            id="test_task_id",
             name="test_task",
             inputs={},
             outputs={},
@@ -256,15 +270,15 @@ class TestWorkflowRun:
         await wf.run()
 
     async def test_run_raises_when_task_has_no_id(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test that running a workflow raises TaskMissingIdError when a task has
         no task_id. This guards against tasks added after workflow construction
         (e.g. via a decorator) without task_id being explicitly set.
         """
+        del horus_context
         task = make_shell_task(cmd="echo test")
-        task.task_id = None  # Simulate the pre-fix state
 
         wf = HorusWorkflow(
             name="missing_id",
@@ -272,13 +286,9 @@ class TestWorkflowRun:
         )
 
         # Manually patch the task to remove the ID
-        wf.tasks["orphan"].task_id = None
+        task.id = None  # type: ignore
 
         with (
-            patch(
-                "horus_builtin.workflow.horus_workflow.HorusContext"
-            ) as mock_ctx_cls,
             pytest.raises(TaskMissingIdError),
         ):
-            mock_ctx_cls.get_context.return_value = Mock()
             await wf.run()

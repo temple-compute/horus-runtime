@@ -71,6 +71,7 @@ def make_shell_task() -> MakeTaskType:
     ) -> HorusTask:
         return HorusTask(
             name="test_task",
+            id="test_task_id",
             inputs=inputs or {},
             outputs={},
             runtime=CommandRuntime(command=cmd),

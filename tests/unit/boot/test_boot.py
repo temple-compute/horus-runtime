@@ -44,8 +44,9 @@ class TestBoot:
 
     def test_get_context_raises_before_boot(self) -> None:
         """
-        Test that get_context raises LookupError when boot has not been called.
+        Test that get_context raises RuntimeError when boot has not been
+        called.
         """
         ctx = contextvars.copy_context()
-        with pytest.raises(LookupError):
+        with pytest.raises(RuntimeError):
             ctx.run(HorusContext.get_context)
