@@ -94,7 +94,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         After workflow initialization, inject task IDs to each task.
         """
         for tid, task in self.tasks.items():
-            task.task_id = tid
+            task.id = tid
 
         return self
 
@@ -123,7 +123,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         The source target for each artifact is resolved as follows:
 
-        1. If the artifact URI matches an output of a previously defined task,
+        1. If the artifact id matches an output of a previously defined task,
            that task's target is used as the source.
         2. Otherwise the artifact is treated as a root input (user-provided)
            and ``self.orchestrator_target`` is used as the source. If
@@ -144,6 +144,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # not just the ones that have already run.
         id_to_source: dict[str, BaseTarget] = {}
         for t in self.tasks.values():
+            # Build the producer map only from tasks defined earlier than the
+            # task being dispatched.
+            # TODO: BUILD DAG
+            if t is task:
+                break
             for artifact in t.outputs.values():
                 id_to_source[artifact.id] = t.target
 
@@ -154,7 +159,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 # Root artifact: must come from the orchestrator.
                 if self.orchestrator_target is None:
                     raise OrchestratorTargetNotSetError(
-                        artifact.id, task.target.kind
+                        artifact.id, task.target
                     )
                 source_target = self.orchestrator_target
 

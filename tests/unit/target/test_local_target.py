@@ -65,7 +65,7 @@ class TestLocalTargetProperties:
             path.write_text("content")
 
             target = LocalTarget()
-            artifact = FileArtifact(path=path)
+            artifact = FileArtifact(id="test_artifact", path=path)
             assert target.access_cost(artifact) == 0.0
 
     def test_access_cost_none_for_missing_local_path(self) -> None:
@@ -158,6 +158,7 @@ class TestLocalTargetDispatch:
             await asyncio.sleep(10)
 
         task = FunctionTask(
+            id="slow_task",
             name="slow_task",
             inputs={},
             outputs={},

@@ -20,10 +20,11 @@ Base transfer strategy. A transfer strategy knows how to move an artifact
 between two targets with different location kinds.
 
 Transfer strategies are auto-registered using the AutoRegistry pattern,
-keyed by ``"source_kind:destination_kind"``. Concrete strategies declare
+keyed by ``"source_kind.destination_kind"``. Concrete strategies declare
 which target types they handle via ``handles_source`` and
 ``handles_destination`` class variables; the transfer key is derived
-automatically from the ``kind`` defaults of those target types.
+automatically from the ``kind`` defaults of those target types, producing
+values such as ``"local.local"``.
 """
 
 from abc import abstractmethod

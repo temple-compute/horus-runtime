@@ -76,7 +76,8 @@ class TestWorkflowFromYaml:
         name: yaml_workflow
         kind: concrete_workflow
         tasks:
-            step1:
+            step1_id:
+                id: step1_id
                 name: Step 1
                 kind: horus_task
                 runtime:
@@ -90,7 +91,7 @@ class TestWorkflowFromYaml:
         wf = ConcreteWorkflow.from_yaml(workflow_file)
 
         assert wf.name == "yaml_workflow"
-        assert "step1" in wf.tasks
+        assert "step1_id" in wf.tasks
 
     def test_from_yaml_accepts_string_path(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
@@ -102,7 +103,8 @@ class TestWorkflowFromYaml:
         name: str_path
         kind: concrete_workflow
         tasks:
-            t1:
+            t1_id:
+                id: t1_id
                 name: Task 1
                 kind: horus_task
                 runtime:
@@ -115,7 +117,7 @@ class TestWorkflowFromYaml:
         workflow_file = make_workflow_file(tmp_path, wf_contents)
         wf = ConcreteWorkflow.from_yaml(str(workflow_file))
         assert wf.name == "str_path"
-        assert "t1" in wf.tasks
+        assert "t1_id" in wf.tasks
 
     def test_from_yaml_invalid_schema_raises(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType

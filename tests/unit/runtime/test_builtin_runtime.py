@@ -26,6 +26,7 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.runtime.command import CommandRuntime
+from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.base import BaseRuntime
 from tests.conftest import MakeTaskType
 
@@ -105,14 +106,15 @@ class TestCommandRuntime:
         assert runtime.kind == "command"
 
     def test_command_runtime_formats_command_with_inputs(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test that CommandRuntime properly formats commands with task inputs.
         """
+        del horus_context
         task = make_shell_task(
             cmd="echo 'Input artifact path is {input1.path}'",
-            inputs={"input1": FileArtifact(path=Path("test"))},
+            inputs={"input1": FileArtifact(id="input1", path=Path("test"))},
         )
 
         formatted_cmd = task.runtime.setup_runtime(task)
@@ -121,12 +123,13 @@ class TestCommandRuntime:
         assert "{input1.path}" not in formatted_cmd
 
     def test_command_runtime_formats_command_with_task_variables(
-        self, make_shell_task: MakeTaskType
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
         Test that CommandRuntime can access task variables in command
         formatting.
         """
+        del horus_context
         task = make_shell_task("echo 'Task kind is {task.kind}'")
 
         formatted_cmd = task.runtime.setup_runtime(task)

@@ -19,6 +19,8 @@
 Exceptions for artifact transfer in the Horus runtime.
 """
 
+from horus_runtime.core.target.base import BaseTarget
+
 
 class TransferError(Exception):
     """
@@ -48,10 +50,12 @@ class OrchestratorTargetNotSetError(TransferError):
     has been configured on the workflow to act as the transfer source.
     """
 
-    def __init__(self, artifact_uri: str, destination_kind: str) -> None:
+    def __init__(
+        self, artifact_id: str, destination_target: BaseTarget
+    ) -> None:
         super().__init__(
-            f"Artifact '{artifact_uri}' is not accessible by target "
-            f"'{destination_kind}' and no orchestrator_target is set on the "
-            f"workflow. Set workflow.orchestrator_target to the target that "
-            f"holds user-provided root artifacts."
+            f"Artifact '{artifact_id}' is not accessible by target "
+            f"'{destination_target.kind}' and no orchestrator_target is set "
+            "on the workflow. Set workflow.orchestrator_target to the target"
+            "that holds user-provided root artifacts."
         )

@@ -66,8 +66,12 @@ class TestArtifactRegistry:
         Test that ArtifactUnion can validate FileArtifact data.
         """
         data = [
-            {"path": "/test/path.txt", "kind": "file"},
-            {"path": "/test/folder", "kind": "folder"},
+            {"path": "/test/path.txt", "kind": "file", "id": "file_artifact"},
+            {
+                "path": "/test/folder",
+                "kind": "folder",
+                "id": "folder_artifact",
+            },
         ]
 
         class TestModel(BaseModel):
@@ -130,7 +134,7 @@ class TestFileArtifact:
             test_file = Path(temp_dir) / "test.txt"
             test_file.write_text("content")
 
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="test_file", path=test_file)
 
             assert artifact is not None
             assert artifact.kind == "file"
@@ -145,7 +149,7 @@ class TestFileArtifact:
             test_content = "Hello, Horus Runtime!"
             test_file.write_text(test_content)
 
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="test_file", path=test_file)
 
             # Calculate expected hash
             expected_hash = hashlib.sha256(test_content.encode()).hexdigest()
@@ -157,7 +161,9 @@ class TestFileArtifact:
         """
         Test hash property returns None for non-existent file.
         """
-        artifact = FileArtifact(path=Path("/nonexistent/file.txt"))
+        artifact = FileArtifact(
+            id="nonexistent_file", path=Path("/nonexistent/file.txt")
+        )
         assert artifact.hash is None
 
     def test_hash_property_empty_file(self) -> None:
@@ -168,7 +174,7 @@ class TestFileArtifact:
             empty_file = Path(temp_dir) / "empty.txt"
             empty_file.write_text("")  # Create empty file
 
-            artifact = FileArtifact(path=empty_file)
+            artifact = FileArtifact(id="empty_file", path=empty_file)
 
             # Hash of empty content
             expected_hash = hashlib.sha256(b"").hexdigest()
@@ -183,7 +189,7 @@ class TestFileArtifact:
 
             # Initial content
             test_file.write_text("Initial content")
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="changeable_file", path=test_file)
             hash1 = artifact.hash
 
             # Change content
@@ -205,7 +211,7 @@ class TestFileArtifact:
             large_content = "A" * 100000  # 100KB
             large_file.write_text(large_content)
 
-            artifact = FileArtifact(path=large_file)
+            artifact = FileArtifact(id="large_file", path=large_file)
 
             # Should complete without error
             file_hash = artifact.hash
@@ -224,7 +230,7 @@ class TestFileArtifact:
             test_file = Path(temp_dir) / "test.txt"
             test_file.write_text("hello")
 
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="test_file", path=test_file)
 
             assert artifact.read() == "hello"
 
@@ -237,7 +243,7 @@ class TestFileArtifact:
         del horus_context
         with tempfile.TemporaryDirectory() as temp_dir:
             test_file = Path(temp_dir) / "nested" / "test.txt"
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="test_file", path=test_file)
 
             artifact.write("hello")
 
@@ -254,7 +260,7 @@ class TestFileArtifact:
             test_file = Path(temp_dir) / "test.txt"
             test_file.write_text("hello")
 
-            artifact = FileArtifact(path=test_file)
+            artifact = FileArtifact(id="test_file", path=test_file)
 
             assert artifact.package() == test_file.resolve()
 
@@ -270,7 +276,7 @@ class TestFileArtifact:
             target_path = Path(temp_dir) / "output" / "artifact.txt"
             package_path.write_text("hello")
 
-            artifact = FileArtifact(path=target_path)
+            artifact = FileArtifact(id="artifact_file", path=target_path)
             artifact.unpackage(package_path)
 
             assert target_path.read_text() == "hello"
@@ -287,7 +293,7 @@ class TestFolderArtifact:
         Test FolderArtifact can be instantiated.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="test_folder", path=Path(temp_dir))
 
             assert artifact is not None
             assert artifact.kind == "folder"
@@ -298,14 +304,16 @@ class TestFolderArtifact:
         Test exists method with existing directory.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="test_folder", path=Path(temp_dir))
             assert artifact.exists() is True
 
     def test_exists_method_nonexistent_directory(self) -> None:
         """
         Test exists method with non-existent directory.
         """
-        artifact = FolderArtifact(path=Path("/nonexistent/directory"))
+        artifact = FolderArtifact(
+            id="nonexistent_folder", path=Path("/nonexistent/directory")
+        )
         assert artifact.exists() is False
 
     def test_exists_method_file_not_directory(self) -> None:
@@ -316,7 +324,7 @@ class TestFolderArtifact:
             test_file = Path(temp_dir) / "not_a_folder.txt"
             test_file.write_text("I am a file")
 
-            artifact = FolderArtifact(path=test_file)
+            artifact = FolderArtifact(id="not_a_folder", path=test_file)
             assert (
                 artifact.exists() is False
             )  # File exists but it's not a directory
@@ -326,7 +334,7 @@ class TestFolderArtifact:
         Test hash property with empty folder.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="empty_folder", path=Path(temp_dir))
 
             folder_hash = artifact.hash
 
@@ -339,7 +347,9 @@ class TestFolderArtifact:
         """
         Test hash property returns None for non-existent folder.
         """
-        artifact = FolderArtifact(path=Path("/nonexistent/folder"))
+        artifact = FolderArtifact(
+            id="nonexistent_folder", path=Path("/nonexistent/folder")
+        )
         assert artifact.hash is None
 
     def test_hash_property_multiple_files(self) -> None:
@@ -358,7 +368,7 @@ class TestFolderArtifact:
                 file_path = Path(temp_dir) / filename
                 file_path.write_text(content)
 
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="test_folder", path=Path(temp_dir))
             folder_hash = artifact.hash
 
             assert folder_hash is not None
@@ -366,7 +376,7 @@ class TestFolderArtifact:
 
             # Verify deterministic ordering (alphabetical by relative path)
             # Hash should be consistent regardless of file creation order
-            artifact2 = FolderArtifact(path=Path(temp_dir))
+            artifact2 = FolderArtifact(id="test_folder", path=Path(temp_dir))
             assert artifact2.hash == folder_hash
 
     def test_hash_empty_folders_ignored(self) -> None:
@@ -378,7 +388,7 @@ class TestFolderArtifact:
             empty_subdir = Path(temp_dir) / "empty"
             empty_subdir.mkdir()
 
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="test_folder", path=Path(temp_dir))
             hash_with_empty_dir = artifact.hash
 
             # Remove empty directory
@@ -399,7 +409,7 @@ class TestFolderArtifact:
             special_file = Path(temp_dir) / "special_字符.txt"
             special_file.write_text("Content with émojis 🚀 and ñoño")
 
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="special_folder", path=Path(temp_dir))
             folder_hash = artifact.hash
 
             assert folder_hash is not None
@@ -418,7 +428,7 @@ class TestFolderArtifact:
                     file_path = subdir / f"file_{j}.txt"
                     file_path.write_text(f"Content {i}-{j}")
 
-            artifact = FolderArtifact(path=Path(temp_dir))
+            artifact = FolderArtifact(id="large_folder", path=Path(temp_dir))
             folder_hash = artifact.hash
 
             # Should complete without error even with many files
@@ -435,7 +445,7 @@ class TestFolderArtifact:
         del horus_context
         with tempfile.TemporaryDirectory() as temp_dir:
             folder_path = Path(temp_dir)
-            artifact = FolderArtifact(path=folder_path)
+            artifact = FolderArtifact(id="test_folder", path=folder_path)
 
             assert artifact.read() == folder_path.resolve()
 
@@ -454,7 +464,7 @@ class TestFolderArtifact:
             (source_path / "nested").mkdir()
             (source_path / "nested" / "b.txt").write_text("B")
 
-            artifact = FolderArtifact(path=target_path)
+            artifact = FolderArtifact(id="test_folder", path=target_path)
             artifact.write(source_path)
 
             assert (target_path / "a.txt").read_text() == "A"
@@ -472,7 +482,7 @@ class TestFolderArtifact:
             folder_path.mkdir()
             (folder_path / "a.txt").write_text("A")
 
-            artifact = FolderArtifact(path=folder_path)
+            artifact = FolderArtifact(id="test_folder", path=folder_path)
             package_path = artifact.package()
 
             assert package_path.suffix == ".zip"
@@ -493,10 +503,14 @@ class TestFolderArtifact:
             (source_path / "nested").mkdir()
             (source_path / "nested" / "b.txt").write_text("B")
 
-            source_artifact = FolderArtifact(path=source_path)
+            source_artifact = FolderArtifact(
+                id="source_folder", path=source_path
+            )
             package_path = source_artifact.package()
 
-            target_artifact = FolderArtifact(path=target_path)
+            target_artifact = FolderArtifact(
+                id="target_folder", path=target_path
+            )
             target_artifact.unpackage(package_path)
 
             assert (target_path / "a.txt").read_text() == "A"
@@ -557,7 +571,9 @@ class TestBaseArtifactPathBehavior:
             test_file = Path(temp_dir) / "test.txt"
             test_file.write_text("test content")
 
-            artifact = ConcreteLocalArtifact(path=test_file)
+            artifact = ConcreteLocalArtifact(
+                id="test_artifact", path=test_file
+            )
 
         assert artifact.path == test_file.resolve()
 
@@ -569,7 +585,9 @@ class TestBaseArtifactPathBehavior:
             test_file = Path(temp_dir) / "test.txt"
             test_file.write_text("test content")
 
-            artifact = ConcreteLocalArtifact(path=test_file)
+            artifact = ConcreteLocalArtifact(
+                id="test_artifact", path=test_file
+            )
 
             assert artifact.path == test_file.resolve()
 
@@ -581,7 +599,9 @@ class TestBaseArtifactPathBehavior:
             test_file = Path(temp_dir) / "existing_file.txt"
             test_file.write_text("content")
 
-            artifact = ConcreteLocalArtifact(path=test_file)
+            artifact = ConcreteLocalArtifact(
+                id="existing_file_artifact", path=test_file
+            )
             assert artifact.exists() is True
 
     def test_exists_method_file_not_exists(self) -> None:
@@ -589,7 +609,8 @@ class TestBaseArtifactPathBehavior:
         Test exists method when file does not exist.
         """
         artifact = ConcreteLocalArtifact(
-            path=Path("/nonexistent/path/file.txt")
+            id="nonexistent_file_artifact",
+            path=Path("/nonexistent/path/file.txt"),
         )
         assert artifact.exists() is False
 
@@ -648,7 +669,9 @@ class TestBaseArtifactPathBehavior:
         Test that path is resolved to an absolute path after validation.
         """
         # Create with relative path
-        artifact = ConcreteLocalArtifact(path=Path("./test.txt"))
+        artifact = ConcreteLocalArtifact(
+            id="test_artifact", path=Path("./test.txt")
+        )
 
         # Path should be updated to an absolute path
         assert artifact.path.is_absolute()

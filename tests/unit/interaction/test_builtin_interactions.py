@@ -234,7 +234,7 @@ class TestFileInteraction:
         file_path.write_text("hello")
         interaction = FileInteraction(
             value_key="batch",
-            default=FileArtifact(path=file_path),
+            default=FileArtifact(id="default_file_artifact", path=file_path),
         )
 
         artifact = await interaction.parse("")
@@ -433,7 +433,7 @@ class TestCLIRenderers:
         transport = CLIInteractionTransport()
         file_path = tmp_path / "example.json"
 
-        artifact = FileArtifact(path=file_path)
+        artifact = FileArtifact(id="default_file_artifact", path=file_path)
         interaction = FileInteraction(
             value_key="batch",
             accept=[".json", ".yaml"],

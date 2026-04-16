@@ -57,6 +57,7 @@ class TestWorkflowConstruction:
             kind: horus_workflow
             tasks:
               t1:
+                id: test_task_id
                 name: task1
                 kind: horus_task
                 runtime:
@@ -86,6 +87,7 @@ class TestWorkflowConstruction:
             kind: horus_workflow
             tasks:
               a:
+                id: task_a_id
                 name: A
                 kind: horus_task
                 runtime:
@@ -94,6 +96,7 @@ class TestWorkflowConstruction:
                 executor:
                   kind: shell
               b:
+                id: task_b_id
                 name: B
                 kind: horus_task
                 runtime:
@@ -102,6 +105,7 @@ class TestWorkflowConstruction:
                 executor:
                   kind: shell
               c:
+                id: task_c_id
                 name: C
                 kind: horus_task
                 runtime:
@@ -139,7 +143,8 @@ class TestWorkflowRun:
         name: run_test
         kind: horus_workflow
         tasks:
-            t:
+            test_task_id:
+                id: test_task_id
                 name: Task
                 kind: horus_task
                 runtime:
@@ -171,7 +176,8 @@ class TestWorkflowRun:
             name: skip_test
             kind: horus_workflow
             tasks:
-                t:
+                test_task_id:
+                    id: test_task_id
                     name: Task
                     kind: horus_task
                     skip_if_complete: True
@@ -182,6 +188,7 @@ class TestWorkflowRun:
                         kind: shell
                     outputs:
                         output_file:
+                            id: output_file
                             kind: file
                             path: /tmp/some_file.txt
             """)
@@ -233,6 +240,7 @@ class TestWorkflowRun:
                 raise TaskExecutionError("fail")
 
         task_a = TaskWithFailure(
+            id="test_task_id",
             name="test_task",
             inputs={},
             outputs={},
@@ -271,7 +279,6 @@ class TestWorkflowRun:
         """
         del horus_context
         task = make_shell_task(cmd="echo test")
-        task.task_id = None  # Simulate the pre-fix state
 
         wf = HorusWorkflow(
             name="missing_id",
@@ -279,7 +286,7 @@ class TestWorkflowRun:
         )
 
         # Manually patch the task to remove the ID
-        wf.tasks["orphan"].task_id = None
+        task.id = None  # type: ignore
 
         with (
             pytest.raises(TaskMissingIdError),

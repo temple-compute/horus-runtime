@@ -20,9 +20,10 @@ The Horus target indicates where a task should be dispatched and executed.
 """
 
 from abc import abstractmethod
-from os import getcwd
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
+
+from pydantic import Field
 
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.registry.auto_registry import AutoRegistry
@@ -41,7 +42,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     registry_key: ClassVar[str] = "kind"
     kind: str
 
-    working_directory: Path = Path(getcwd())
+    working_directory: Path = Field(default_factory=Path.cwd)
+
     """
     Base directory on the remote host where per-task working directories are
     created.
@@ -72,9 +74,6 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         # Set the task to "PENDING" status before dispatching
         task.status = TaskStatus.PENDING
-
-        # Sync task artifacts on this target
-
         await self._dispatch(task)
 
     @abstractmethod

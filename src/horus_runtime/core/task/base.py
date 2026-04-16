@@ -57,7 +57,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The 'kind' field is used to identify the specific type of task.
     """
 
-    task_id: str | None = None
+    id: str
     """
     The task ID
     """
@@ -148,7 +148,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 HorusTaskEvent(
                     message=_("Skipping task %(task_name)s. Already complete.")
                     % {"task_name": self.name},
-                    task_id=self.task_id,
+                    task_id=self.id,
                     task_name=self.name,
                 )
             )

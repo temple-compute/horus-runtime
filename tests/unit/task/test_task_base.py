@@ -70,6 +70,7 @@ def _make_concrete_task(cmd: str = "echo test") -> ConcreteTestTask:
     Build a ``ConcreteTestTask`` with sensible defaults.
     """
     return ConcreteTestTask(
+        id="test_task_id",
         name="test_task",
         inputs={},
         outputs={},
@@ -135,6 +136,7 @@ class TestBaseTask:
         """
         # Create a concrete task to test defaults
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
@@ -233,6 +235,7 @@ class TestBaseTaskValidation:
         Test that a valid task can be created successfully.
         """
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
@@ -248,10 +251,15 @@ class TestBaseTaskValidation:
         """
         Test that a task can be created with input and output artifacts.
         """
-        input_artifact = FileArtifact(path=Path("test_input.txt"))
-        output_artifact = FileArtifact(path=Path("test_output.txt"))
+        input_artifact = FileArtifact(
+            id="input_file_artifact", path=Path("test_input.txt")
+        )
+        output_artifact = FileArtifact(
+            id="output_file_artifact", path=Path("test_output.txt")
+        )
 
         task = ConcreteTestTask(
+            id="test_task_id",
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),

@@ -30,6 +30,7 @@ from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.task.function import FunctionTask
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_runtime.context import HorusContext
 from horus_runtime.core.task.base import BaseTask
 
 
@@ -64,6 +65,7 @@ class TestFunctionTask:
         Test that FunctionTask has the correct kind field.
         """
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: None),
         )
@@ -75,6 +77,7 @@ class TestFunctionTask:
         Test that FunctionTask defaults to PythonFunctionExecutor.
         """
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: None),
         )
@@ -86,6 +89,7 @@ class TestFunctionTask:
         Test that FunctionTask can be created with minimal required fields.
         """
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: None),
         )
@@ -163,7 +167,9 @@ class TestFunctionTaskDecorator:
 
         assert task.runtime.func is my_func
 
-    def test_decorator_sets_task_id_matching_workflow_key(self) -> None:
+    def test_decorator_sets_task_id_matching_workflow_key(
+        self,
+    ) -> None:
         """
         Test that decorator-registered tasks have a task_id equal to their
         workflow key (i.e. task.task_id == task.name). This guards against
@@ -177,35 +183,41 @@ class TestFunctionTaskDecorator:
             pass
 
         task = wf.tasks["my_step"]
-        assert task.task_id == task.name
+        assert task.id == task.name
 
     def test_decorator_custom_name_sets_task_id_matching_workflow_key(
-        self,
+        self, horus_context: HorusContext
     ) -> None:
         """
         Test that a custom-named decorator-registered task also has task_id
         equal to the custom name, not the underlying function name.
         """
+        del horus_context
+
         wf = HorusWorkflow(name="test_wf")
 
-        @FunctionTask.task(wf, name="custom_step")
+        @FunctionTask.task(wf, id="custom_step_id", name="custom_step")
         def my_func() -> None:
             pass
 
         task = wf.tasks["custom_step"]
-        assert task.task_id == "custom_step"
+        assert task.name == "custom_step"
+        assert task.id == "custom_step_id"
 
-    async def test_decorator_raises_for_unknown_parameter_name(self) -> None:
+    async def test_decorator_raises_for_unknown_parameter_name(
+        self, tmp_path: Path
+    ) -> None:
         """
         Declared function parameters must be injectable from task context.
         """
         wf = HorusWorkflow(name="test_wf")
         with pytest.raises(ValueError, match="wrong_name"):
-            tmp_file = Path("/tmp/test.txt")
-            tmp_file.write_text("test")
+            tmp_path_file = tmp_path / "data.txt"
+            tmp_path_file.write_text("test")
 
             @FunctionTask.task(
-                wf, inputs={"data": FileArtifact(path=tmp_file)}
+                wf,
+                inputs={"data": FileArtifact(id="data", path=tmp_path_file)},
             )
             def my_func(wrong_name: FileArtifact) -> None:
                 pass
@@ -228,6 +240,7 @@ class TestFunctionTaskExecution:
         called: list[bool] = []
 
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: called.append(True)),
         )
@@ -241,6 +254,7 @@ class TestFunctionTaskExecution:
         Test that run() increments the runs counter.
         """
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: None),
         )
@@ -254,6 +268,7 @@ class TestFunctionTaskExecution:
         Test that reset() sets the runs counter back to zero.
         """
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=lambda: None),
         )
@@ -274,6 +289,7 @@ class TestFunctionTaskExecution:
             called.append("done")
 
         task = FunctionTask(
+            id="test_async_task",
             name="test_async_task",
             runtime=PythonFunctionRuntime(func=async_func),
         )
@@ -295,6 +311,7 @@ class TestFunctionTaskExecution:
             received_tasks.append(task)
 
         task = FunctionTask(
+            id="test_task",
             name="test_task",
             runtime=PythonFunctionRuntime(func=task_aware_func),
         )
@@ -327,6 +344,7 @@ class TestFunctionTaskExecution:
             output_file.path.write_text(input_file.path.read_text().upper())
 
         task = FunctionTask(
+            id="artifact_task",
             name="artifact_task",
             runtime=PythonFunctionRuntime(func=artifact_aware_func),
             inputs={"input_file": input_artifact},

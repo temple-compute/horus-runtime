@@ -65,7 +65,7 @@ class HorusWorkflow(BaseWorkflow):
         its output artifacts exist (see :meth:`is_complete`).
         """
         for task in self.tasks.values():
-            if task.task_id is None:
+            if task.id is None:
                 raise TaskMissingIdError(
                     _(
                         "Task '%(task_name)s' has no task_id. Ensure tasks"

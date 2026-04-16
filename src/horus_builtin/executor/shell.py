@@ -54,7 +54,7 @@ class ShellExecutor(BaseExecutor):
         prepared_command = task.runtime.setup_runtime(task)
 
         horus_logger.log.debug(
-            f"Executing command for task {task.task_id}: {prepared_command}"
+            f"Executing command for task {task.id}: {prepared_command}"
         )
 
         # Security Warning:
@@ -73,15 +73,5 @@ class ShellExecutor(BaseExecutor):
             text=True,
             capture_output=True,
         )
-
-        # Log the command's stdout and stderr for debugging purposes
-        if p.stdout:
-            horus_logger.log.debug(
-                f"Command stdout for task {task.task_id}:\n{p.stdout}"
-            )
-        if p.stderr:
-            horus_logger.log.debug(
-                f"Command stderr for task {task.task_id}:\n{p.stderr}"
-            )
 
         return p.returncode

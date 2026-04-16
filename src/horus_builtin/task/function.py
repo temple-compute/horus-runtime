@@ -66,9 +66,10 @@ class FunctionTask(HorusTask):
         return self
 
     @staticmethod
-    def task(
+    def task(  # noqa: PLR0913
         wf: BaseWorkflow,
         *,
+        id: str | None = None,
         name: str | None = None,
         inputs: dict[str, BaseArtifact] | None = None,
         outputs: dict[str, BaseArtifact] | None = None,
@@ -85,6 +86,7 @@ class FunctionTask(HorusTask):
 
         def decorator(func: Callable[..., Any]) -> "FunctionTask":
             t = FunctionTask(
+                id=id or func.__name__,
                 name=name or func.__name__,
                 runtime=PythonFunctionRuntime(func=func),
                 inputs=inputs or {},

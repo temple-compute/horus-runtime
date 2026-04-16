@@ -51,7 +51,7 @@ class HorusTask(BaseTask):
 
         ctx.bus.emit(
             HorusTaskEvent(
-                task_id=self.task_id,
+                task_id=self.id,
                 task_name=self.name,
                 message=_("Task %(task_name)s started.")
                 % {"task_name": self.name},
@@ -80,7 +80,7 @@ class HorusTask(BaseTask):
 
         ctx.bus.emit(
             HorusTaskEvent(
-                task_id=self.task_id,
+                task_id=self.id,
                 task_name=self.name,
                 data={
                     "return_code": return_code,
@@ -126,7 +126,7 @@ class HorusTask(BaseTask):
             HorusTaskEvent(
                 message=_("Resetting task %(task_name)s.")
                 % {"task_name": self.name},
-                task_id=self.task_id,
+                task_id=self.id,
                 task_name=self.name,
             )
         )
