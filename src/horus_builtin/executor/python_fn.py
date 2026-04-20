@@ -37,19 +37,16 @@ class PythonFunctionExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
 
-    async def execute(self, task: "BaseTask") -> int:
+    async def execute(self, task: "BaseTask") -> None:
         """
         Executes the Python function specified in the task's runtime.
         """
         assert isinstance(task.runtime, PythonFunctionRuntime)
 
-        # Get the function from the runtime.
+        # Get the function and resolved arguments from the runtime.
         func, args = task.runtime.setup_runtime(task)
 
         result = func(**args)
 
-        # If the result is awaitable, await it.
         if isawaitable(result):
             await result
-
-        return 0

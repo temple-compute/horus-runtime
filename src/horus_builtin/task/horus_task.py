@@ -25,7 +25,6 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
 from horus_runtime.utils.timing import timed
 
@@ -73,7 +72,7 @@ class HorusTask(BaseTask):
 
         # Execute the command using the executor
         with timed() as get_elapsed:
-            return_code = await self.executor.execute(self)
+            await self.executor.execute(self)
 
         # Get the elapsed time and emit the completion event
         elapsed = get_elapsed()
@@ -82,22 +81,13 @@ class HorusTask(BaseTask):
             HorusTaskEvent(
                 task_id=self.id,
                 task_name=self.name,
-                data={
-                    "return_code": return_code,
-                    "elapsed_time": elapsed,
-                },
+                data={"elapsed_time": elapsed},
                 message=_(
                     "Task %(task_name)s completed in %(elapsed).2f seconds."
                 )
                 % {"task_name": self.name, "elapsed": elapsed},
             )
         )
-
-        if return_code != 0:
-            raise TaskExecutionError(
-                _("Task execution failed with return code %(return_code)s")
-                % {"return_code": return_code}
-            )
 
     def is_complete(self) -> bool:
         """

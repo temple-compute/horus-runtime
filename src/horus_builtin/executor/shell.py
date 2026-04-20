@@ -20,11 +20,12 @@ Defines the ShellExecutor class, which represents an executor that runs a
 task locally in the Horus runtime.
 """
 
-import subprocess
+import asyncio
 from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.logging import horus_logger
 
 if TYPE_CHECKING:
@@ -40,15 +41,9 @@ class ShellExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 
-    async def execute(self, task: "BaseTask") -> int:
+    async def execute(self, task: "BaseTask") -> None:
         """
         Runs the task locally in the host machine.
-
-        Args:
-            task (BaseTask): The task to execute.
-
-        Returns:
-            int: The return code of the executed command.
         """
         assert isinstance(task.runtime, CommandRuntime)
         prepared_command = task.runtime.setup_runtime(task)
@@ -58,20 +53,32 @@ class ShellExecutor(BaseExecutor):
         )
 
         # Security Warning:
-        # This method uses `shell=True` with `subprocess.run`, which poses a
-        # security risk if `cmd` contains untrusted input. Shell injection
-        # attacks are possible if user-supplied data is passed directly to this
-        # method. It is the caller's responsibility to ensure that `cmd` is
-        # properly sanitized and does not contain malicious content.
-        # The local runtime intentionally allows this "free for all" for
-        # maximum flexibility, assuming the user is executing commands on
+        # This method uses a shell to execute the prepared command, which
+        # poses a security risk if `cmd` contains untrusted input. Shell
+        # injection attacks are possible if user-supplied data is passed
+        # directly to this method. It is the caller's responsibility to ensure
+        # that `cmd` is properly sanitized and does not contain malicious
+        # content. The local runtime intentionally allows this "free for all"
+        # for maximum flexibility, assuming the user is executing commands on
         # their own machine.
-        p = subprocess.run(
+        process = await asyncio.create_subprocess_shell(
             prepared_command,
-            shell=True,
-            check=False,
-            text=True,
-            capture_output=True,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        try:
+            _, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
 
-        return p.returncode
+        if process.returncode != 0:
+            horus_logger.log.error(
+                f"Command execution failed for task {task.id} with return "
+                f"code {process.returncode}. Stderr: {stderr.decode().strip()}"
+            )
+            raise TaskExecutionError(
+                f"Shell command exited with return code {process.returncode}"
+            )
