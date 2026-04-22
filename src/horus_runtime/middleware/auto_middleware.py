@@ -25,6 +25,7 @@ from importlib.metadata import entry_points
 from inspect import isabstract
 from typing import Any, ClassVar, Self, TypeVar
 
+from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
 HORUS_MIDDLEWARE_ENTRY_POINT_PREFIX = "horus.middleware."
@@ -67,8 +68,11 @@ class AutoMiddleware[T = Any](ABC):
                 return
 
         raise TypeError(
-            f"{cls.__name__} inherits from AutoMiddleware but no domain root "
-            f"(entry_point=...) was found in its MRO."
+            _(
+                "%(cls_name)s inherits from AutoMiddleware but no domain root "
+                "(entry_point=...) was found in its MRO."
+            )
+            % {"cls_name": cls.__name__}
         )
 
     @staticmethod
@@ -88,7 +92,9 @@ class AutoMiddleware[T = Any](ABC):
                 try:
                     middleware_plugin.load()
                 except Exception as e:
-                    horus_logger.log.error(f"Error loading middleware: {e}")
+                    horus_logger.log.error(
+                        _("Error loading middleware: %(error)s") % {"error": e}
+                    )
 
     async def before(self, context: T) -> None:
         """

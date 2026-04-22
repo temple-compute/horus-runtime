@@ -20,6 +20,7 @@ Exceptions for artifact transfer in the Horus runtime.
 """
 
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.i18n import tr as _
 
 
 class TransferError(Exception):
@@ -36,10 +37,16 @@ class TransferStrategyNotFoundError(TransferError):
 
     def __init__(self, source_kind: str, destination_kind: str) -> None:
         super().__init__(
-            f"No transfer strategy registered for '{source_kind}' → "
-            f"'{destination_kind}'. Register a BaseTransferStrategy subclass "
-            f"that declares handles_source and handles_destination for these "
-            f"target kinds."
+            _(
+                "No transfer strategy registered for '%(source_kind)s' → "
+                "'%(destination_kind)s'. Register a BaseTransferStrategy "
+                "subclass that declares handles_source and "
+                "handles_destination for these target kinds."
+            )
+            % {
+                "source_kind": source_kind,
+                "destination_kind": destination_kind,
+            }
         )
 
 
@@ -54,8 +61,14 @@ class OrchestratorTargetNotSetError(TransferError):
         self, artifact_id: str, destination_target: BaseTarget
     ) -> None:
         super().__init__(
-            f"Artifact '{artifact_id}' is not accessible by target "
-            f"'{destination_target.kind}' and no orchestrator_target is set "
-            "on the workflow. Set workflow.orchestrator_target to the target"
-            "that holds user-provided root artifacts."
+            _(
+                "Artifact '%(artifact_id)s' is not accessible by target "
+                "'%(destination_target_kind)s' and no orchestrator_target is "
+                "set on the workflow. Set workflow.orchestrator_target to the "
+                "target that holds user-provided root artifacts."
+            )
+            % {
+                "artifact_id": artifact_id,
+                "destination_target_kind": destination_target.kind,
+            }
         )

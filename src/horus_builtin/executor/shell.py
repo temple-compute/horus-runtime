@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, ClassVar
 from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
 if TYPE_CHECKING:
@@ -49,7 +50,8 @@ class ShellExecutor(BaseExecutor):
         prepared_command = await task.runtime.setup_runtime(task)
 
         horus_logger.log.debug(
-            f"Executing command for task {task.id}: {prepared_command}"
+            _("Executing command for task %(task_id)s: %(command)s")
+            % {"task_id": task.id, "command": prepared_command}
         )
 
         # Security Warning:
@@ -67,7 +69,7 @@ class ShellExecutor(BaseExecutor):
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            _, stderr = await process.communicate()
+            __, stderr = await process.communicate()
         except asyncio.CancelledError:
             if process.returncode is None:
                 process.kill()
@@ -76,9 +78,17 @@ class ShellExecutor(BaseExecutor):
 
         if process.returncode != 0:
             horus_logger.log.error(
-                f"Command execution failed for task {task.id} with return "
-                f"code {process.returncode}. Stderr: {stderr.decode().strip()}"
+                _(
+                    "Command execution failed for task %(task_id)s with "
+                    "return code %(return_code)s. Stderr: %(stderr)s"
+                )
+                % {
+                    "task_id": task.id,
+                    "return_code": process.returncode,
+                    "stderr": stderr.decode().strip(),
+                }
             )
             raise TaskExecutionError(
-                f"Shell command exited with return code {process.returncode}"
+                _("Shell command exited with return code %(return_code)s")
+                % {"return_code": process.returncode}
             )

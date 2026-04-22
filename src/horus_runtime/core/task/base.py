@@ -123,10 +123,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
     def _validate_runtime_compatibility(self) -> Self:
         if not isinstance(self.runtime, self.executor.runtimes):
             raise IncompatibleRuntimeError(
-                f"Runtime '{type(self.runtime).__name__}' is not compatible "
-                f"with executor '{type(self.executor).__name__}'. "
-                f"Expected one of: "
-                f"{[r.__name__ for r in self.executor.runtimes]}"
+                _(
+                    "Runtime '%(runtime)s' is not compatible with executor "
+                    "'%(executor)s'. Expected one of: %(expected)s"
+                )
+                % {
+                    "runtime": type(self.runtime).__name__,
+                    "executor": type(self.executor).__name__,
+                    "expected": [r.__name__ for r in self.executor.runtimes],
+                }
             )
         return self
 
