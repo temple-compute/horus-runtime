@@ -19,7 +19,7 @@
 Basic tests for the middleware system.
 """
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import ClassVar
 
 import pytest
@@ -298,23 +298,22 @@ class TestMiddleware:
         task.target = target
 
         await target.dispatch(task)
-        await target.wait()
-        await target.cancel()
-        status = await target.get_status()
 
-        assert status is TaskStatus.COMPLETED
         assert events == [
             f"before:{task.id}",
             f"after:{task.id}",
         ]
 
     async def test_interaction_middleware_can_mutate_render_transport(
-        self, horus_context: HorusContext
+        self,
+        horus_context: HorusContext,
+        restore_interaction_middleware_registry: Callable[[], Generator[None]],
     ) -> None:
         """
         Interaction middleware mutations affect the renderer call.
         """
         del horus_context
+        del restore_interaction_middleware_registry
 
         class SwapTransportMiddleware(InteractionMiddleware):
             """

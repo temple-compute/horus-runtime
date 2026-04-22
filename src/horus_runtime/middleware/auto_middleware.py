@@ -29,7 +29,7 @@ from horus_runtime.logging import horus_logger
 
 HORUS_MIDDLEWARE_ENTRY_POINT_PREFIX = "horus.middleware."
 
-# Reutrn type of the call_next function passed to middleware.wrap()
+# Return type of the call_next function passed to middleware.wrap()
 R = TypeVar("R")
 
 
@@ -78,15 +78,17 @@ class AutoMiddleware[T = Any](ABC):
         Importing the module triggers __init_subclass__ and populates
         registries.
         """
-        for group in entry_points().groups:
-            if group.startswith(HORUS_MIDDLEWARE_ENTRY_POINT_PREFIX):
-                for ep in entry_points(group=group):
-                    try:
-                        ep.load()
-                    except Exception as e:
-                        horus_logger.log.error(
-                            f"Error loading middleware: {e}"
-                        )
+        groups_to_load = {
+            group
+            for group in entry_points().groups
+            if group.startswith(HORUS_MIDDLEWARE_ENTRY_POINT_PREFIX)
+        }
+        for group in groups_to_load:
+            for middleware_plugin in entry_points(group=group):
+                try:
+                    middleware_plugin.load()
+                except Exception as e:
+                    horus_logger.log.error(f"Error loading middleware: {e}")
 
     async def before(self, context: T) -> None:
         """

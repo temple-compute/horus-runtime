@@ -36,7 +36,7 @@ class TargetMiddlewareContext:
     """
 
     target: "BaseTarget"
-    task: "BaseTask | None" = None
+    task: "BaseTask"
 
 
 class TargetMiddleware(

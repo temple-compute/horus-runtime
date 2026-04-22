@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Transport middleware system for the horus-runtime.
+Transfer middleware system for the horus-runtime.
 """
 
 from dataclasses import dataclass
