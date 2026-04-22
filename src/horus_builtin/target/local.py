@@ -60,9 +60,6 @@ class LocalTarget(BaseTarget):
         Raises:
             TaskExecutionError: If the task is already running on this target.
         """
-        # TODO: Implement transfer_strategy to ensure artifacts are
-        # available to the task.
-
         # If the task is already running, don't start it again
         if self._task_future is not None and not self._task_future.done():
             raise TaskExecutionError(

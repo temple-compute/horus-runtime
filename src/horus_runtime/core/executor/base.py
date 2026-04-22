@@ -24,9 +24,13 @@ a command or running it inside a SLURM job, either remote or locally.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.middleware.executor import (
+    ExecutorMiddleware,
+    ExecutorMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
@@ -55,8 +59,21 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     handle any runtime type.
     """
 
-    @abstractmethod
+    @final
     async def execute(self, task: "BaseTask") -> None:
+        """
+        Execute the task using the specified runtime and environment. This
+        method is final and should not be overridden by subclasses. Instead,
+        subclasses should implement the `_execute` method, which contains the
+        specific execution logic for different types of executors.
+        """
+        await ExecutorMiddleware.call_with_middleware(
+            ExecutorMiddlewareContext(executor=self, task=task),
+            lambda: self._execute(task),
+        )
+
+    @abstractmethod
+    async def _execute(self, task: "BaseTask") -> None:
         """
         Execute the task using the specified runtime and environment.
         This method should be implemented by subclasses to define the specific

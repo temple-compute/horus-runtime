@@ -26,7 +26,6 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
-from horus_runtime.utils.timing import timed
 
 
 class HorusTask(BaseTask):
@@ -71,23 +70,7 @@ class HorusTask(BaseTask):
                 )
 
         # Execute the command using the executor
-        with timed() as get_elapsed:
-            await self.executor.execute(self)
-
-        # Get the elapsed time and emit the completion event
-        elapsed = get_elapsed()
-
-        ctx.bus.emit(
-            HorusTaskEvent(
-                task_id=self.id,
-                task_name=self.name,
-                data={"elapsed_time": elapsed},
-                message=_(
-                    "Task %(task_name)s completed in %(elapsed).2f seconds."
-                )
-                % {"task_name": self.name, "elapsed": elapsed},
-            )
-        )
+        await self.executor.execute(self)
 
     def is_complete(self) -> bool:
         """

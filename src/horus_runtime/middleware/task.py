@@ -16,32 +16,32 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-PythonCodeStringRuntime implementation for horus-runtime.
+Task middleware system for the horus-runtime.
 """
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.middleware.auto_middleware import AutoMiddleware
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
-class PythonCodeStringRuntime(BaseRuntime[str]):
+@dataclass
+class TaskMiddlewareContext:
     """
-    Executes a Python code snippet.
-    """
-
-    kind: str = "python"
-
-    code: str
-    """
-    The Python code to execute.
+    Context passed to TaskMiddleware.
     """
 
-    async def _setup_runtime(self, _: "BaseTask") -> str:
-        """
-        For the PythonCodeStringRuntime, setting up the runtime simply involves
-        returning the code as is.
-        """
-        return self.code
+    task: "BaseTask"
+
+
+class TaskMiddleware(
+    AutoMiddleware[TaskMiddlewareContext], entry_point="task"
+):
+    """
+    Base class for task middleware.
+    """
+
+    registry: list[type["TaskMiddleware"]]

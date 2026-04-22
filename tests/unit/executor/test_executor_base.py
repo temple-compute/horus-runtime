@@ -27,6 +27,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
 )
@@ -46,11 +47,18 @@ class ConcreteTestExecutor(BaseExecutor):
     )
     kind: str = "test"
 
-    async def execute(self, task: Union["BaseTask", str]) -> int:
+    async def execute(self, task: Union["BaseTask", str]) -> None:  # type: ignore[misc]
+        """
+        Override for testing purposes.
+        """
+        return await self._execute(task)
+
+    async def _execute(self, task: Union["BaseTask", str]) -> None:
         """
         Simple test implementation that returns success for non-empty commands.
         """
-        return 0 if task else 1
+        if not task:
+            raise TaskExecutionError("Task execution failed")
 
 
 @pytest.mark.unit
@@ -98,7 +106,7 @@ class TestBaseExecutor:
         """
         # Check that the execute method is in the abstract methods
         abstract_methods = BaseExecutor.__abstractmethods__
-        assert "execute" in abstract_methods
+        assert "_execute" in abstract_methods
 
     async def test_concrete_executor_implementation(self) -> None:
         """
@@ -107,12 +115,11 @@ class TestBaseExecutor:
         executor = ConcreteTestExecutor()
 
         # Test successful execution
-        result = await executor.execute("some task")
-        assert result == 0
+        await executor.execute("some task")
 
         # Test failure case
-        result = await executor.execute("")
-        assert result == 1
+        with pytest.raises(TaskExecutionError):
+            await executor.execute("")
 
     def test_kind_field_validation(self) -> None:
         """
@@ -157,7 +164,7 @@ class TestBaseExecutor:
         assert cmd_param.annotation == "BaseTask"  # Include generic
 
         # Check return type
-        assert sig.return_annotation is int
+        assert sig.return_annotation is None
 
 
 @pytest.mark.unit
@@ -181,8 +188,8 @@ class TestBaseExecutorValidation:
                 Invalid executor implementation without kind field for testing.
                 """
 
-                async def execute(self, _task: "BaseTask") -> int:
-                    return 0
+                async def _execute(self, _task: "BaseTask") -> None:
+                    pass
 
     def test_model_validation_preserves_type_safety(self) -> None:
         """

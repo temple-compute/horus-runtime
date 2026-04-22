@@ -38,6 +38,7 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -158,7 +159,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
             _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}
         )
         try:
-            await self._run()
+            await TaskMiddleware.call_with_middleware(
+                TaskMiddlewareContext(task=self),
+                self._run,
+            )
         except CancelledError:
             self.status = TaskStatus.CANCELED
             horus_logger.log.debug(

@@ -41,12 +41,12 @@ class ShellExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 
-    async def execute(self, task: "BaseTask") -> None:
+    async def _execute(self, task: "BaseTask") -> None:
         """
         Runs the task locally in the host machine.
         """
         assert isinstance(task.runtime, CommandRuntime)
-        prepared_command = task.runtime.setup_runtime(task)
+        prepared_command = await task.runtime.setup_runtime(task)
 
         horus_logger.log.debug(
             f"Executing command for task {task.id}: {prepared_command}"

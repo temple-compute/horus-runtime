@@ -80,6 +80,12 @@ log_event_subscriber = "horus_builtin.event.log_subscriber"
 [project.entry-points."horus.transfer"]
 local_to_local = "horus_builtin.transfer.local_noop"
 
+[project.entry-points."horus.middleware.task"]
+task_time = "horus_builtin.middleware.task_time"
+
+[project.entry-points."horus.middleware.workflow"]
+workflow_time = "horus_builtin.middleware.workflow_time"
+
 # ================
 
 # Other tool configurations

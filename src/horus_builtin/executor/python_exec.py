@@ -39,13 +39,13 @@ class PythonExecExecutor(BaseExecutor):
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
 
-    async def execute(self, task: "BaseTask") -> None:
+    async def _execute(self, task: "BaseTask") -> None:
         """
         Runs the task in-process by executing the Python code specified in the
         task's runtime.
         """
         assert isinstance(task.runtime, PythonCodeStringRuntime)
-        code = task.runtime.setup_runtime(task)
+        code = await task.runtime.setup_runtime(task)
 
         ctx = HorusContext.get_context()
 

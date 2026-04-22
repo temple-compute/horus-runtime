@@ -61,7 +61,7 @@ class CommandRuntime(BaseRuntime[str]):
     The formatted command after processing any placeholders.
     """
 
-    def setup_runtime(self, task: "BaseTask") -> str:
+    async def _setup_runtime(self, task: "BaseTask") -> str:
         """
         For the CommandRuntime, setting up the runtime simply involves
         returning the command as is, since there are no placeholders to

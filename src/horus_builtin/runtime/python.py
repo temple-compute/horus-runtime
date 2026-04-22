@@ -44,7 +44,9 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
 
     func: Callable[..., Any] = Field(..., exclude=True)
 
-    def setup_runtime(self, task: "BaseTask") -> PythonFunctionSetupTuple:
+    async def _setup_runtime(
+        self, task: "BaseTask"
+    ) -> PythonFunctionSetupTuple:
         """
         Prepares the runtime for execution by inspecting the function signature
         and collecting arguments from the task's inputs, outputs, and

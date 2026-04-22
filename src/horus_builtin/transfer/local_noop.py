@@ -34,7 +34,7 @@ class LocalNoOpTransfer(BaseTransferStrategy):
     handles_source = LocalTarget
     handles_destination = LocalTarget
 
-    async def transfer(
+    async def _transfer(
         self,
         artifact: BaseArtifact,
         source: BaseTarget,

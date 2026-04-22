@@ -32,6 +32,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.context import HorusContext, _runtime_ctx
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.middleware.auto_middleware import AutoMiddleware
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -115,6 +116,7 @@ def init_registry() -> None:
     Load all built-in plugins once for the entire test session.
     """
     AutoRegistry.init_registry()
+    AutoMiddleware.init_registry()
 
 
 @pytest.fixture

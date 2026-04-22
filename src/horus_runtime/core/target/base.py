@@ -26,6 +26,10 @@ from typing import TYPE_CHECKING, ClassVar, final
 from pydantic import Field
 
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.middleware.target import (
+    TargetMiddleware,
+    TargetMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
@@ -74,7 +78,13 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         # Set the task to "PENDING" status before dispatching
         task.status = TaskStatus.PENDING
-        await self._dispatch(task)
+        await TargetMiddleware.call_with_middleware(
+            TargetMiddlewareContext(
+                target=self,
+                task=task,
+            ),
+            lambda: self._dispatch(task),
+        )
 
     @abstractmethod
     async def _dispatch(self, task: "BaseTask") -> None:

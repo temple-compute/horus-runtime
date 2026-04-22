@@ -16,32 +16,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-PythonCodeStringRuntime implementation for horus-runtime.
+HorusTaskEvent. Emitted when a HorusTask is executed.
 """
 
-from typing import TYPE_CHECKING
-
-from horus_runtime.core.runtime.base import BaseRuntime
-
-if TYPE_CHECKING:
-    from horus_runtime.core.task.base import BaseTask
+from horus_runtime.event.base import BaseEvent
 
 
-class PythonCodeStringRuntime(BaseRuntime[str]):
+class HorusWorkflowEvent(BaseEvent):
     """
-    Executes a Python code snippet.
+    Event emitted when a HorusWorkflow is executed.
     """
 
-    kind: str = "python"
+    event_type: str = "horus_workflow_event"
 
-    code: str
-    """
-    The Python code to execute.
-    """
-
-    async def _setup_runtime(self, _: "BaseTask") -> str:
-        """
-        For the PythonCodeStringRuntime, setting up the runtime simply involves
-        returning the code as is.
-        """
-        return self.code
+    workflow_name: str

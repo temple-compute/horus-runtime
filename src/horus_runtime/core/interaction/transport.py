@@ -19,7 +19,7 @@
 Core interaction transport and related events.
 """
 
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar, final
 
 from pydantic import model_validator
 
@@ -35,6 +35,10 @@ from horus_runtime.core.interaction.renderer import (
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import LoggerLevel
+from horus_runtime.middleware.interaction import (
+    InteractionMiddleware,
+    InteractionMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 # Typevar allows us to maintain type information about the expected
@@ -177,6 +181,7 @@ class BaseInteractionTransport(
     add_to_registry: ClassVar[bool] = False
     kind: str
 
+    @final
     async def ask(
         self,
         interaction: BaseInteraction[T],
@@ -192,10 +197,16 @@ class BaseInteractionTransport(
 
         ctx = HorusContext.get_context()
 
+        # Obtain the appropriate renderer for this interaction and transport
+        # For example, a StringInteraction asked through a
+        # CLIInteractionTransport would look for a renderer that handles both
+        # StringInteraction and CLIInteractionTransport, such as
+        # CLIStringRenderer.
         renderer_cls = BaseInteractionRenderer.get_from_registry(
             self, interaction
         )
 
+        # Fail if no renderer is found, since we won't be able to ask the user
         if renderer_cls is None:
             ctx.bus.emit(
                 InteractionFailedEvent(
@@ -225,8 +236,35 @@ class BaseInteractionTransport(
             )
         )
 
+        # Try to render and parse the interaction, with retries on parse
+        # failure (up to max_retries). Middleware is entered on each attempt,
+        # allowing for things like retry notifications or dynamic adjustments
+        # to the transport or renderer between attempts.
         for attempt in range(max_retries):
-            raw = await renderer.render(self, interaction)
+            middleware_context = InteractionMiddlewareContext(
+                transport=self,
+                interaction=interaction,
+                renderer=renderer,
+                attempt=attempt,
+            )
+
+            async def render_current(
+                current_context: InteractionMiddlewareContext = (
+                    middleware_context
+                ),
+            ) -> object:
+                """
+                Render using the current middleware-mutated context.
+                """
+                return await current_context.renderer.render(
+                    current_context.transport,
+                    current_context.interaction,
+                )
+
+            raw = await InteractionMiddleware.call_with_middleware(
+                middleware_context,
+                render_current,
+            )
 
             try:
                 result = await interaction.parse(raw)
@@ -255,14 +293,17 @@ class BaseInteractionTransport(
                 raise InteractionParseError(
                     interaction.kind, max_retries
                 ) from None
-            else:
-                ctx.bus.emit(
-                    InteractionAnsweredEvent(
-                        interaction_kind=interaction.kind,
-                        transport_kind=self.kind,
-                        value_key=interaction.value_key,
-                    )
-                )
-                return result
 
+            ctx.bus.emit(
+                InteractionAnsweredEvent(
+                    interaction_kind=interaction.kind,
+                    transport_kind=self.kind,
+                    value_key=interaction.value_key,
+                )
+            )
+            return result
+
+        # This point should not be reachable due to the raise in the except
+        # block, but is required to satisfy the type checker that a T is always
+        # returned or an exception is raised
         raise InteractionParseError(interaction.kind, max_retries)
