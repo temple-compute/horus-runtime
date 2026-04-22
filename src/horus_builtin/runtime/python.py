@@ -28,6 +28,7 @@ from pydantic import ConfigDict, Field
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.i18n import tr as _
 
 PythonFunctionSetupTuple = tuple[Callable[..., Any], dict[str, Any]]
 
@@ -44,7 +45,9 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
 
     func: Callable[..., Any] = Field(..., exclude=True)
 
-    def setup_runtime(self, task: "BaseTask") -> PythonFunctionSetupTuple:
+    async def _setup_runtime(
+        self, task: "BaseTask"
+    ) -> PythonFunctionSetupTuple:
         """
         Prepares the runtime for execution by inspecting the function signature
         and collecting arguments from the task's inputs, outputs, and
@@ -71,9 +74,12 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
         # parameter
         if "task" in sig.parameters and "task" in kwargs:
             raise ValueError(
-                f"Function {self.func} has a 'task' parameter that conflicts "
-                f"with the task context. Please rename the parameter or avoid "
-                f"providing a 'task' variable."
+                _(
+                    "Function %(func)s has a 'task' parameter that conflicts "
+                    "with the task context. Please rename the parameter or "
+                    "avoid providing a 'task' variable."
+                )
+                % {"func": self.func}
             )
 
         # Add the task itself to the kwargs so it can be injected if the
@@ -97,8 +103,11 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
             missing_params = set(sig.parameters) - set(kwargs)
             if missing_params:
                 raise ValueError(
-                    f"Function {self.func} is missing required parameters: "
-                    f"{missing_params}"
+                    _(
+                        "Function %(func)s is missing required parameters: "
+                        "%(missing_params)s"
+                    )
+                    % {"func": self.func, "missing_params": missing_params}
                 )
 
             # Only pass the kwargs that match the function signature

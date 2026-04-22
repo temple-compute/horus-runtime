@@ -22,8 +22,12 @@ functionality for executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, final
 
+from horus_runtime.middleware.runtime import (
+    RuntimeMiddleware,
+    RuntimeMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
@@ -44,7 +48,7 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
     """
 
     @abstractmethod
-    def setup_runtime(self, task: "BaseTask") -> T:
+    async def _setup_runtime(self, task: "BaseTask") -> T:
         """
         Prepare the runtime to execute. This method should be implemented by
         subclasses to define the specific logic for preparing the command/task
@@ -53,3 +57,14 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
         Returns:
             T: The prepared runtime instance.
         """
+
+    @final
+    async def setup_runtime(self, task: "BaseTask") -> T:
+        """
+        Public method to set up the runtime. This method calls the internal
+        _setup_runtime method, which should be implemented by subclasses.
+        """
+        return await RuntimeMiddleware.call_with_middleware(
+            RuntimeMiddlewareContext(runtime=self, task=task),
+            lambda: self._setup_runtime(task),
+        )

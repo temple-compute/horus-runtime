@@ -1,3 +1,7 @@
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
 [project]
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
@@ -74,6 +78,12 @@ log_event_subscriber = "horus_builtin.event.log_subscriber"
 
 [project.entry-points."horus.transfer"]
 local_to_local = "horus_builtin.transfer.local_noop"
+
+[project.entry-points."horus.middleware.task"]
+task_time = "horus_builtin.middleware.task_time"
+
+[project.entry-points."horus.middleware.workflow"]
+workflow_time = "horus_builtin.middleware.workflow_time"
 
 # ================
 

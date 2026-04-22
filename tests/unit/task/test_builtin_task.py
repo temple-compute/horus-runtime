@@ -21,7 +21,7 @@ Unit tests for HorusTask builtin task.
 """
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -207,14 +207,17 @@ class TestHorusTaskExecution:
             inputs={},  # No inputs to avoid file existence issues
         )
 
-        # Mock subprocess.run to return success
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"", b""))
 
+        with patch(
+            "asyncio.create_subprocess_shell", return_value=mock_process
+        ) as mock_run:
             # Should not raise an exception
             await task.run()
 
-            # Verify that subprocess.run was called
+            # Verify that asyncio.create_subprocess_shell was called
             mock_run.assert_called_once()
 
     async def test_horus_task_run_raises_error_on_execution_failure(
@@ -231,10 +234,14 @@ class TestHorusTaskExecution:
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
 
-        # Mock subprocess.run to return failure
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1  # Non-zero return code
+        mock_process_fail = AsyncMock()
+        mock_process_fail.returncode = 1
+        mock_process_fail.communicate = AsyncMock(return_value=(b"", b"error"))
 
+        # Mock asyncio.create_subprocess_shell to return failure
+        with patch(
+            "asyncio.create_subprocess_shell", return_value=mock_process_fail
+        ):
             with pytest.raises(TaskExecutionError):
                 await task.run()
 
@@ -250,14 +257,18 @@ class TestHorusTaskExecution:
             inputs={},  # No inputs
         )
 
-        # Mock subprocess.run to return success
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
+        mock_process_ok = AsyncMock()
+        mock_process_ok.returncode = 0
+        mock_process_ok.communicate = AsyncMock(return_value=(b"", b""))
 
+        # Mock asyncio.create_subprocess_shell to return success
+        with patch(
+            "asyncio.create_subprocess_shell", return_value=mock_process_ok
+        ) as mock_run:
             # Should not raise an exception
             await task.run()
 
-            # Verify that subprocess.run was called
+            # Verify that asyncio.create_subprocess_shell was called
             mock_run.assert_called_once()
 
     async def test_horus_task_run_with_multiple_inputs_one_missing(

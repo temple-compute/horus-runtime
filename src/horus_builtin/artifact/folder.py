@@ -28,6 +28,7 @@ from pathlib import Path
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.i18n import tr as _
 
 
 class FolderArtifact(BaseArtifact[Path]):
@@ -85,7 +86,10 @@ class FolderArtifact(BaseArtifact[Path]):
         """
         source_path = Path(value).resolve()
         if not source_path.is_dir():
-            raise ValueError(f"Expected directory path, got {source_path}")
+            raise ValueError(
+                _("Expected directory path, got %(source_path)s")
+                % {"source_path": source_path}
+            )
 
         if self.path.exists():
             shutil.rmtree(self.path)

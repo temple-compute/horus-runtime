@@ -26,6 +26,7 @@ from typing import ClassVar, Self, Unpack, cast
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
 
+from horus_runtime.i18n import tr as _
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -65,8 +66,11 @@ class AutoRegistryProduct:
         """
         if not issubclass(cls, AutoRegistry):
             raise TypeError(
-                f"{cls.__name__} uses AutoRegistryProduct but does not "
-                "inherit from AutoRegistry."
+                _(
+                    "%(cls_name)s uses AutoRegistryProduct but does not "
+                    "inherit from AutoRegistry."
+                )
+                % {"cls_name": cls.__name__}
             )
 
         # If this class explicitly declares a composite registry_key (one that
@@ -95,9 +99,12 @@ class AutoRegistryProduct:
         template: str | None = getattr(cls, "_product_key_template", None)
         if not template or cls._KEY_SEPARATOR not in template:
             raise ValueError(
-                f"{cls.__name__} uses AutoRegistryProduct but no composite "
-                "registry_key template was found. Make sure a base class "
-                "defines registry_key in 'field_name:attr1.attr2' format."
+                _(
+                    "%(cls_name)s uses AutoRegistryProduct but no composite "
+                    "registry_key template was found. Make sure a base class "
+                    "defines registry_key in 'field_name:attr1.attr2' format."
+                )
+                % {"cls_name": cls.__name__}
             )
 
         field_name, raw_attrs = template.split(cls._KEY_SEPARATOR, maxsplit=1)
@@ -110,8 +117,11 @@ class AutoRegistryProduct:
 
             if attr_type is None:
                 raise ValueError(
-                    f"{cls.__name__} registry_key references attribute "
-                    f"'{attr}' which does not exist."
+                    _(
+                        "%(cls_name)s registry_key references attribute "
+                        "'%(attr)s' which does not exist."
+                    )
+                    % {"cls_name": cls.__name__, "attr": attr}
                 )
 
             # Read the discriminator default from that type's model_fields.
@@ -120,8 +130,12 @@ class AutoRegistryProduct:
             value: object = field.default if field is not None else None
             if not isinstance(value, str) or not value:
                 raise ValueError(
-                    f"{cls.__name__} registry_key references attribute "
-                    f"'{attr}' whose registry key is not a non-empty string."
+                    _(
+                        "%(cls_name)s registry_key references attribute "
+                        "'%(attr)s' whose registry key is not a non-empty "
+                        "string."
+                    )
+                    % {"cls_name": cls.__name__, "attr": attr}
                 )
 
             parts.append(value)

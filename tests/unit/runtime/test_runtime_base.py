@@ -41,7 +41,7 @@ class ConcreteTestRuntime(BaseRuntime):
 
     kind: str = "test_runtime"
 
-    def setup_runtime(self, _: "BaseTask") -> str:
+    async def _setup_runtime(self, _: "BaseTask") -> str:
         """
         Test implementation of setup_runtime method.
         """
@@ -88,7 +88,7 @@ class TestBaseRuntime:
         """
         # Check that the setup_runtime method is in the abstract methods
         abstract_methods = BaseRuntime.__abstractmethods__
-        assert "setup_runtime" in abstract_methods
+        assert "_setup_runtime" in abstract_methods
 
     def test_setup_runtime_signature(self) -> None:
         """
@@ -122,7 +122,7 @@ class TestBaseRuntimeValidation:
                 Invalid runtime that does not set 'kind' field.
                 """
 
-                def setup_runtime(self, _: "BaseTask") -> str:
+                async def _setup_runtime(self, _: "BaseTask") -> str:
                     return ""
 
     def test_model_validation_preserves_type_safety(self) -> None:

@@ -22,7 +22,7 @@ Unit tests for the Workflow class.
 import textwrap
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -203,14 +203,18 @@ class TestWorkflowRun:
 
         mock_run.assert_not_called()
 
-    @patch("subprocess.run")
+    @patch("asyncio.create_subprocess_shell")
     async def test_run_executes_tasks_in_order(
-        self, mock_run: Mock, make_shell_task: MakeTaskType
+        self, mock_run: AsyncMock, make_shell_task: MakeTaskType
     ) -> None:
         """
         Tasks should be executed in the order they are defined in the workflow.
         """
-        mock_run.return_value = Mock(returncode=0)
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"", b""))
+        mock_run.return_value = mock_process
+
         task_a = make_shell_task(cmd="echo A")
         task_b = make_shell_task(cmd="echo B")
         wf = HorusWorkflow(name="order_test", tasks={"a": task_a, "b": task_b})

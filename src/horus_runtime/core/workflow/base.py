@@ -46,6 +46,10 @@ from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.middleware.workflow import (
+    WorkflowMiddleware,
+    WorkflowMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -207,7 +211,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             % {"workflow_name": self.name}
         )
         try:
-            await self._run()
+            await WorkflowMiddleware.call_with_middleware(
+                WorkflowMiddlewareContext(workflow=self),
+                self._run,
+            )
         except CancelledError:
             self.status = WorkflowStatus.CANCELED
             horus_logger.log.debug(

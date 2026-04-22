@@ -28,8 +28,12 @@ values such as ``"local.local"``.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, final
 
+from horus_runtime.middleware.transfer import (
+    TransferMiddleware,
+    TransferMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 from horus_runtime.registry.auto_registry_product import AutoRegistryProduct
 
@@ -58,7 +62,7 @@ class BaseTransferStrategy[
     handles_source: ClassVar[HandlesSourceType]
     handles_destination: ClassVar[HandlesDestinationType]
 
-    @abstractmethod
+    @final
     async def transfer(
         self,
         artifact: "BaseArtifact",
@@ -67,4 +71,26 @@ class BaseTransferStrategy[
     ) -> None:
         """
         Transfer *artifact* from *source* target to *destination* target.
+        """
+        await TransferMiddleware.call_with_middleware(
+            TransferMiddlewareContext(
+                transfer_strategy=self,
+                artifact=artifact,
+                source=source,
+                destination=destination,
+            ),
+            lambda: self._transfer(artifact, source, destination),
+        )
+
+    @abstractmethod
+    async def _transfer(
+        self,
+        artifact: "BaseArtifact",
+        source: S,
+        destination: D,
+    ) -> None:
+        """
+        Override this method to implement the transfer logic. This is called by
+        the public ``transfer`` method, which handles any common pre- or
+        post-transfer logic (e.g. logging, events, etc.).
         """

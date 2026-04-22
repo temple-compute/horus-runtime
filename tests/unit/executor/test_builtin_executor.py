@@ -20,7 +20,8 @@
 Unit tests for ShellExecutor and related builtin executors.
 """
 
-from unittest.mock import Mock, patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.executor.shell import ShellExecutor
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from tests.conftest import MakeTaskType
 
 
@@ -104,10 +106,10 @@ class TestShellExecutor:
         executor = ShellExecutor()
         assert executor.kind == "shell"
 
-    @patch("subprocess.run")
+    @patch("asyncio.create_subprocess_shell")
     async def test_execute_successful_command(
         self,
-        mock_run: Mock,
+        mock_run: AsyncMock,
         make_shell_task: MakeTaskType,
         horus_context: HorusContext,
     ) -> None:
@@ -115,23 +117,21 @@ class TestShellExecutor:
         Test executing a successful command returns correct exit code.
         """
         del horus_context
-        # Mock subprocess.run to return successful execution
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
+        # Mock asyncio.create_subprocess_shell to return successful execution
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"", b""))
+        mock_run.return_value = mock_process
 
         hello_world_task = make_shell_task("echo 'Hello World'")
 
         executor = ShellExecutor()
-        result = await executor.execute(hello_world_task)
+        await executor.execute(hello_world_task)
 
-        assert result == 0
         mock_run.assert_called_once_with(
             "echo 'Hello World'",
-            shell=True,
-            check=False,
-            text=True,
-            capture_output=True,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
 
@@ -153,10 +153,7 @@ class TestShellExecutorIntegration:
 
         # Use a simple, cross-platform command that should always work
         hello_world_task = make_shell_task("echo 'Hello World'")
-        result = await executor.execute(hello_world_task)
-
-        # Echo should return 0 on success
-        assert result == 0
+        await executor.execute(hello_world_task)
 
     async def test_execute_real_failed_command(
         self, make_shell_task: MakeTaskType, horus_context: HorusContext
@@ -169,9 +166,9 @@ class TestShellExecutorIntegration:
 
         task = make_shell_task("nonexistent_command_xyz_that_should_not_exist")
 
-        # Use a command that should fail (exit with non-zero code)
-        result = await executor.execute(task)
-        assert result != 0
+        # Command should fail and raise TaskExecutionError
+        with pytest.raises(TaskExecutionError):
+            await executor.execute(task)
 
     async def test_execute_real_command_with_exit_code(
         self, make_shell_task: MakeTaskType, horus_context: HorusContext
@@ -184,5 +181,4 @@ class TestShellExecutorIntegration:
 
         # Use 'true' command which should always exit with 0
         task = make_shell_task("true")
-        result = await executor.execute(task)
-        assert result == 0
+        await executor.execute(task)
