@@ -19,16 +19,17 @@ jobs:
                   python-version: "3.13"
                   cache: "pip"
 
-            - name: Install dependencies
-              run: |
-                  pip install -e .[dev]
-                  pip install build
+            - name: Install uv
+              uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+            - name: Sync project dependencies and activate environment
+              run: uv sync --group dev
 
             - name: Verify and compile translations
-              run: make babel-check
+              run: uv run make babel-check
 
             - name: Build package
-              run: python -m build
+              run: uv run uv build
 
             - name: Upload to PyPI
               uses: pypa/gh-action-pypi-publish@release/v1

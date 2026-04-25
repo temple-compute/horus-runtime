@@ -27,7 +27,7 @@ jobs:
           )
 
           # If author explicitly says docs are NOT required -> allow
-          echo "$BODY" | grep -q "\[x\] No documentation update required" && exit 0
+          echo "$BODY" | grep -qi "\[x\] No documentation update required" && exit 0
 
           # Otherwise, docs ARE required -> enforce horus-docs PR link
           echo "$BODY" | grep -E "github.com/temple-compute/horus-docs/pull/[0-9]+" \

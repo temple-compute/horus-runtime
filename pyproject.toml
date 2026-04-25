@@ -1,15 +1,15 @@
 [build-system]
-requires = ["uv_build>=0.11.7,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.29,<2.0", "uv-dynamic-versioning>=0.14.0,<1.0"]
+build-backend = "hatchling.build"
 
 [project]
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
-version = "0.0.1"
+dynamic = ["version"]
 requires-python = ">=3.13"
 license = { file = "LICENSE" }
 classifiers = [
-    "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
@@ -17,9 +17,10 @@ dependencies = [
     "pydantic_settings~=2.0",
     "pyyaml~=6.0",
     "loguru~=0.7",
+    "click>=8.3.3",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff~=0.15",
     "mypy~=1.19",
@@ -30,8 +31,14 @@ dev = [
     "licenseheaders~=0.8",
     "babel~=2.0",
     "types-PyYAML~=6.0",
+    "uv-dynamic-versioning>=0.14.0",
 ]
 
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+fallback-version = "0.0.1"
 
 [project.scripts]
 horus = "horus_runtime.cli:main"

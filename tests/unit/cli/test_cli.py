@@ -15,31 +15,23 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Entrypoint for horus-runtime.
+Unit tests for horus-runtime CLI module.
 """
 
-import click
+from click.testing import CliRunner
 
-from horus_runtime.context import HorusContext
+from horus_runtime.cli import main
 from horus_runtime.version import __version__ as horus_version
 
 
-@click.command()
-@click.version_option(version=horus_version, prog_name="Horus Runtime")
-def main() -> None:
+def test_cli_version_exposed_and_exits_successfully() -> None:
     """
-    Run workflows and tasks using the Horus Runtime.
+    Ensure the Click CLI exposes the package version and exits 0.
     """
-    # Boot the runtime to initialize logging, load plugins,
-    # and set up global context
-    ctx = HorusContext.boot()
+    runner = CliRunner()
+    result = runner.invoke(main, ["--version"])
 
-    # Finish the application lifecycle.
-    ctx.shutdown()
-
-
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()
+    # Click's version output should include the package version
+    assert result.exit_code == 0
+    assert horus_version in result.output

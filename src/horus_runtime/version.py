@@ -15,31 +15,22 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Entrypoint for horus-runtime.
+This module provides the version of the Horus Runtime.
 """
 
-import click
-
-from horus_runtime.context import HorusContext
-from horus_runtime.version import __version__ as horus_version
+from importlib.metadata import PackageNotFoundError, version
 
 
-@click.command()
-@click.version_option(version=horus_version, prog_name="Horus Runtime")
-def main() -> None:
+def _get_version() -> str:
     """
-    Run workflows and tasks using the Horus Runtime.
+    Get the version of the Horus Runtime from the package metadata.
+    If the package is not found (e.g. in development), return "dev".
     """
-    # Boot the runtime to initialize logging, load plugins,
-    # and set up global context
-    ctx = HorusContext.boot()
-
-    # Finish the application lifecycle.
-    ctx.shutdown()
+    try:
+        return version("horus-runtime")
+    except PackageNotFoundError:
+        return "dev"
 
 
-if __name__ == "__main__":
-    # Call the main function to start the runtime
-    main()
+__version__: str = _get_version()
