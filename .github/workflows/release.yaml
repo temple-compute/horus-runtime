@@ -24,7 +24,6 @@ jobs:
 
             - name: Sync project dependencies
               run: uv sync --group dev
-              working-directory: horus-runtime
 
             - name: Verify and compile translations
               run: make babel-check

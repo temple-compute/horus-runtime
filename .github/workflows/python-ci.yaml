@@ -21,7 +21,6 @@ jobs:
 
       - name: Sync project dependencies
         run: uv sync --group dev
-        working-directory: horus-runtime
 
       - name: Lint with Ruff
         run: make lint
