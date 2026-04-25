@@ -16,9 +16,12 @@ jobs:
           python-version: "3.13"
           cache: "pip"
 
-      - name: Install dependencies
-        run: |
-          pip install -e .[dev]
+      - name: Install uv and sync dependencies
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Sync project dependencies
+        run: uv sync --group dev
+        working-directory: horus-runtime
 
       - name: Lint with Ruff
         run: make lint
@@ -51,9 +54,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: Install dependencies
-        run: |
-          pip install -e .[dev]
+      - name: Install uv and sync dependencies
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+
+      - name: Sync project dependencies
+        run: uv sync --group dev
+        working-directory: horus-runtime
 
       - name: Run tests with coverage
         run: make test
