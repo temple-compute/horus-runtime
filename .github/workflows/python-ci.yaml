@@ -19,17 +19,15 @@ jobs:
       - name: Install uv and sync dependencies
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
-      - name: Sync project dependencies and activate environment
-        run: |
-          uv sync --group dev
-          source .venv/bin/activate
+      - name: Sync project dependencies
+        run: uv sync --group dev
 
       - name: Lint with Ruff
-        run: make lint
+        run: uv run make lint
 
       - name: Check license headers
         run: |
-          make add-license-headers
+          uv run make add-license-headers
           if ! git diff --quiet; then
             echo "License headers are missing or incorrect. Please run 'make add-license-headers' to fix.";
             git diff --name-only
@@ -37,7 +35,7 @@ jobs:
           fi
 
       - name: Check translations
-        run: make babel-check
+        run: uv run make babel-check
 
   test:
     runs-on: ubuntu-latest
@@ -60,10 +58,9 @@ jobs:
 
       - name: Sync project dependencies
         run: uv sync --group dev
-        working-directory: horus-runtime
 
       - name: Run tests with coverage
-        run: make test
+        run: uv run make test
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v6
