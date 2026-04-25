@@ -20,12 +20,29 @@
 Entrypoint for horus-runtime.
 """
 
+import click
+
 from horus_runtime.context import HorusContext
+from horus_runtime.version import __version__ as horus_version
 
 
+def boot_horus() -> None:
+    """
+    Boot the Horus Runtime.
+    """
+    # Boot the runtime to initialize logging, load plugins,
+    # and set up global context
+    ctx = HorusContext.boot()
+
+    # Finish the application lifecycle.
+    ctx.shutdown()
+
+
+@click.command()
+@click.version_option(version=horus_version, prog_name="Horus Runtime")
 def main() -> None:
     """
-    Main function for horus-runtime.
+    Run workflows and tasks using the Horus Runtime.
     """
     # Boot the runtime to initialize logging, load plugins,
     # and set up global context
