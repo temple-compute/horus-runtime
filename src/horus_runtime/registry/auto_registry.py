@@ -27,7 +27,14 @@ from importlib.metadata import entry_points
 from inspect import isabstract
 from typing import Any, ClassVar, Self, Unpack, final
 
-from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
+import pydantic
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+)
+from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
 
 from horus_runtime.i18n import tr as _
@@ -293,6 +300,52 @@ class AutoRegistry(BaseModel, ABC):
             return target_origin.__pydantic_validator__.validate_python(data)
 
         return core_schema.no_info_plain_validator_function(validate)
+
+    @final
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        _core_schema: CoreSchema,
+        handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """
+        Generate a JSON schema for registry root classes.
+
+        For root classes this produces an ``anyOf`` over all currently
+        registered concrete subclasses, enabling OpenAPI / orval type
+        generation. For concrete subclasses the default Pydantic JSON
+        schema is used.
+        """
+        origin = (
+            getattr(cls, "__pydantic_generic_metadata__", {}).get("origin")
+            or cls
+        )
+
+        if origin not in origin._registry_roots:  # noqa: SLF001
+            return handler(_core_schema)
+
+        # Emit schema from base class fields only.
+        # Concrete subclass fields are plugin-specific and not part of the
+        # contract.
+        properties: dict[str, JsonSchemaValue] = {}
+        required: list[str] = []
+
+        for field_name, field_info in origin.model_fields.items():
+            properties[field_name] = pydantic.TypeAdapter(
+                field_info.annotation
+            ).json_schema()
+            if field_info.is_required():
+                required.append(field_name)
+
+        schema: JsonSchemaValue = {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": True,
+        }
+        if required:
+            schema["required"] = required
+
+        return schema
 
     @final
     @staticmethod
