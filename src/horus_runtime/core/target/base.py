@@ -46,6 +46,16 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     registry_key: ClassVar[str] = "kind"
     kind: str
 
+    kind_name: ClassVar[str]
+    """
+    Human-friendly name of this kind of target.
+    """
+
+    kind_description: ClassVar[str]
+    """
+    Human-friendly description of this kind of target.
+    """
+
     working_directory: Path = Field(default_factory=Path.cwd)
 
     """

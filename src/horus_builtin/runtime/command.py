@@ -19,11 +19,12 @@
 Command implementation for the runtime.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.runtime.events import RuntimeEvent
+from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -50,6 +51,10 @@ class CommandRuntime(BaseRuntime[str]):
     """
 
     kind: str = "command"
+    kind_name: ClassVar[str] = "Command"
+    kind_description: ClassVar[str] = _(
+        "Execute a command directly in the local environment."
+    )
 
     command: str
     """

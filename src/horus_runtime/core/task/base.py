@@ -58,6 +58,16 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The 'kind' field is used to identify the specific type of task.
     """
 
+    kind_name: ClassVar[str] = "BaseTask"
+    """
+    Human-readable name for this task type, used in the UI.
+    """
+
+    kind_description: ClassVar[str] = _("Horus base task")
+    """
+    Description of this task type, used in the UI.
+    """
+
     id: str
     """
     The task ID

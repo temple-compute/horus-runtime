@@ -39,6 +39,11 @@ class ShellExecutor(BaseExecutor):
     """
 
     kind: str = "shell"
+    kind_name: ClassVar[str] = "Shell Executor"
+    kind_description: ClassVar[str] = _(
+        "Executes a shell command in the local environment of the Horus "
+        "runtime."
+    )
 
     runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 

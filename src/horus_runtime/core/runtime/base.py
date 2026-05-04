@@ -24,6 +24,7 @@ functionality for executing tasks, and should be ingested by the executor.
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, final
 
+from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.runtime import (
     RuntimeMiddleware,
     RuntimeMiddlewareContext,
@@ -45,6 +46,16 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
     kind: str
     """
     The 'kind' field is used to identify the specific type of runtime.
+    """
+
+    kind_name: ClassVar[str] = "BaseRuntime"
+    """
+    Human-readable name for this runtime type, used in the UI.
+    """
+
+    kind_description: ClassVar[str] = _("Horus base runtime")
+    """
+    Description of this runtime type, used in the UI.
     """
 
     @abstractmethod

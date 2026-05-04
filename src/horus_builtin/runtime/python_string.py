@@ -19,9 +19,10 @@
 PythonCodeStringRuntime implementation for horus-runtime.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -33,6 +34,10 @@ class PythonCodeStringRuntime(BaseRuntime[str]):
     """
 
     kind: str = "python"
+    kind_name: ClassVar[str] = "Python Code String"
+    kind_description: ClassVar[str] = _(
+        "A runtime that executes a Python code snippet provided as a string."
+    )
 
     code: str
     """
