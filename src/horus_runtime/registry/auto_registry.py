@@ -327,23 +327,27 @@ class AutoRegistry(BaseModel, ABC):
         # Emit schema from base class fields only.
         # Concrete subclass fields are plugin-specific and not part of the
         # contract.
-        properties: dict[str, JsonSchemaValue] = {}
-        required: list[str] = []
-
-        for field_name, field_info in origin.model_fields.items():
-            properties[field_name] = pydantic.TypeAdapter(
-                field_info.annotation
-            ).json_schema()
-            if field_info.is_required():
-                required.append(field_name)
+        #
+        # Build a temporary model from the original field definitions so that
+        # constraints and metadata declared via Field(...) are preserved in the
+        # generated JSON schema.
+        schema_model = pydantic.create_model(
+            f"{origin.__name__}RegistrySchema",
+            __config__=ConfigDict(extra="allow"),
+            **{
+                field_name: (field_info.annotation, field_info)
+                for field_name, field_info in origin.model_fields.items()
+            },
+        )
+        model_schema = schema_model.model_json_schema()
 
         schema: JsonSchemaValue = {
             "type": "object",
-            "properties": properties,
+            "properties": model_schema.get("properties", {}),
             "additionalProperties": True,
         }
-        if required:
-            schema["required"] = required
+        if "required" in model_schema:
+            schema["required"] = model_schema["required"]
 
         return schema
 
