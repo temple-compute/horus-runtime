@@ -65,7 +65,17 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     The 'kind' field is used to identify the specific type of workflow.
     """
 
-    name: str
+    kind_name: ClassVar[str] = "BaseWorkflow"
+    """
+    Human-readable name for this workflow type, used in the UI.
+    """
+
+    kind_description: ClassVar[str] = _("Horus base workflow")
+    """
+    Description of this workflow type, used in the UI.
+    """
+
+    name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9 _-]+$")
     """
     Human-readable name for this workflow.
     """

@@ -21,6 +21,7 @@ HorusWorkflow implementation for Horus built-in workflows.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 import yaml
 
@@ -43,6 +44,10 @@ class HorusWorkflow(BaseWorkflow):
     """
 
     kind: str = "horus_workflow"
+    kind_name: ClassVar[str] = "Horus Workflow"
+    kind_description: ClassVar[str] = _(
+        "The default workflow implementation for Horus built-in workflows."
+    )
 
     orchestrator_target: BaseTarget = LocalTarget()
     """

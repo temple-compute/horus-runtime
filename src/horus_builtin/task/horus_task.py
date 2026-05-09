@@ -19,6 +19,8 @@
 Default Horus task implementation.
 """
 
+from typing import ClassVar
+
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
@@ -34,6 +36,8 @@ class HorusTask(BaseTask):
     """
 
     kind: str = "horus_task"
+    kind_name: ClassVar[str] = "Horus Task"
+    kind_description: ClassVar[str] = _("Basic Horus task")
 
     target: BaseTarget = LocalTarget()
     """

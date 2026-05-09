@@ -27,6 +27,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.executor import (
     ExecutorMiddleware,
     ExecutorMiddlewareContext,
@@ -51,6 +52,16 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     kind: str
     """
     The 'kind' field is used to identify the specific type of executor.
+    """
+
+    kind_name: ClassVar[str] = "BaseExecutor"
+    """
+    Human-readable name for this executor type, used in the UI.
+    """
+
+    kind_description: ClassVar[str] = _("Horus base executor")
+    """
+    Description of this executor type, used in the UI.
     """
 
     runtimes: ClassVar[RuntimeFilterType] = (BaseRuntime,)

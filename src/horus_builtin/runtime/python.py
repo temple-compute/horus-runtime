@@ -21,7 +21,7 @@ Python runtime implementation for in-memory workflows.
 
 from collections.abc import Callable
 from inspect import Parameter, signature
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field
 
@@ -39,6 +39,10 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     """
 
     kind: str = "python_function"
+    kind_name: ClassVar[str] = "Python Function"
+    kind_description: ClassVar[str] = _(
+        "Executes a Python function in-memory."
+    )
 
     # Allow callable types in the runtime configuration
     model_config = ConfigDict(arbitrary_types_allowed=True)

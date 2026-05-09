@@ -22,6 +22,7 @@ Local target implementation for executing tasks on the local machine
 
 import asyncio
 import socket
+from typing import ClassVar
 
 from pydantic import PrivateAttr
 
@@ -40,6 +41,11 @@ class LocalTarget(BaseTarget):
     """
 
     kind: str = "local"
+    kind_name: ClassVar[str] = "Local"
+    kind_description: ClassVar[str] = _(
+        "Execute the task on the local machine."
+    )
+
     _task: BaseTask | None = PrivateAttr(default=None)
     _task_future: asyncio.Task[None] | None = PrivateAttr(default=None)
 

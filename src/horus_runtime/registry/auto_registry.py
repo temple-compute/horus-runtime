@@ -25,9 +25,16 @@ new type to a central registry.
 from abc import ABC
 from importlib.metadata import entry_points
 from inspect import isabstract
-from typing import Any, ClassVar, Self, Unpack, final
+from typing import Annotated, Any, ClassVar, Self, Unpack, final
 
-from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
+import pydantic
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+)
+from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
 
 from horus_runtime.i18n import tr as _
@@ -292,7 +299,61 @@ class AutoRegistry(BaseModel, ABC):
             # __get_pydantic_core_schema__ and cause infinite recursion.
             return target_origin.__pydantic_validator__.validate_python(data)
 
-        return core_schema.no_info_plain_validator_function(validate)
+        base_schema = handler(source_type)
+
+        return core_schema.no_info_before_validator_function(
+            validate,
+            base_schema,
+        )
+
+    @final
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        _core_schema: CoreSchema,
+        handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """
+        Generate a custom JSON schema for registry root classes.
+
+        This is eeded when making OpenAPI schemas for FastAPI endpoints that
+        use registry fields.
+        """
+        origin = (
+            getattr(cls, "__pydantic_generic_metadata__", {}).get("origin")
+            or cls
+        )
+
+        if origin not in origin._registry_roots:  # noqa: SLF001
+            return handler(_core_schema)
+
+        properties: dict[str, JsonSchemaValue] = {}
+        required: list[str] = []
+
+        for field_name, field_info in origin.model_fields.items():
+            # Build an Annotated type that carries the FieldInfo so constraints
+            # are preserved, then get its core schema.
+
+            annotated = Annotated[field_info.annotation, field_info]  # type: ignore[name-defined]
+            field_core_schema = pydantic.TypeAdapter(annotated).core_schema
+
+            # Use the parent handler (NOT TypeAdapter.json_schema()) so that
+            # any $defs emitted for complex types are registered in the
+            # caller's GenerateJsonSchema context instead of an isolated one.
+            properties[field_name] = handler(field_core_schema)
+
+            if field_info.is_required():
+                required.append(field_name)
+
+        schema: JsonSchemaValue = {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": True,
+        }
+        if required:
+            schema["required"] = required
+
+        return schema
 
     @final
     @staticmethod

@@ -81,13 +81,13 @@ clean:
 	rm -rf *.egg-info/ build/ dist/
 
 babel-extract:
-	pybabel extract -F $(BABEL_CFG) \
+	uv run pybabel extract -F $(BABEL_CFG) \
 		--project=$(PROJECT_NAME) \
 		--copyright-holder="$(ORGANIZATION)" \
 		-o $(MESSAGES_POT) $(SOURCE_DIR)
 
 babel-update:
-	pybabel update -i $(MESSAGES_POT) -d $(LOCALE_DIR) -D $(DOMAIN) --no-fuzzy-matching
+	uv run pybabel update -i $(MESSAGES_POT) -d $(LOCALE_DIR) -D $(DOMAIN) --no-fuzzy-matching
 
 babel-refresh: babel-extract babel-update
 
@@ -102,7 +102,7 @@ babel-check:
 		fi; \
 	done
 	@echo "Success: All strings are translated."
-	pybabel compile -d $(LOCALE_DIR) -D $(DOMAIN) --statistics
+	uv run pybabel compile -d $(LOCALE_DIR) -D $(DOMAIN) --statistics
 
 babel-add:
-	pybabel init -i $(MESSAGES_POT) -d $(LOCALE_DIR) -l $(LANG) -D $(DOMAIN)
+	uv run pybabel init -i $(MESSAGES_POT) -d $(LOCALE_DIR) -l $(LANG) -D $(DOMAIN)

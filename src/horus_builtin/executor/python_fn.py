@@ -26,6 +26,7 @@ from typing import ClassVar
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.i18n import tr as _
 
 
 class PythonFunctionExecutor(BaseExecutor):
@@ -34,6 +35,10 @@ class PythonFunctionExecutor(BaseExecutor):
     """
 
     kind: str = "python_function"
+    kind_name: ClassVar[str] = "Python Function Executor"
+    kind_description: ClassVar[str] = _(
+        "Executes a Python function in-memory within the Horus runtime."
+    )
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
 

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, ClassVar
 from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -36,6 +37,10 @@ class PythonExecExecutor(BaseExecutor):
     """
 
     kind: str = "python"
+    kind_name: ClassVar[str] = "Python Exec"
+    kind_description: ClassVar[str] = _(
+        "Executes a Python code snippet in-process within the Horus runtime."
+    )
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
 
