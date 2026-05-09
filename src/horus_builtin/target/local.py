@@ -42,7 +42,9 @@ class LocalTarget(BaseTarget):
 
     kind: str = "local"
     kind_name: ClassVar[str] = "Local"
-    kind_description: ClassVar[str] = "Execute the task on the local machine."
+    kind_description: ClassVar[str] = _(
+        "Execute the task on the local machine."
+    )
 
     _task: BaseTask | None = PrivateAttr(default=None)
     _task_future: asyncio.Task[None] | None = PrivateAttr(default=None)

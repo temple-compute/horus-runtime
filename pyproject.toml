@@ -1,44 +1,21 @@
-[build-system]
-requires = ["hatchling>=1.29,<2.0", "uv-dynamic-versioning>=0.14.0,<1.0"]
-build-backend = "hatchling.build"
-
 [project]
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
+license-files = ["LICENSE"]
 dynamic = ["version"]
+
 requires-python = ">=3.13"
-license = { file = "LICENSE" }
 classifiers = [
-    "License :: OSI Approved :: GNU Affero General Public License v3",
-    "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "pydantic~=2.0",
-    "pydantic_settings~=2.0",
-    "pyyaml~=6.0",
-    "loguru~=0.7",
-    "click>=8.3.3",
+  "click>=8.3.3",
+  "loguru~=0.7",
+  "pydantic~=2.0",
+  "pydantic_settings~=2.0",
+  "pyyaml~=6.0",
 ]
-
-[dependency-groups]
-dev = [
-    "ruff~=0.15",
-    "mypy~=1.19",
-    "pytest~=9.0",
-    "pytest-asyncio~=1.3.0",
-    "pytest-cov~=7.0",
-    "pre_commit~=4.0",
-    "licenseheaders~=0.8",
-    "babel~=2.0",
-    "types-PyYAML~=6.0",
-    "uv-dynamic-versioning>=0.14.0",
-]
-
-[tool.hatch.version]
-source = "uv-dynamic-versioning"
-
-[tool.uv-dynamic-versioning]
-fallback-version = "0.0.1"
 
 [project.scripts]
 horus = "horus_runtime.cli:main"
@@ -57,34 +34,14 @@ shell = "horus_builtin.executor.shell"
 python_exec = "horus_builtin.executor.python_exec"
 python_fn = "horus_builtin.executor.python_fn"
 
-[project.entry-points."horus.runtime"]
-command = "horus_builtin.runtime.command"
-python_string = "horus_builtin.runtime.python_string"
-python = "horus_builtin.runtime.python"
-
 [project.entry-points."horus.interaction"]
 common = "horus_builtin.interaction.common"
-
-[project.entry-points."horus.interaction_transport"]
-cli = "horus_builtin.interaction.cli"
 
 [project.entry-points."horus.interaction_renderer"]
 cli = "horus_builtin.interaction.cli"
 
-[project.entry-points."horus.task"]
-horus_task = "horus_builtin.task.horus_task"
-
-[project.entry-points."horus.target"]
-local = "horus_builtin.target.local"
-
-[project.entry-points."horus.workflow"]
-horus_workflow = "horus_builtin.workflow.horus_workflow"
-
-[project.entry-points."horus.subscriber"]
-log_event_subscriber = "horus_builtin.event.log_subscriber"
-
-[project.entry-points."horus.transfer"]
-local_to_local = "horus_builtin.transfer.local_noop"
+[project.entry-points."horus.interaction_transport"]
+cli = "horus_builtin.interaction.cli"
 
 [project.entry-points."horus.middleware.task"]
 task_time = "horus_builtin.middleware.task_time"
@@ -92,68 +49,47 @@ task_time = "horus_builtin.middleware.task_time"
 [project.entry-points."horus.middleware.workflow"]
 workflow_time = "horus_builtin.middleware.workflow_time"
 
-# ================
+[project.entry-points."horus.runtime"]
+command = "horus_builtin.runtime.command"
+python_string = "horus_builtin.runtime.python_string"
+python = "horus_builtin.runtime.python"
+
+[project.entry-points."horus.subscriber"]
+log_event_subscriber = "horus_builtin.event.log_subscriber"
+
+[project.entry-points."horus.target"]
+local = "horus_builtin.target.local"
+
+[project.entry-points."horus.task"]
+horus_task = "horus_builtin.task.horus_task"
+
+[project.entry-points."horus.transfer"]
+local_to_local = "horus_builtin.transfer.local_noop"
+
+[project.entry-points."horus.workflow"]
+horus_workflow = "horus_builtin.workflow.horus_workflow"
+
+[dependency-groups]
+dev = [
+  "babel~=2.0",
+  "licenseheaders~=0.8",
+  "mypy~=1.19",
+  "pre_commit~=4.0",
+  "pytest~=9.0",
+  "pytest-asyncio~=1.3.0",
+  "pytest-cov~=7.0",
+  "ruff~=0.15",
+  "types-PyYAML~=6.0",
+  "uv-dynamic-versioning>=0.14.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.29,<2.0", "uv-dynamic-versioning>=0.14.0,<1.0"]
+build-backend = "hatchling.build"
 
 # Other tool configurations
-[tool.setuptools.package-data]
-horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
-
-[tool.pytest.ini_options]
-minversion = "7.0"
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = """
-    --verbose
-    --cov=src
-    --cov-report=html
-    --cov-report=term-missing
-    --cov-fail-under=90
-"""
-asyncio_mode = "auto"
-
-[tool.ruff]
-line-length = 79
-target-version = "py313"
-exclude = [".git", ".venv", "build", "dist", "__pycache__"]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
-
-[tool.ruff.lint]
-select = [
-    "D",   # pydocstyle
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
-    "PL",  # pylint
-    "RUF", # ruff-specific
-    "ARG", # ruff-arglint
-    "SLF", # ruff-slf
-]
-extend-select = ["T201"] # Prevent use of print()
-
-
-ignore = [
-    "E203", # Whitespace before ':', conflicts with formatter
-    "D104", # Missing docstring in class __init__
-    "D107", # Missing docstring in __init__.py
-    "D205", # 1 blank line required between summary line and description
-    "D212", # Multi-line docstring summary should start at the first line
-    "D200", # One-line docstring should fit on one line
-]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["SLF001"] # Allow private method access in tests
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
 
 [tool.mypy]
 python_version = "3.13"
@@ -165,3 +101,68 @@ plugins = ["pydantic.mypy"]
 init_typed = true
 init_forbid_extra = true
 warn_required_dynamic_aliases = true
+
+[tool.pytest]
+addopts = [
+  "--cov-fail-under=90",
+  "--cov-report=html",
+  "--cov-report=term-missing",
+  "--cov=src",
+  "--verbose",
+]
+minversion = "7.0"
+python_classes = ["Test*"]
+python_files = ["*_test.py", "test_*.py"]
+python_functions = ["test_*"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 79
+target-version = "py313"
+exclude = [".git", ".venv", "build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+  "D",  # pydocstyle
+  "E",  # pycodestyle errors
+  "W",  # pycodestyle warnings
+  "F",  # pyflakes
+  "I",  # isort
+  "N",  # pep8-naming
+  "UP",  # pyupgrade
+  "B",  # flake8-bugbear
+  "PL",  # pylint
+  "RUF",  # ruff-specific
+  "ARG",  # ruff-arglint
+  "SLF",  # ruff-slf
+]
+extend-select = ["T201"]  # Prevent use of print()
+
+ignore = [
+  "E203",  # Whitespace before ':', conflicts with formatter
+  "D104",  # Missing docstring in class __init__
+  "D107",  # Missing docstring in __init__.py
+  "D205",  # 1 blank line required between summary line and description
+  "D212",  # Multi-line docstring summary should start at the first line
+  "D200",  # One-line docstring should fit on one line
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "SLF001",  # Allow private method access in tests
+  "PLR2004"  # Magic number in tests is fine
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.setuptools.package-data]
+horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
+
+[tool.uv-dynamic-versioning]
+fallback-version = "0.0.1"
