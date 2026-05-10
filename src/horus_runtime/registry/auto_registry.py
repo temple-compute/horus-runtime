@@ -27,12 +27,12 @@ from importlib.metadata import entry_points
 from inspect import isabstract
 from typing import Annotated, Any, ClassVar, Self, Unpack, final
 
-import pydantic
 from pydantic import (
     BaseModel,
     ConfigDict,
     GetCoreSchemaHandler,
     GetJsonSchemaHandler,
+    TypeAdapter,
 )
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
@@ -237,48 +237,33 @@ class AutoRegistry(BaseModel, ABC):
         handler: GetCoreSchemaHandler,
     ) -> CoreSchema:
         """
-        Generate a custom Pydantic core schema for registry root classes.
-
-        For root classes (those declared with ``entry_point``), this
-        returns a plain validator that dispatches incoming dicts to the correct
-        concrete subclass based on the discriminator field. For all other
-        classes the default Pydantic schema generation is used.
-
-        This hook is what allows a plain ``BaseArtifact`` field annotation to
-        transparently deserialise into ``S3Artifact``, ``LocalArtifact``, etc.
-        without any per-model boilerplate.
+        Intercept validation of registry root classes to dispatch to the
+        correct concrete subclass based on the discriminator field. If the
+        class being validated is not a registry root, delegate to the default
+        Pydantic schema generation.
         """
-        # Check if this class is a registry root that should intercept
-        # validation
         origin = (
             getattr(cls, "__pydantic_generic_metadata__", {}).get("origin")
             or cls
         )
 
-        # Non-root classes (concrete subclasses) must use Pydantic's default
-        # schema generation. If we intercepted here we would recurse infinitely
-        # because dispatching calls back into validation.
         if origin not in origin._registry_roots:  # noqa: SLF001
             return handler(source_type)
 
         def validate(data: object) -> object:
-            # Already a valid instance of this hierarchy, pass through.
             if isinstance(data, origin):
                 return data
-
             if not isinstance(data, dict):
                 raise TypeError(
                     _("Expected dict or %(origin)s, got %(type)s")
                     % {"origin": origin.__name__, "type": type(data)}
                 )
-
             discriminator = data.get(origin.registry_key)
             if not discriminator:
                 raise ValueError(
                     _("Missing '%(registry_key)s' discriminator in data")
                     % {"registry_key": origin.registry_key}
                 )
-
             target_origin = origin.registry.get(discriminator)
             if target_origin is None:
                 raise ValueError(
@@ -293,67 +278,99 @@ class AutoRegistry(BaseModel, ABC):
                         "registered": tuple(origin.registry.keys()),
                     }
                 )
-
-            # Use the pre-built validator on the concrete class directly.
-            # Calling model_validate() here would re-enter
-            # __get_pydantic_core_schema__ and cause infinite recursion.
             return target_origin.__pydantic_validator__.validate_python(data)
 
-        base_schema = handler(source_type)
+        def _serialize(value: object, info: Any) -> object:
+            # Delegate to the concrete class's own serializer
+            if isinstance(value, BaseModel):
+                mode = getattr(info, "mode", "python")
+                return value.__pydantic_serializer__.to_python(
+                    value, mode=mode
+                )
+            return value
 
-        return core_schema.no_info_before_validator_function(
-            validate,
-            base_schema,
+        # 2. Tell Pydantic to use the base class field schema for OpenAPI.
+        # We cannot call handler(source_type) here because that re-enters
+        # __get_pydantic_core_schema__ for the same root class, returning the
+        # plain_schema we are building (circular).
+        #
+        # The `json_handler` supplied to pydantic_js_functions is a low-level
+        # CallNextHandler that dispatches via generate_for_schema_type and does
+        # NOT go through generate_inner.  That means it bypasses
+        # pydantic_js_functions detection on nested schemas, so we must avoid
+        # passing any AutoRegistry plain-validator core schema through it.
+        #
+        # Strategy:
+        #  * For fields whose annotation is (or contains) an AutoRegistry root,
+        #    emit a generic {"type":"object","additionalProperties":true} so we
+        #    never hand the plain-validator schema to json_handler.
+        #  * For all other fields, delegate to json_handler via TypeAdapter so
+        #    that $defs (enums, regular models …) are registered in the outer
+        #    generator's context rather than in an isolated scope.
+        def _contains_registry_root(ann: Any) -> bool:
+            base = getattr(ann, "__origin__", None) or ann
+            if isinstance(base, type) and base in AutoRegistry._registry_roots:
+                return True
+            return any(
+                _contains_registry_root(arg)
+                for arg in getattr(ann, "__args__", ())
+            )
+
+        def _json_schema_fn(
+            _schema: CoreSchema, json_handler: GetJsonSchemaHandler
+        ) -> JsonSchemaValue:
+            properties: dict[str, JsonSchemaValue] = {}
+            required: list[str] = []
+
+            for name, fi in origin.model_fields.items():
+                annotation: Any = (
+                    fi.annotation if fi.annotation is not None else Any
+                )
+                # Re-attach FieldInfo metadata (min_length, max_length,
+                # ge, le, pattern, …) so constraints survive schema gen.
+                if fi.metadata:
+                    annotation = Annotated[annotation, *fi.metadata]
+                if _contains_registry_root(annotation):
+                    # Avoid handing a plain-validator schema to json_handler;
+                    # emit a generic object schema for registry-typed fields.
+                    field_json: JsonSchemaValue = {
+                        "type": "object",
+                        "additionalProperties": True,
+                    }
+                else:
+                    field_json = json_handler(
+                        TypeAdapter(annotation).core_schema
+                    )
+                if fi.title:
+                    field_json = {**field_json, "title": fi.title}
+                if fi.description:
+                    field_json = {**field_json, "description": fi.description}
+                properties[name] = field_json
+                if fi.is_required():
+                    required.append(name)
+
+            json_schema: JsonSchemaValue = {
+                "type": "object",
+                "title": origin.__name__,
+                "properties": properties,
+            }
+            if required:
+                json_schema["required"] = required
+            # Signal to OpenAPI clients that subclass fields are valid too
+            json_schema["additionalProperties"] = True
+            return json_schema
+
+        plain_schema = core_schema.no_info_plain_validator_function(validate)
+        plain_schema["serialization"] = (
+            core_schema.plain_serializer_function_ser_schema(
+                _serialize,
+                info_arg=True,
+                return_schema=core_schema.any_schema(),
+            )
         )
-
-    @final
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls,
-        _core_schema: CoreSchema,
-        handler: GetJsonSchemaHandler,
-    ) -> JsonSchemaValue:
-        """
-        Generate a custom JSON schema for registry root classes.
-
-        This is eeded when making OpenAPI schemas for FastAPI endpoints that
-        use registry fields.
-        """
-        origin = (
-            getattr(cls, "__pydantic_generic_metadata__", {}).get("origin")
-            or cls
-        )
-
-        if origin not in origin._registry_roots:  # noqa: SLF001
-            return handler(_core_schema)
-
-        properties: dict[str, JsonSchemaValue] = {}
-        required: list[str] = []
-
-        for field_name, field_info in origin.model_fields.items():
-            # Build an Annotated type that carries the FieldInfo so constraints
-            # are preserved, then get its core schema.
-
-            annotated = Annotated[field_info.annotation, field_info]  # type: ignore[name-defined]
-            field_core_schema = pydantic.TypeAdapter(annotated).core_schema
-
-            # Use the parent handler (NOT TypeAdapter.json_schema()) so that
-            # any $defs emitted for complex types are registered in the
-            # caller's GenerateJsonSchema context instead of an isolated one.
-            properties[field_name] = handler(field_core_schema)
-
-            if field_info.is_required():
-                required.append(field_name)
-
-        schema: JsonSchemaValue = {
-            "type": "object",
-            "properties": properties,
-            "additionalProperties": True,
-        }
-        if required:
-            schema["required"] = required
-
-        return schema
+        # 3. Attach the metadata to intercept OpenAPI generation
+        plain_schema["metadata"] = {"pydantic_js_functions": [_json_schema_fn]}
+        return plain_schema
 
     @final
     @staticmethod

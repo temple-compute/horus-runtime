@@ -288,13 +288,31 @@ class TestAutoRegistryPydanticCoreSchema:
             registry_key: ClassVar[str] = "kind"
             add_to_registry: ClassVar[bool] = False
             kind: str
-            name: str = Field(min_length=1, pattern=r"^[a-z_]+$")
+            name: str = Field(
+                min_length=1, max_length=64, pattern=r"^[a-z_]+$"
+            )
             count: int = Field(ge=0, le=100)
 
         schema = pydantic.TypeAdapter(ConstrainedRoot).json_schema()
         properties = schema["properties"]
 
         assert properties["name"].get("minLength") == 1
+        assert properties["name"].get("maxLength") == 64
         assert properties["name"].get("pattern") == r"^[a-z_]+$"
         assert properties["count"].get("minimum") == 0
         assert properties["count"].get("maximum") == 100
+
+    def test_root_schema_preserves_max_length_constraint(self) -> None:
+        """
+        Field(max_length=N) must produce 'maxLength: N' in the emitted JSON
+        schema so that OpenAPI clients enforce the upper bound.
+        """
+
+        class MaxLengthRoot(AutoRegistry, entry_point="max_length_schema"):
+            registry_key: ClassVar[str] = "kind"
+            add_to_registry: ClassVar[bool] = False
+            kind: str
+            tag: str = Field(max_length=10)
+
+        schema = pydantic.TypeAdapter(MaxLengthRoot).json_schema()
+        assert schema["properties"]["tag"].get("maxLength") == 10
