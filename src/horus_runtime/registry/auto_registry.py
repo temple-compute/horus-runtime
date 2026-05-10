@@ -331,12 +331,17 @@ class AutoRegistry(BaseModel, ABC):
                 if fi.metadata:
                     annotation = Annotated[annotation, *fi.metadata]
                 if _contains_registry_root(annotation):
-                    # Avoid handing a plain-validator schema to json_handler;
-                    # emit a generic object schema for registry-typed fields.
-                    field_json: JsonSchemaValue = {
-                        "type": "object",
-                        "additionalProperties": True,
-                    }
+                    # Cannot use json_handler here because it is a low-level
+                    # CallNextHandler that bypasses pydantic_js_functions on
+                    # no_info_plain_validator_function schemas, so
+                    # _json_schema_fn would never be invoked for nested
+                    # registry roots. TypeAdapter.json_schema() traverses the
+                    # full pipeline and correctly calls _json_schema_fn for
+                    # each AutoRegistry root, emitting the base-class fields
+                    # instead of a blank object.
+                    field_json: JsonSchemaValue = TypeAdapter(
+                        annotation
+                    ).json_schema()
                 else:
                     field_json = json_handler(
                         TypeAdapter(annotation).core_schema
