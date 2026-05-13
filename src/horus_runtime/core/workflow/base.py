@@ -33,6 +33,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from pathlib import Path
 from typing import ClassVar, Self, final
+from uuid import UUID, uuid4
 
 from pydantic import Field, model_validator
 
@@ -73,6 +74,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     kind_description: ClassVar[str] = _("Horus base workflow")
     """
     Description of this workflow type, used in the UI.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    """
+    Unique identifier for this workflow instance.
     """
 
     name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9 _-]+$")
