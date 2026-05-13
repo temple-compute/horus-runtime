@@ -76,7 +76,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Description of this workflow type, used in the UI.
     """
 
-    id: UUID = Field(default_factory=uuid4, alias="workflow_id")
+    id: UUID = Field(default_factory=uuid4)
     """
     Unique identifier for this workflow instance.
     """
