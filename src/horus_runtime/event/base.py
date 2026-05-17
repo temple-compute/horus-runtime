@@ -101,4 +101,6 @@ class BaseEvent(AutoRegistry, entry_point="event"):
     Optional dictionary to hold any additional data related to the event.
     """
 
+    payload: dict[str, Any] = Field(default_factory=dict)
+
     model_config = ConfigDict(frozen=True)

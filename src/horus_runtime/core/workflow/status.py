@@ -61,3 +61,8 @@ class WorkflowStatus(Enum):
     PARTIAL workflow can be resumed from the first incomplete task, whereas
     CANCELED implies deliberate termination.
     """
+
+    QUEUED = "queued"
+    """
+    The workflow is waiting to be picked up by a runner.
+    """

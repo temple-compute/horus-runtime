@@ -91,7 +91,15 @@ class HorusEventBus:
         Emit an event to the bus.
         """
         for transport in self._transports:
-            self._event_loop_thread.submit(transport.publish(event))
+            future = self._event_loop_thread.submit(transport.publish(event))
+
+            try:
+                future.result()
+            except Exception as e:
+                horus_logger.log.error(
+                    _("Error publishing event %(event)s: %(error)s")
+                    % {"event": event, "error": str(e)}
+                )
 
         # In-process dispatch to handlers
         self._dispatch(event)

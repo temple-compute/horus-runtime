@@ -23,6 +23,7 @@ horus-runtime.
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Union
 
 from horus_runtime.event.base import BaseEvent
 from horus_runtime.event.bus import HorusEventBus
@@ -30,6 +31,9 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
 from horus_runtime.registry.auto_registry import AutoRegistry
+
+if TYPE_CHECKING:
+    from horus_runtime.core.workflow.base import BaseWorkflow
 
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
 
@@ -58,7 +62,7 @@ class HorusRuntimeWillShutdownEvent(HorusContextEvent):
     event_type: str = "horus_runtime_will_shutdown"
 
 
-@dataclass(frozen=True)
+@dataclass
 class HorusContext:
     """
     Main entry point for horus-runtime. Handles initialization, plugin loading,
@@ -68,6 +72,16 @@ class HorusContext:
     bus: HorusEventBus = field(default_factory=HorusEventBus)
     """
     Event bus for the horus runtime context.
+    """
+
+    workflow: Union["BaseWorkflow", None] = None
+    """
+    Current workflow instance, if any.
+    """
+
+    data: dict[str, Any] = field(default_factory=dict)
+    """
+    Arbitrary dictionary to hold any additional context data.
     """
 
     @staticmethod
