@@ -37,6 +37,7 @@ from uuid import UUID, uuid4
 
 from pydantic import Field, model_validator
 
+from horus_runtime.context import HorusContext
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
@@ -44,6 +45,7 @@ from horus_runtime.core.transfer.exceptions import (
     TransferStrategyNotFoundError,
 )
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.exceptions import OneWorkflowAtATimeError
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -221,6 +223,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
         """
+        # Set the context workflow to self for the duration of the run
+        # so that tasks can access it.
+        ctx = HorusContext.get_context()
+
+        # Only a single workflow run is allowed (for now)
+        if ctx.workflow is not None:
+            raise OneWorkflowAtATimeError(ctx.workflow)
+
+        ctx.workflow = self
+
         self.status = WorkflowStatus.RUNNING
         horus_logger.log.debug(
             _("Workflow %(workflow_name)s status → RUNNING")
@@ -251,6 +263,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 _("Workflow %(workflow_name)s status → COMPLETED")
                 % {"workflow_name": self.name}
             )
+        finally:
+            # Clear the context workflow on exit
+            ctx.workflow = None
 
     @abstractmethod
     async def _run(self) -> None:

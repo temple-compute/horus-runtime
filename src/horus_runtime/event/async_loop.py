@@ -23,6 +23,7 @@ the entire runtime to be async.
 """
 
 import asyncio
+import contextvars
 import threading
 from collections.abc import Coroutine
 from concurrent.futures import Future
@@ -55,7 +56,16 @@ class BusAsyncLoopThread:
         """
         Submit a coroutine to be run on the event loop thread.
         """
-        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+        # Ensure the coroutine runs with the same context as the caller,
+        # so that context variables are preserved across threads.
+        current_ctx = contextvars.copy_context()
+
+        # A wrapper is needed to run the coroutine with the copied context on
+        # the event loop thread.
+        async def _wrapper() -> None:
+            await asyncio.create_task(coro, context=current_ctx)
+
+        return asyncio.run_coroutine_threadsafe(_wrapper(), self._loop)
 
     def stop(self) -> None:
         """
