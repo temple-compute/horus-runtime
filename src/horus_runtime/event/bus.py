@@ -90,9 +90,12 @@ class HorusEventBus:
         """
         Emit an event to the bus.
         """
-        for transport in self._transports:
-            future = self._event_loop_thread.submit(transport.publish(event))
+        futures = [
+            self._event_loop_thread.submit(transport.publish(event))
+            for transport in self._transports
+        ]
 
+        for future in futures:
             try:
                 future.result()
             except Exception as e:
