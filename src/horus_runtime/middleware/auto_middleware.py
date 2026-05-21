@@ -142,9 +142,13 @@ class AutoMiddleware[T = Any](ABC):
                 return await call_next()
 
             middleware = middlewares[index]
+
+            async def next_call() -> R:
+                return await invoke(index + 1)
+
             return await middleware.wrap(
                 context,
-                lambda: invoke(index + 1),
+                next_call,
             )
 
         return await invoke(0)
