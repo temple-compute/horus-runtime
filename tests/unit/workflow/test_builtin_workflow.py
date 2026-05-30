@@ -21,7 +21,7 @@ Unit tests for the Workflow class.
 
 import textwrap
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -33,10 +33,12 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.exceptions import (
     TaskExecutionError,
     TaskMissingIdError,
 )
+from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from tests.conftest import MakeTaskType, MakeWorkflowFileType
 
 
@@ -73,7 +75,7 @@ class TestWorkflowConstruction:
         assert wf.name == "test_workflow"
         assert isinstance(wf, HorusWorkflow)
         assert wf.kind == "horus_workflow"
-        assert "t1" in wf.tasks
+        assert "t1" in [t.id for t in wf.tasks]
 
     def test_tasks_preserve_order(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
@@ -116,14 +118,14 @@ class TestWorkflowConstruction:
             """)
         wf_file = make_workflow_file(tmp_path, wf_content)
         wf = HorusWorkflow.from_yaml(wf_file)
-        assert list(wf.tasks.keys()) == ["a", "b", "c"]
+        assert [t.id for t in wf.tasks] == ["a", "b", "c"]
 
     def test_empty_tasks(self) -> None:
         """
-        Test that a workflow can be created with an empty tasks dictionary.
+        Test that a workflow can be created with an empty tasks list.
         """
-        wf = HorusWorkflow(name="empty", tasks={})
-        assert wf.tasks == {}
+        wf = HorusWorkflow(name="empty", tasks=[])
+        assert wf.tasks == []
 
 
 @pytest.mark.unit
@@ -158,7 +160,7 @@ class TestWorkflowRun:
         wf = HorusWorkflow.from_yaml(wf_file)
 
         with patch.object(HorusTask, "run") as mock_run:
-            await wf.run()
+            await wf.run(trigger_id="test_task_id")
 
         mock_run.assert_awaited_once()
 
@@ -199,7 +201,7 @@ class TestWorkflowRun:
             patch.object(FileArtifact, "exists", return_value=True),
             patch.object(HorusTask, "_run") as mock_run,
         ):
-            await wf.run()
+            await wf.run(trigger_id="test_task_id")
 
         mock_run.assert_not_called()
 
@@ -217,8 +219,8 @@ class TestWorkflowRun:
 
         task_a = make_shell_task(cmd="echo A")
         task_b = make_shell_task(cmd="echo B")
-        wf = HorusWorkflow(name="order_test", tasks={"a": task_a, "b": task_b})
-        await wf.run()
+        wf = HorusWorkflow(name="order_test", tasks=[task_a, task_b])
+        await wf.run(trigger_id="test_task_id")
 
         # Two tasks, two calls
         function_calls = 2
@@ -246,19 +248,19 @@ class TestWorkflowRun:
         task_a = TaskWithFailure(
             id="test_task_id",
             name="test_task",
-            inputs={},
-            outputs={},
+            inputs=[],
+            outputs=[],
             runtime=CommandRuntime(command="echo A"),
             executor=ShellExecutor(),
             target=LocalTarget(),
         )
         task_b = make_shell_task(cmd="echo B")
 
-        wf = HorusWorkflow(name="stop_test", tasks={"a": task_a, "b": task_b})
+        wf = HorusWorkflow(name="stop_test", tasks=[task_a, task_b])
         with pytest.raises(TaskExecutionError):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = Mock(returncode=0)
-                await wf.run()
+                await wf.run(trigger_id="test_task_id")
 
         assert task_a.runs == 1
         assert task_b.runs == 0
@@ -268,10 +270,10 @@ class TestWorkflowRun:
         Test that running an empty workflow completes without error.
         """
         # Empty flow
-        wf = HorusWorkflow(name="empty", tasks={})
+        wf = HorusWorkflow(name="empty", tasks=[])
 
         # Should complete without error
-        await wf.run()
+        await wf.run(trigger_id="test_task_id")
 
     async def test_run_raises_when_task_has_no_id(
         self, make_shell_task: MakeTaskType, horus_context: HorusContext
@@ -286,7 +288,7 @@ class TestWorkflowRun:
 
         wf = HorusWorkflow(
             name="missing_id",
-            tasks={"orphan": task},
+            tasks=[task],
         )
 
         # Manually patch the task to remove the ID
@@ -295,4 +297,120 @@ class TestWorkflowRun:
         with (
             pytest.raises(TaskMissingIdError),
         ):
-            await wf.run()
+            await wf.run(trigger_id="test_task_id")
+
+
+@pytest.mark.unit
+class TestTransferArtifactsProducerMap:
+    """
+    Tests for ``transfer_artifacts`` source resolution. The producer map must
+    cover every task in the workflow, not just those defined before the task
+    being dispatched, because tasks may execute in topological (DAG) order that
+    differs from definition order.
+    """
+
+    @staticmethod
+    def _make_task(
+        *,
+        task_id: str,
+        inputs: list[FileArtifact],
+        outputs: list[FileArtifact],
+        target: LocalTarget,
+    ) -> HorusTask:
+        return HorusTask(
+            id=task_id,
+            name=task_id,
+            inputs=cast(list[BaseArtifact], inputs),
+            outputs=cast(list[BaseArtifact], outputs),
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=target,
+        )
+
+    async def test_producer_defined_after_consumer_resolves_to_producer(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        When a producer task is defined *after* its consumer in ``tasks`` (a
+        valid DAG ordering), the consumer's input artifact must resolve to the
+        producer's target, not be misclassified as a root input sourced from
+        ``orchestrator_target``.
+        """
+        producer_target = LocalTarget()
+        consumer_target = LocalTarget()
+        artifact_path = tmp_path / "x.txt"
+
+        producer = self._make_task(
+            task_id="producer",
+            inputs=[],
+            outputs=[FileArtifact(id="art_x", path=artifact_path)],
+            target=producer_target,
+        )
+        consumer = self._make_task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="art_x", path=artifact_path)],
+            outputs=[],
+            target=consumer_target,
+        )
+
+        # Consumer is listed BEFORE its producer on purpose.
+        wf = HorusWorkflow(name="dag_order", tasks=[consumer, producer])
+
+        captured: dict[str, object] = {}
+
+        class _RecordingStrategy:
+            async def transfer(
+                self, artifact: object, source: object, dest: object
+            ) -> None:
+                del artifact
+                captured["source"] = source
+                captured["dest"] = dest
+
+        with patch.object(
+            BaseTransferStrategy,
+            "get_from_registry",
+            return_value=_RecordingStrategy,
+        ) as mock_get:
+            await wf.transfer_artifacts(consumer)
+
+        # The source must be the producer's target — proving the producer was
+        # found in the map despite being defined after the consumer.
+        assert captured["source"] is producer_target
+        assert captured["dest"] is consumer_target
+        assert mock_get.call_args.args[0] is producer_target
+        # And specifically not the orchestrator fallback.
+        assert captured["source"] is not wf.orchestrator_target
+
+    async def test_input_without_producer_falls_back_to_orchestrator(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A genuine root input (no producing task) still resolves to
+        ``orchestrator_target``.
+        """
+        consumer_target = LocalTarget()
+        consumer = self._make_task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="root_art", path=tmp_path / "r.txt")],
+            outputs=[],
+            target=consumer_target,
+        )
+        wf = HorusWorkflow(name="root_only", tasks=[consumer])
+
+        captured: dict[str, object] = {}
+
+        class _RecordingStrategy:
+            async def transfer(
+                self, artifact: object, source: object, dest: object
+            ) -> None:
+                del artifact, dest
+                captured["source"] = source
+
+        with patch.object(
+            BaseTransferStrategy,
+            "get_from_registry",
+            return_value=_RecordingStrategy,
+        ):
+            await wf.transfer_artifacts(consumer)
+
+        assert captured["source"] is wf.orchestrator_target

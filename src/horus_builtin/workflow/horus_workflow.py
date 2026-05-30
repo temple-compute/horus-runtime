@@ -66,15 +66,10 @@ class HorusWorkflow(BaseWorkflow):
 
     async def _run(self, trigger_id: str) -> None:
         """
-        Tasks are executed in definition order. A task is skipped when all of
+        A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
         """
         tasks = {task.id: task for task in self.tasks}
-
-        if trigger_id not in tasks:
-            raise ValueError(
-                f"Trigger task ID '{trigger_id}' not found in workflow tasks."
-            )
 
         plan = execution_plan(self.tasks, trigger_id=trigger_id)
 

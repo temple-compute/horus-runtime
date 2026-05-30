@@ -54,7 +54,7 @@ class MakeTaskType(Protocol):
     def __call__(
         self,
         cmd: str = ...,
-        inputs: dict[str, BaseArtifact] | None = ...,
+        inputs: list[BaseArtifact] | None = ...,
     ) -> HorusTask:
         """Create a HorusTask with the given command and inputs."""
         ...
@@ -68,13 +68,13 @@ def make_shell_task() -> MakeTaskType:
 
     def _make_shell_task(
         cmd: str = "echo 'Hello World'",
-        inputs: dict[str, BaseArtifact] | None = None,
+        inputs: list[BaseArtifact] | None = None,
     ) -> HorusTask:
         return HorusTask(
             name="test_task",
             id="test_task_id",
-            inputs=inputs or {},
-            outputs={},
+            inputs=inputs or [],
+            outputs=[],
             runtime=CommandRuntime(command=cmd),
             executor=ShellExecutor(),
             target=LocalTarget(),

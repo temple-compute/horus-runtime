@@ -156,8 +156,9 @@ def topological_sort(
                 queue.append(dependent)
 
     if len(result) != len(task_ids):
+        remaining = sorted(task_ids - set(result))
         raise CyclicDependencyError(
-            _("Cycle detected among tasks: " + str(task_ids - set(result)))
+            _("Cycle detected among tasks: %(tasks)s") % {"tasks": remaining}
         )
 
     return result
@@ -165,28 +166,24 @@ def topological_sort(
 
 def execution_plan(
     tasks: list[BaseTask],
-    trigger_id: str | None = None,
+    trigger_id: str,
 ) -> list[str]:
     """
     Returns an ordered list of task_ids to execute.
 
-    If trigger_id is None, the full DAG is executed in topological order.
-    If trigger_id is given, the scope is the trigger task plus its ancestors
-    (upstream tasks needed to provide its inputs) and its descendants
-    (downstream tasks that consume its outputs). Unrelated branches are
-    excluded entirely. Ancestors whose outputs already exist are skipped at
-    run time by ``BaseTask.run`` via ``is_complete``.
+    The scope is the trigger task plus all downstream
+    tasks that (transitively) depend on it, and any upstream dependencies
+    required to execute those downstream tasks. Unrelated branches are excluded
+    entirely. Tasks whose outputs already exist are skipped at run time by
+    ``BaseTask.run`` via ``is_complete``.
 
     Raises UnknownTaskError if trigger_id is not in tasks.
     """
     task_ids = {task.id for task in tasks}
-    if trigger_id is not None and trigger_id not in task_ids:
+    if trigger_id not in task_ids:
         raise UnknownTaskError(f"Trigger task '{trigger_id}' not found.")
 
     producers = build_artifact_producers(tasks)
     deps = build_dependencies(tasks, producers)
-    if trigger_id is None:
-        scope = task_ids
-    else:
-        scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
+    scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
     return topological_sort(scope, deps)

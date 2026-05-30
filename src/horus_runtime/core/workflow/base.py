@@ -24,9 +24,10 @@ outputs already exist, because the workflow treats output artifact presence
 as proof of prior successful completion. Any task with no declared outputs
 always runs unconditionally.
 
-The workflow executes tasks in the order they are defined. It does not
-currently perform dependency resolution; ordering is the author's
-responsibility when writing the workflow YAML file.
+Task ordering and dependency resolution are delegated to the concrete
+workflow implementation. For example, :class:`HorusWorkflow` resolves
+dependencies from artifact producer/consumer relationships and executes tasks
+in topological (DAG) order, which may differ from the order they are defined.
 """
 
 from abc import abstractmethod
@@ -181,7 +182,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         The source target for each artifact is resolved as follows:
 
-        1. If the artifact id matches an output of a previously defined task,
+        1. If the artifact id matches an output of any task in the workflow,
            that task's target is used as the source.
         2. Otherwise the artifact is treated as a root input (user-provided)
            and ``self.orchestrator_target`` is used as the source. If
@@ -199,14 +200,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
         # Build a reverse map: artifact id → the target of the task that
         # produced it. This covers outputs of every task in the workflow,
-        # not just the ones that have already run.
+        # regardless of definition order: tasks may execute in topological
+        # (DAG) order, so a producer can run before a consumer even when it is
+        # defined later in ``self.tasks``. Artifact ids are validated unique
+        # (see ``check_unique_artifact_ids``), so this mapping is unambiguous.
         id_to_source: dict[str, BaseTarget] = {}
         for t in self.tasks:
-            # Build the producer map only from tasks defined earlier than the
-            # task being dispatched.
-            # TODO: BUILD DAG
-            if t is task:
-                break
             for artifact in t.outputs:
                 id_to_source[artifact.id] = t.target
 

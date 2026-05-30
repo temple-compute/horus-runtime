@@ -80,7 +80,7 @@ class FunctionTask(HorusTask):
         within a workflow.
 
         Usage:
-            @FunctionTask.task(wf, inputs={"data": my_artifact})
+            @FunctionTask.task(wf, inputs=[...], outputs=[...])
             def process(data: FileArtifact) -> None: ...
         """
 
