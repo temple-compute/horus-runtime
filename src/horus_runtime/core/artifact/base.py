@@ -73,6 +73,12 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     # to determine how to register subclasses of Artifact in the registry.
     registry_key: ClassVar[str] = "kind"
 
+    kind_name: ClassVar[str] = "BaseArtifact"
+    """Human-readable name for this artifact kind."""
+
+    kind_description: ClassVar[str] = ""
+    """Description of this artifact kind."""
+
     id: str
     """
     The artifact's user-friendly ID. This Id is used to sort task dependencies

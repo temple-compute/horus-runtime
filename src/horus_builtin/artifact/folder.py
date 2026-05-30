@@ -25,6 +25,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -37,6 +38,10 @@ class FolderArtifact(BaseArtifact[Path]):
     """
 
     kind: str = "folder"
+    kind_name: ClassVar[str] = "Folder"
+    kind_description: ClassVar[str] = (
+        "A directory artifact containing multiple files."
+    )
 
     def exists(self) -> bool:
         """

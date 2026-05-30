@@ -160,13 +160,13 @@ class TestHorusTask:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={"input1": input_artifact},
-            outputs={"output1": output_artifact},
+            inputs=[input_artifact],
+            outputs=[output_artifact],
         )
 
         assert task.kind == "horus_task"
-        assert "input1" in task.inputs
-        assert "output1" in task.outputs
+        assert "input1" in {a.id for a in task.inputs}
+        assert "output1" in {a.id for a in task.outputs}
 
 
 @pytest.mark.unit
@@ -189,7 +189,7 @@ class TestHorusTaskExecution:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={"input1": input_artifact},
+            inputs=[input_artifact],
         )
 
         with pytest.raises(ArtifactDoesNotExistError):
@@ -204,7 +204,7 @@ class TestHorusTaskExecution:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={},  # No inputs to avoid file existence issues
+            inputs=[],  # No inputs to avoid file existence issues
         )
 
         mock_process = AsyncMock()
@@ -254,7 +254,7 @@ class TestHorusTaskExecution:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={},  # No inputs
+            inputs=[],  # No inputs
         )
 
         mock_process_ok = AsyncMock()
@@ -290,7 +290,7 @@ class TestHorusTaskExecution:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo 'Hello World'"),
-            inputs={"input1": input_artifact1, "input2": input_artifact2},
+            inputs=[input_artifact1, input_artifact2],
         )
 
         # Should raise error when processing the inputs

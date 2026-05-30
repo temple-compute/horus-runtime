@@ -37,10 +37,10 @@ class _TaskNamespace:
     def __init__(self, task: "BaseTask"):
         for name, value in vars(task).items():
             setattr(self, name, value)
-        for name, artifact in task.inputs.items():
-            setattr(self, name, artifact)
-        for name, artifact in task.outputs.items():
-            setattr(self, name, artifact)
+        for artifact in task.inputs:
+            setattr(self, artifact.id, artifact)
+        for artifact in task.outputs:
+            setattr(self, artifact.id, artifact)
 
 
 class CommandRuntime(BaseRuntime[str]):
@@ -72,10 +72,13 @@ class CommandRuntime(BaseRuntime[str]):
         returning the command as is, since there are no placeholders to
         replace.
         """
+        inputs = {artifact.id: artifact for artifact in task.inputs}
+        outputs = {artifact.id: artifact for artifact in task.outputs}
+
         fmt_kwargs = {
             "task": _TaskNamespace(task),
-            **task.inputs,
-            **task.outputs,
+            **inputs,
+            **outputs,
         }
 
         fmt = self.command.format(**fmt_kwargs)

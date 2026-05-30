@@ -115,7 +115,7 @@ class TestFunctionTaskDecorator:
         def my_func() -> None:
             pass
 
-        assert "my_func" in wf.tasks
+        assert "my_func" in [t.id for t in wf.tasks]
 
     def test_decorator_uses_function_name_as_task_name(self) -> None:
         """
@@ -127,7 +127,8 @@ class TestFunctionTaskDecorator:
         def some_step() -> None:
             pass
 
-        assert wf.tasks["some_step"].name == "some_step"
+        task = wf.tasks[0]
+        assert task.name == "some_step"
 
     def test_decorator_accepts_custom_name(self) -> None:
         """
@@ -139,8 +140,10 @@ class TestFunctionTaskDecorator:
         def my_func() -> None:
             pass
 
-        assert "custom_name" in wf.tasks
-        assert wf.tasks["custom_name"].name == "custom_name"
+        task = wf.tasks[0]
+        assert task.name == "custom_name"
+        # No explicit id was given, so it defaults to the function name.
+        assert task.id == "my_func"
 
     def test_decorator_returns_function_task_instance(self) -> None:
         """
@@ -182,7 +185,8 @@ class TestFunctionTaskDecorator:
         def my_step() -> None:
             pass
 
-        task = wf.tasks["my_step"]
+        task = wf.tasks[0]
+        assert task.name == "my_step"
         assert task.id == task.name
 
     def test_decorator_custom_name_sets_task_id_matching_workflow_key(
@@ -200,7 +204,7 @@ class TestFunctionTaskDecorator:
         def my_func() -> None:
             pass
 
-        task = wf.tasks["custom_step"]
+        task = wf.tasks[0]
         assert task.name == "custom_step"
         assert task.id == "custom_step_id"
 
@@ -217,14 +221,15 @@ class TestFunctionTaskDecorator:
 
             @FunctionTask.task(
                 wf,
-                inputs={"data": FileArtifact(id="data", path=tmp_path_file)},
+                inputs=[FileArtifact(id="data", path=tmp_path_file)],
             )
             def my_func(wrong_name: FileArtifact) -> None:
                 pass
 
             # Try to run the task to trigger the setup_runtime logic that
             # checks parameter names.
-            await wf.tasks["my_func"].run()
+            task = wf.tasks[0]
+            await task.run()
 
 
 @pytest.mark.unit
@@ -328,11 +333,11 @@ class TestFunctionTaskExecution:
         Declared inputs and outputs should be injected by key name.
         """
         input_artifact = FileArtifact(
-            id="input",
+            id="input_file",
             path=tmp_path / "input.txt",
         )
         output_artifact = FileArtifact(
-            id="output",
+            id="output_file",
             path=tmp_path / "output.txt",
         )
         input_artifact.path.write_text("hello")
@@ -347,8 +352,8 @@ class TestFunctionTaskExecution:
             id="artifact_task",
             name="artifact_task",
             runtime=PythonFunctionRuntime(func=artifact_aware_func),
-            inputs={"input_file": input_artifact},
-            outputs={"output_file": output_artifact},
+            inputs=[input_artifact],
+            outputs=[output_artifact],
         )
 
         await task.run()

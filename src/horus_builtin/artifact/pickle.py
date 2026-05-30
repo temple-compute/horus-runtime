@@ -21,7 +21,7 @@ to disk using the pickle protocol.
 """
 
 import pickle
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -37,6 +37,10 @@ class PickleArtifact[T: Any = Any](BaseArtifact[T]):
     """
 
     kind: str = "pickle"
+    kind_name: ClassVar[str] = "Pickle"
+    kind_description: ClassVar[str] = (
+        "A serialized Python object artifact (pickle format)."
+    )
 
     def read(self) -> T:
         """

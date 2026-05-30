@@ -63,14 +63,11 @@ class HorusTask(BaseTask):
         self.runs += 1
 
         # Gather inputs
-        for (
-            input_name,
-            artifact,
-        ) in self.inputs.items():
+        for artifact in self.inputs:
             if not artifact.exists():
                 raise ArtifactDoesNotExistError(
-                    _("Input artifact '%(input_name)s' does not exist")
-                    % {"input_name": input_name}
+                    _("Input artifact '%(input_id)s' does not exist")
+                    % {"input_id": artifact.id}
                 )
 
         # Execute the command using the executor
@@ -86,7 +83,7 @@ class HorusTask(BaseTask):
         if not self.outputs:
             return False
 
-        for artifact in self.outputs.values():
+        for artifact in self.outputs:
             if not artifact.exists():
                 return False
 
@@ -108,7 +105,7 @@ class HorusTask(BaseTask):
             )
         )
 
-        for artifact in self.outputs.values():
+        for artifact in self.outputs:
             artifact.delete()
 
         self.runs = 0

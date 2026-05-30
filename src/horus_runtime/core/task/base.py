@@ -78,13 +78,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Human-readable name for this task.
     """
 
-    inputs: dict[str, BaseArtifact] = Field(default_factory=dict)
+    inputs: list[BaseArtifact] = Field(default_factory=list)
     """
     Input artifacts for this task. These are the artifacts that the task
     depends on.
     """
 
-    outputs: dict[str, BaseArtifact] = Field(default_factory=dict)
+    outputs: list[BaseArtifact] = Field(default_factory=list)
     """
     Output artifacts for this task. These are the artifacts that the task
     produces.

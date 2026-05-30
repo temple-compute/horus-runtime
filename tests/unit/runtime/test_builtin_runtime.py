@@ -114,7 +114,7 @@ class TestCommandRuntime:
         del horus_context
         task = make_shell_task(
             cmd="echo 'Input artifact path is {input1.path}'",
-            inputs={"input1": FileArtifact(id="input1", path=Path("test"))},
+            inputs=[FileArtifact(id="input1", path=Path("test"))],
         )
 
         formatted_cmd = await task.runtime.setup_runtime(task)

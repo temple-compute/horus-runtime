@@ -26,8 +26,8 @@ from typing import ClassVar
 import yaml
 
 from horus_builtin.target.local import LocalTarget
+from horus_builtin.workflow.dag import execution_plan
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.exceptions import TaskMissingIdError
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 
@@ -64,21 +64,17 @@ class HorusWorkflow(BaseWorkflow):
         with Path(path).open("r", encoding="utf-8") as fh:
             return cls.model_validate(yaml.safe_load(fh))
 
-    async def _run(self) -> None:
+    async def _run(self, trigger_id: str) -> None:
         """
-        Tasks are executed in definition order. A task is skipped when all of
+        A task is skipped when all of
         its output artifacts exist (see :meth:`is_complete`).
         """
-        for task in self.tasks.values():
-            if task.id is None:
-                raise TaskMissingIdError(
-                    _(
-                        "Task '%(task_name)s' has no task_id. Ensure tasks"
-                        " added after workflow construction have task_id"
-                        " explicitly set."
-                    )
-                    % {"task_name": task.name}
-                )
+        tasks = {task.id: task for task in self.tasks}
+
+        plan = execution_plan(self.tasks, trigger_id=trigger_id)
+
+        for task_id in plan:
+            task = tasks[task_id]
 
             # Transfer input artifacts to the task's target as needed.
             await self.transfer_artifacts(task)
@@ -94,5 +90,5 @@ class HorusWorkflow(BaseWorkflow):
         Reset the workflow by deleting all output artifacts of all tasks in the
         workflow. This allows the workflow to be re-run from scratch.
         """
-        for task in self.tasks.values():
+        for task in self.tasks:
             task.reset()

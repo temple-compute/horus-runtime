@@ -20,6 +20,8 @@ Implementation of the FileArtifact class, which represents a local
 file artifact in the Horus runtime.
 """
 
+from typing import ClassVar
+
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
 
@@ -30,6 +32,8 @@ class FileArtifact(BaseArtifact[str]):
     """
 
     kind: str = "file"
+    kind_name: ClassVar[str] = "File"
+    kind_description: ClassVar[str] = "A plain text file artifact."
 
     def read(self) -> str:
         """

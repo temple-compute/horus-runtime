@@ -160,8 +160,8 @@ class TestLocalTargetDispatch:
         task = FunctionTask(
             id="slow_task",
             name="slow_task",
-            inputs={},
-            outputs={},
+            inputs=[],
+            outputs=[],
             runtime=PythonFunctionRuntime(func=run_slow_task),
         )
 
