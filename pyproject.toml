@@ -91,6 +91,15 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/horus_runtime", "src/horus_builtin"]
+# Compiled translations are git-ignored (*.mo) but must ship in the wheel.
+artifacts = ["src/horus_runtime/locale/**/*.mo"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/horus_runtime", "src/horus_builtin", "tests"]
+artifacts = ["src/horus_runtime/locale/**/*.mo"]
+
 [tool.mypy]
 python_version = "3.13"
 strict = true
@@ -160,9 +169,6 @@ convention = "google"
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-[tool.setuptools.package-data]
-horus_runtime = ["py.typed", "locale/**/LC_MESSAGES/*.mo"]
 
 [tool.uv-dynamic-versioning]
 fallback-version = "0.0.1"
