@@ -21,6 +21,7 @@ DAG utilities for Horus built-in workflows.
 
 from __future__ import annotations
 
+import heapq
 from typing import TYPE_CHECKING
 
 from horus_runtime.core.workflow.exceptions import (
@@ -144,16 +145,20 @@ def topological_sort(
             dependents[dep].add(t)
 
     # Sorted for deterministic output when multiple tasks are unblocked.
-    queue: list[str] = sorted(t for t in task_ids if in_degree[t] == 0)
-    result: list[str] = []
+    heap = [t for t in task_ids if in_degree[t] == 0]
+    heapq.heapify(heap)  # O(V)
 
-    while queue:
-        node = queue.pop(0)
+    result: list[str] = []
+    while heap:
+        node = heapq.heappop(heap)  # O(log V)
         result.append(node)
-        for dependent in sorted(dependents[node]):
+        for dependent in dependents[node]:
             in_degree[dependent] -= 1
             if in_degree[dependent] == 0:
-                queue.append(dependent)
+                heapq.heappush(heap, dependent)  # O(log V)
+
+    # Total complexity: O((V + E) x log V)
+    # where V = len(task_ids) and E = sum of dependencies among task_ids.
 
     if len(result) != len(task_ids):
         remaining = sorted(task_ids - set(result))
