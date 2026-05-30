@@ -72,8 +72,8 @@ def _make_concrete_task(cmd: str = "echo test") -> ConcreteTestTask:
     return ConcreteTestTask(
         id="test_task_id",
         name="test_task",
-        inputs={},
-        outputs={},
+        inputs=[],
+        outputs=[],
         runtime=CommandRuntime(command=cmd),
         executor=ShellExecutor(),
         target=LocalTarget(),
@@ -239,8 +239,8 @@ class TestBaseTaskValidation:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
-            inputs={},
-            outputs={},
+            inputs=[],
+            outputs=[],
         )
 
         assert task.kind == "test_task"
@@ -263,14 +263,16 @@ class TestBaseTaskValidation:
             name="test_task",
             executor=ShellExecutor(),
             runtime=CommandRuntime(command="echo test"),
-            inputs={"input1": input_artifact},
-            outputs={"output1": output_artifact},
+            inputs=[input_artifact],
+            outputs=[output_artifact],
         )
 
-        assert "input1" in task.inputs
-        assert "output1" in task.outputs
-        assert isinstance(task.inputs["input1"], FileArtifact)
-        assert isinstance(task.outputs["output1"], FileArtifact)
+        inputs_by_id = {a.id: a for a in task.inputs}
+        outputs_by_id = {a.id: a for a in task.outputs}
+        assert "input_file_artifact" in inputs_by_id
+        assert "output_file_artifact" in outputs_by_id
+        assert isinstance(inputs_by_id["input_file_artifact"], FileArtifact)
+        assert isinstance(outputs_by_id["output_file_artifact"], FileArtifact)
 
 
 @pytest.mark.unit

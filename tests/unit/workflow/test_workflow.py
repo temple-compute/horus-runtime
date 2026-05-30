@@ -47,10 +47,11 @@ class ConcreteWorkflow(BaseWorkflow):
             data = yaml.safe_load(fh)
             return cls.model_validate(data)
 
-    async def _run(self) -> None:
+    async def _run(self, trigger_id: str) -> None:
         """
         Run the workflow by executing all its tasks.
         """
+        del trigger_id
 
     def _reset(self) -> None:
         """
@@ -76,22 +77,21 @@ class TestWorkflowFromYaml:
         name: yaml_workflow
         kind: concrete_workflow
         tasks:
-            step1_id:
-                id: step1_id
-                name: Step 1
-                kind: horus_task
-                runtime:
-                    kind: command
-                    command: "echo hello"
-                executor:
-                    kind: shell
+            - id: step1_id
+              name: Step 1
+              kind: horus_task
+              runtime:
+                  kind: command
+                  command: "echo hello"
+              executor:
+                  kind: shell
         """)
 
         workflow_file = make_workflow_file(tmp_path, wf_content)
         wf = ConcreteWorkflow.from_yaml(workflow_file)
 
         assert wf.name == "yaml_workflow"
-        assert "step1_id" in wf.tasks
+        assert "step1_id" in [t.id for t in wf.tasks]
 
     def test_from_yaml_accepts_string_path(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
@@ -103,21 +103,20 @@ class TestWorkflowFromYaml:
         name: str_path
         kind: concrete_workflow
         tasks:
-            t1_id:
-                id: t1_id
-                name: Task 1
-                kind: horus_task
-                runtime:
-                    kind: command
-                    command: "echo hi"
-                executor:
-                    kind: shell
+            - id: t1_id
+              name: Task 1
+              kind: horus_task
+              runtime:
+                  kind: command
+                  command: "echo hi"
+              executor:
+                  kind: shell
         """)
 
         workflow_file = make_workflow_file(tmp_path, wf_contents)
         wf = ConcreteWorkflow.from_yaml(str(workflow_file))
         assert wf.name == "str_path"
-        assert "t1_id" in wf.tasks
+        assert "t1_id" in [t.id for t in wf.tasks]
 
     def test_from_yaml_invalid_schema_raises(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
@@ -128,13 +127,13 @@ class TestWorkflowFromYaml:
         bad_schema = textwrap.dedent("""\
         name: bad
         tasks:
-            t1:
-                kind: definitely_not_a_registered_kind
-                runtime:
-                    kind: command
-                    command: "echo"
-                executor:
-                    kind: shell
+            - id: t1
+              kind: definitely_not_a_registered_kind
+              runtime:
+                  kind: command
+                  command: "echo"
+              executor:
+                  kind: shell
         """)
 
         wf_file = make_workflow_file(tmp_path, bad_schema)
