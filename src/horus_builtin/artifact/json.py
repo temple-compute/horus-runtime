@@ -21,7 +21,7 @@ folder/directory artifact in the Horus runtime.
 """
 
 import json
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -34,6 +34,8 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T]):
     """
 
     kind: str = "json"
+    kind_name: ClassVar[str] = "JSON"
+    kind_description: ClassVar[str] = "A JSON-serializable data artifact."
 
     def read(self) -> T:
         """

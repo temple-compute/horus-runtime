@@ -67,11 +67,14 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
         # Get the function signature (args and kwargs)
         sig = signature(self.func)
 
+        inputs = {artifact.id: artifact for artifact in task.inputs}
+        outputs = {artifact.id: artifact for artifact in task.outputs}
+
         # Define the allowed parameter names for the function:
         # inputs and outputs
         kwargs: dict[str, BaseArtifact | BaseTask] = {
-            **task.inputs,
-            **task.outputs,
+            **inputs,
+            **outputs,
         }
 
         # Verify that there is no argument that will override the "task"

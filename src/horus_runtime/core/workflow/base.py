@@ -31,6 +31,7 @@ responsibility when writing the workflow YAML file.
 
 from abc import abstractmethod
 from asyncio import CancelledError
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import ClassVar, Self, final
 from uuid import UUID, uuid4
@@ -38,6 +39,7 @@ from uuid import UUID, uuid4
 from pydantic import Field, model_validator
 
 from horus_runtime.context import HorusContext
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
@@ -45,7 +47,11 @@ from horus_runtime.core.transfer.exceptions import (
     TransferStrategyNotFoundError,
 )
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
-from horus_runtime.core.workflow.exceptions import OneWorkflowAtATimeError
+from horus_runtime.core.workflow.exceptions import (
+    ArtifactIdsAreNotUniqueError,
+    OneWorkflowAtATimeError,
+    TaskIdsAreNotUniqueError,
+)
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -88,11 +94,19 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Human-readable name for this workflow.
     """
 
-    tasks: dict[str, BaseTask] = Field(
-        default_factory=dict,
+    tasks: list[BaseTask] = Field(
+        default_factory=list,
     )
     """
-    Ordered mapping of task names to task instances.
+    List of task instances.
+    """
+
+    artifacts: list[BaseArtifact] = Field(
+        default_factory=list,
+    )
+    """
+    Standalone root artifacts (no producer task). Tasks can reference these
+    by connecting their input artifact IDs to a root artifact's ID.
     """
 
     orchestrator_target: BaseTarget | None = None
@@ -111,13 +125,35 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     """
 
     @model_validator(mode="after")
-    def inject_task_ids(self) -> Self:
+    def check_unique_task_ids(self) -> Self:
         """
-        After workflow initialization, inject task IDs to each task.
+        Validates that all tasks have unique ids. This is required for correct
+        dependency resolution and execution.
         """
-        for tid, task in self.tasks.items():
-            task.id = tid
+        seen_ids = set()
+        for task in self.tasks:
+            if task.id in seen_ids:
+                raise TaskIdsAreNotUniqueError(task.id)
+            seen_ids.add(task.id)
+        return self
 
+    @model_validator(mode="after")
+    def check_unique_artifact_ids(self) -> Self:
+        """
+        Validates that all output artifacts across all tasks and root
+        artifacts have unique ids.
+        This is required for correct dependency resolution and execution.
+        """
+        seen_ids = set()
+        for artifact in self.artifacts:
+            if artifact.id in seen_ids:
+                raise ArtifactIdsAreNotUniqueError(artifact.id)
+            seen_ids.add(artifact.id)
+        for task in self.tasks:
+            for artifact in task.outputs:
+                if artifact.id in seen_ids:
+                    raise ArtifactIdsAreNotUniqueError(artifact.id)
+                seen_ids.add(artifact.id)
         return self
 
     @classmethod
@@ -165,16 +201,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # produced it. This covers outputs of every task in the workflow,
         # not just the ones that have already run.
         id_to_source: dict[str, BaseTarget] = {}
-        for t in self.tasks.values():
+        for t in self.tasks:
             # Build the producer map only from tasks defined earlier than the
             # task being dispatched.
             # TODO: BUILD DAG
             if t is task:
                 break
-            for artifact in t.outputs.values():
+            for artifact in t.outputs:
                 id_to_source[artifact.id] = t.target
 
-        for artifact in task.inputs.values():
+        for artifact in task.inputs:
             # Resolve the source target.
             source_target = id_to_source.get(artifact.id)
             if source_target is None:
@@ -211,7 +247,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             await strategy_cls().transfer(artifact, source_target, task.target)
 
     @final
-    async def run(self) -> None:
+    async def run(self, trigger_id: str) -> None:
         """
         Execute the workflow, managing status transitions automatically.
 
@@ -239,9 +275,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             % {"workflow_name": self.name}
         )
         try:
+            # Wrap the function to pass the trigger.
+            def call_run() -> Awaitable[None]:
+                return self._run(trigger_id)
+
             await WorkflowMiddleware.call_with_middleware(
                 WorkflowMiddlewareContext(workflow=self),
-                self._run,
+                call_run,
             )
         except CancelledError:
             self.status = WorkflowStatus.CANCELED
@@ -268,7 +308,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             ctx.workflow = None
 
     @abstractmethod
-    async def _run(self) -> None:
+    async def _run(self, trigger_id: str) -> None:
         """
         Workflow-specific execution logic. Implement this in subclasses.
         Do not set ``self.status`` here; ``run()`` manages it.

@@ -71,8 +71,8 @@ class FunctionTask(HorusTask):
         *,
         id: str | None = None,
         name: str | None = None,
-        inputs: dict[str, BaseArtifact] | None = None,
-        outputs: dict[str, BaseArtifact] | None = None,
+        inputs: list[BaseArtifact] | None = None,
+        outputs: list[BaseArtifact] | None = None,
         target: BaseTarget | None = None,
     ) -> Callable[[Callable[..., Any]], "FunctionTask"]:
         """
@@ -89,12 +89,12 @@ class FunctionTask(HorusTask):
                 id=id or func.__name__,
                 name=name or func.__name__,
                 runtime=PythonFunctionRuntime(func=func),
-                inputs=inputs or {},
-                outputs=outputs or {},
+                inputs=inputs or [],
+                outputs=outputs or [],
                 target=target or LocalTarget(),
             )
 
-            wf.tasks[t.task_id] = t
+            wf.tasks.append(t)
 
             return t
 
