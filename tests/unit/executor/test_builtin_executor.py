@@ -30,6 +30,7 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.settings import runtime_settings
 from tests.conftest import MakeTaskType
 
 
@@ -128,10 +129,16 @@ class TestShellExecutor:
         executor = ShellExecutor()
         await executor.execute(hello_world_task)
 
-        mock_run.assert_called_once_with(
-            "echo 'Hello World'",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args == ("echo 'Hello World'",)
+        assert kwargs["stdout"] == asyncio.subprocess.PIPE
+        assert kwargs["stderr"] == asyncio.subprocess.PIPE
+        # The executor injects the per-task side-artifacts directory into the
+        # subprocess environment.
+        assert runtime_settings.SIDE_ARTIFACTS_DIR_ENV in kwargs["env"]
+        assert kwargs["env"][runtime_settings.SIDE_ARTIFACTS_DIR_ENV].endswith(
+            "side-artifacts"
         )
 
 

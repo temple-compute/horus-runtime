@@ -23,6 +23,7 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
+from pathlib import Path
 from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
@@ -90,6 +91,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
     produces.
     """
 
+    side_products: list[BaseArtifact] = Field(
+        default_factory=list, exclude=True
+    )
+    """
+    Transient, undeclared artifacts produced by the task that the user may want
+    to inspect (logs, intermediate files, etc.) but which are not consumed by
+    any downstream task.
+    """
+
     executor: BaseExecutor
     """
     The executor that should execute this task. The executor is responsible for
@@ -128,6 +138,22 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
     The interaction transport currently associated with the task run.
     """
+
+    @property
+    def working_dir(self) -> Path:
+        """
+        The task's working directory: a per-task folder under its target's
+        working directory. Inputs are materialized here and outputs and
+        side-products are written relative to it.
+        """
+        return self.target.working_directory / self.id
+
+    @property
+    def side_artifacts_dir(self) -> Path:
+        """
+        Directory where side-product artifacts are written by convention.
+        """
+        return self.working_dir / "side-artifacts"
 
     @model_validator(mode="after")
     def _validate_runtime_compatibility(self) -> Self:

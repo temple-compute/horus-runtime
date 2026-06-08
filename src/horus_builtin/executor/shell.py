@@ -21,6 +21,7 @@ task locally in the Horus runtime.
 """
 
 import asyncio
+import os
 from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
@@ -28,6 +29,7 @@ from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -59,6 +61,14 @@ class ShellExecutor(BaseExecutor):
             % {"task_id": task.id, "command": prepared_command}
         )
 
+        # Let scripts drop side-product files in a well-known directory.
+        env = {
+            **os.environ,
+            runtime_settings.SIDE_ARTIFACTS_DIR_ENV: str(
+                task.side_artifacts_dir
+            ),
+        }
+
         # Security Warning:
         # This method uses a shell to execute the prepared command, which
         # poses a security risk if `cmd` contains untrusted input. Shell
@@ -72,6 +82,7 @@ class ShellExecutor(BaseExecutor):
             prepared_command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             __, stderr = await process.communicate()

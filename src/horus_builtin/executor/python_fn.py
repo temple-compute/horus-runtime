@@ -24,9 +24,11 @@ from inspect import isawaitable
 from typing import ClassVar
 
 from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 
 
 class PythonFunctionExecutor(BaseExecutor):
@@ -45,6 +47,13 @@ class PythonFunctionExecutor(BaseExecutor):
     async def _execute(self, task: "BaseTask") -> None:
         """
         Executes the Python function specified in the task's runtime.
+
+        A function may return a :class:`BaseArtifact` (or list of them) to
+        declare side-products; the returned artifacts are relocated into the
+        task's side-artifacts directory and stored on ``task.side_products``.
+        Capturing the return value here does not change the executor contract:
+        this method still returns ``None`` and raises on execution failure.
+        Side-product handling is best-effort and never fails the task.
         """
         assert isinstance(task.runtime, PythonFunctionRuntime)
 
@@ -52,6 +61,26 @@ class PythonFunctionExecutor(BaseExecutor):
         func, args = await task.runtime.setup_runtime(task)
 
         result = func(**args)
-
         if isawaitable(result):
-            await result
+            result = await result
+
+        if result is None:
+            return
+        if isinstance(result, BaseArtifact):
+            task.side_products = [result]
+            return
+        if isinstance(result, list) and all(
+            isinstance(r, BaseArtifact) for r in result
+        ):
+            task.side_products = result
+            return
+
+        horus_logger.log.warning(
+            _(
+                "Task %(task_id)s returned an unexpected value from its Python"
+                "function "
+                "runtime. Expected BaseArtifact, list[BaseArtifact], or None; "
+                "got: %(result)s. Skipping side artifact handling."
+            )
+            % {"task_id": task.id, "result": result}
+        )

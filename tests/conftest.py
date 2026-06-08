@@ -61,9 +61,12 @@ class MakeTaskType(Protocol):
 
 
 @pytest.fixture
-def make_shell_task() -> MakeTaskType:
+def make_shell_task(tmp_path: Path) -> MakeTaskType:
     """
     Fixture to create HorusTask instances with CommandRuntime for testing.
+
+    The task target uses a temporary working directory so the executor's
+    side-artifacts directory is created under it rather than in the repo.
     """
 
     def _make_shell_task(
@@ -77,7 +80,7 @@ def make_shell_task() -> MakeTaskType:
             outputs=[],
             runtime=CommandRuntime(command=cmd),
             executor=ShellExecutor(),
-            target=LocalTarget(),
+            target=LocalTarget(working_directory=tmp_path),
         )
 
     return _make_shell_task

@@ -78,6 +78,10 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         subclasses should implement the `_execute` method, which contains the
         specific execution logic for different types of executors.
         """
+        # The task's side-artifacts directory is created here so every executor
+        # can rely on it existing without recreating it.
+        task.side_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
         await ExecutorMiddleware.call_with_middleware(
             ExecutorMiddlewareContext(executor=self, task=task),
             lambda: self._execute(task),
