@@ -84,13 +84,14 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         # can rely on it existing without recreating it.
         task.side_artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        await ExecutorMiddleware.call_with_middleware(
-            ExecutorMiddlewareContext(executor=self, task=task),
-            lambda: self._execute(task),
-        )
-
-        # Collect side artifacts after execution.
-        await self.collect_side_artifacts(task)
+        try:
+            await ExecutorMiddleware.call_with_middleware(
+                ExecutorMiddlewareContext(executor=self, task=task),
+                lambda: self._execute(task),
+            )
+        finally:
+            # Collect side artifacts after execution.
+            await self.collect_side_artifacts(task)
 
     @abstractmethod
     async def _execute(self, task: "BaseTask") -> None:
@@ -105,7 +106,7 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         Collect side artifacts produced during task execution.
 
         By default, it iterates the side-artifacts directory for any files
-        produced and adds them as side-products to the task.
+        produced and adds them as side-artifacts to the task.
         """
         if not task.side_artifacts_dir.exists():
             return
@@ -114,14 +115,14 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
             if artifact_path.is_file():
                 task.side_artifacts.append(
                     FileArtifact(
-                        id=artifact_path.stem, path=artifact_path, kind="file"
+                        id=f"{task.id}_{artifact_path.name}",
+                        path=artifact_path,
                     )
                 )
             elif artifact_path.is_dir():
                 task.side_artifacts.append(
                     FolderArtifact(
-                        id=artifact_path.stem,
+                        id=f"{task.id}_{artifact_path.name}",
                         path=artifact_path,
-                        kind="folder",
                     )
                 )

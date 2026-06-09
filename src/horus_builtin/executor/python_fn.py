@@ -52,11 +52,8 @@ class PythonFunctionExecutor(BaseExecutor):
         Executes the Python function specified in the task's runtime.
 
         A function may return a :class:`BaseArtifact` (or list of them) to
-        declare side-products; the returned artifacts are relocated into the
-        task's side-artifacts directory and stored on ``task.side_products``.
-        Capturing the return value here does not change the executor contract:
-        this method still returns ``None`` and raises on execution failure.
-        Side-product handling is best-effort and never fails the task.
+        declare side-artifacts; the returned artifacts stored on
+        ``task.side_artifacts``.
         """
         assert isinstance(task.runtime, PythonFunctionRuntime)
 
@@ -90,10 +87,10 @@ class PythonFunctionExecutor(BaseExecutor):
 
         horus_logger.log.warning(
             _(
-                "Task %(task_id)s returned an unexpected value from its Python"
-                "function "
-                "runtime. Expected BaseArtifact, list[BaseArtifact], or None; "
-                "got: %(result)s. Skipping side artifact handling."
+                "Task %(task_id)s returned an unexpected value from its "
+                "Python function runtime. Expected BaseArtifact, "
+                "list[BaseArtifact], or None; got: %(result)s. Skipping side "
+                "artifact handling."
             )
             % {"task_id": task.id, "result": result}
         )
