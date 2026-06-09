@@ -30,12 +30,13 @@ from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 
-PythonFunctionReturnType = BaseArtifact | list[BaseArtifact] | None
+_PythonFunctionReturnType = BaseArtifact | list[BaseArtifact] | None
+PythonFunctionReturnType = (
+    _PythonFunctionReturnType | Awaitable[_PythonFunctionReturnType]
+)
 
 PythonFunctionSetupTuple = tuple[
-    Callable[
-        ..., Awaitable[PythonFunctionReturnType] | PythonFunctionReturnType
-    ],
+    Callable[..., PythonFunctionReturnType],
     dict[str, Any],
 ]
 
@@ -54,9 +55,7 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     # Allow callable types in the runtime configuration
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    func: Callable[
-        ..., Awaitable[PythonFunctionReturnType] | PythonFunctionReturnType
-    ] = Field(..., exclude=True)
+    func: Callable[..., PythonFunctionReturnType] = Field(..., exclude=True)
 
     async def _setup_runtime(
         self, task: "BaseTask"

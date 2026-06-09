@@ -23,7 +23,10 @@ executor).
 from inspect import isawaitable
 from typing import ClassVar
 
-from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_builtin.runtime.python import (
+    PythonFunctionReturnType,
+    PythonFunctionRuntime,
+)
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.base import BaseTask
@@ -61,18 +64,28 @@ class PythonFunctionExecutor(BaseExecutor):
         func, args = await task.runtime.setup_runtime(task)
 
         result = func(**args)
+
+        await self._parse_result_artifacts(task, result)
+
+    async def _parse_result_artifacts(
+        self, task: BaseTask, result: PythonFunctionReturnType
+    ) -> None:
+        """
+        Parse the result of a Python function execution to extract any declared
+        side-product artifacts.
+        """
         if isawaitable(result):
             result = await result
 
         if result is None:
             return
         if isinstance(result, BaseArtifact):
-            task.side_products = [result]
+            task.side_artifacts = [result]
             return
         if isinstance(result, list) and all(
             isinstance(r, BaseArtifact) for r in result
         ):
-            task.side_products = result
+            task.side_artifacts = result
             return
 
         horus_logger.log.warning(

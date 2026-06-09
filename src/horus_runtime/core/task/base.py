@@ -91,7 +91,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
     produces.
     """
 
-    side_products: list[BaseArtifact] = Field(
+    side_artifacts: list[BaseArtifact] = Field(
         default_factory=list, exclude=True
     )
     """
