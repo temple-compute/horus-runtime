@@ -19,7 +19,7 @@
 Python runtime implementation for in-memory workflows.
 """
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from inspect import Parameter, signature
 from typing import Any, ClassVar
 
@@ -30,7 +30,15 @@ from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 
-PythonFunctionSetupTuple = tuple[Callable[..., Any], dict[str, Any]]
+_PythonFunctionReturnType = BaseArtifact | list[BaseArtifact] | None
+PythonFunctionReturnType = (
+    _PythonFunctionReturnType | Awaitable[_PythonFunctionReturnType]
+)
+
+PythonFunctionSetupTuple = tuple[
+    Callable[..., PythonFunctionReturnType],
+    dict[str, Any],
+]
 
 
 class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
@@ -47,7 +55,7 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     # Allow callable types in the runtime configuration
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    func: Callable[..., Any] = Field(..., exclude=True)
+    func: Callable[..., PythonFunctionReturnType] = Field(..., exclude=True)
 
     async def _setup_runtime(
         self, task: "BaseTask"

@@ -57,7 +57,6 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     """
 
     working_directory: Path = Field(default_factory=Path.cwd)
-
     """
     Base directory on the remote host where per-task working directories are
     created.

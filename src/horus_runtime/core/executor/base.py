@@ -26,6 +26,8 @@ a command or running it inside a SLURM job, either remote or locally.
 from abc import abstractmethod
 from typing import TYPE_CHECKING, ClassVar, final
 
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.executor import (
@@ -78,10 +80,18 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         subclasses should implement the `_execute` method, which contains the
         specific execution logic for different types of executors.
         """
-        await ExecutorMiddleware.call_with_middleware(
-            ExecutorMiddlewareContext(executor=self, task=task),
-            lambda: self._execute(task),
-        )
+        # The task's side-artifacts directory is created here so every executor
+        # can rely on it existing without recreating it.
+        task.side_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            await ExecutorMiddleware.call_with_middleware(
+                ExecutorMiddlewareContext(executor=self, task=task),
+                lambda: self._execute(task),
+            )
+        finally:
+            # Collect side artifacts after execution.
+            await self.collect_side_artifacts(task)
 
     @abstractmethod
     async def _execute(self, task: "BaseTask") -> None:
@@ -90,3 +100,29 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         This method should be implemented by subclasses to define the specific
         execution logic for different types of executors.
         """
+
+    async def collect_side_artifacts(self, task: "BaseTask") -> None:
+        """
+        Collect side artifacts produced during task execution.
+
+        By default, it iterates the side-artifacts directory for any files
+        produced and adds them as side-artifacts to the task.
+        """
+        if not task.side_artifacts_dir.exists():
+            return
+
+        for artifact_path in task.side_artifacts_dir.iterdir():
+            if artifact_path.is_file():
+                task.side_artifacts.append(
+                    FileArtifact(
+                        id=f"{task.id}_{artifact_path.name}",
+                        path=artifact_path,
+                    )
+                )
+            elif artifact_path.is_dir():
+                task.side_artifacts.append(
+                    FolderArtifact(
+                        id=f"{task.id}_{artifact_path.name}",
+                        path=artifact_path,
+                    )
+                )

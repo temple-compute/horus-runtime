@@ -21,16 +21,19 @@ Unit tests for FunctionTask.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.function import FunctionTask
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.base import BaseTask
 
 
@@ -359,3 +362,162 @@ class TestFunctionTaskExecution:
         await task.run()
 
         assert output_artifact.path.read_text() == "HELLO"
+
+
+@pytest.mark.unit
+class TestFunctionTaskSideArtifacts:
+    """
+    Test cases for side artifact capture via Python function return values.
+    """
+
+    async def test_sync_function_returning_single_artifact_captured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        A sync function returning a single BaseArtifact populates
+        task.side_artifacts with that artifact.
+        """
+        artifact = FileArtifact(id="out", path=tmp_path / "out.txt")
+
+        task = FunctionTask(
+            id="side_task",
+            name="side_task",
+            runtime=PythonFunctionRuntime(func=lambda: artifact),
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == [artifact]
+
+    async def test_sync_function_returning_list_of_artifacts_captured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        A sync function returning list[BaseArtifact] populates
+        task.side_artifacts with all artifacts in order.
+        """
+        art1 = FileArtifact(id="art1", path=tmp_path / "a.txt")
+        art2 = FileArtifact(id="art2", path=tmp_path / "b.txt")
+
+        task = FunctionTask(
+            id="side_task",
+            name="side_task",
+            runtime=PythonFunctionRuntime(func=lambda: [art1, art2]),
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == [art1, art2]
+
+    async def test_async_function_returning_single_artifact_captured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        An async function returning a single BaseArtifact is awaited and the
+        artifact is captured on task.side_artifacts.
+        """
+        artifact = FileArtifact(id="async_out", path=tmp_path / "out.txt")
+
+        async def async_func() -> FileArtifact:
+            return artifact
+
+        task = FunctionTask(
+            id="async_side_task",
+            name="async_side_task",
+            runtime=PythonFunctionRuntime(func=async_func),
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == [artifact]
+
+    async def test_async_function_returning_list_of_artifacts_captured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        An async function returning list[BaseArtifact] is awaited and all
+        artifacts are captured on task.side_artifacts.
+        """
+        art1 = FileArtifact(id="a1", path=tmp_path / "a.txt")
+        art2 = FileArtifact(id="a2", path=tmp_path / "b.txt")
+
+        async def async_func() -> list[BaseArtifact]:
+            return [art1, art2]
+
+        task = FunctionTask(
+            id="async_list_task",
+            name="async_list_task",
+            runtime=PythonFunctionRuntime(func=async_func),
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == [art1, art2]
+
+    async def test_none_return_leaves_side_artifacts_empty(self) -> None:
+        """
+        A function returning None leaves task.side_artifacts empty.
+        """
+        task = FunctionTask(
+            id="none_task",
+            name="none_task",
+            runtime=PythonFunctionRuntime(func=lambda: None),
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == []
+
+    @patch("horus_builtin.executor.python_fn.horus_logger")
+    async def test_unexpected_return_type_logs_warning_and_skips(
+        self,
+        mock_logger: MagicMock,
+    ) -> None:
+        """
+        A function returning an unexpected type (not BaseArtifact, list, or
+        None) leaves side_artifacts empty and logs a warning.
+        """
+        task = FunctionTask(
+            id="bad_return_task",
+            name="bad_return_task",
+            runtime=PythonFunctionRuntime(func=lambda: 42),  # type: ignore[return-value, arg-type]
+        )
+
+        await task.run()
+
+        assert task.side_artifacts == []
+        mock_logger.log.warning.assert_called_once()
+
+    async def test_returned_and_filesystem_artifacts_are_both_captured(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """
+        When a function both returns a BaseArtifact and writes a file to
+        task.side_artifacts_dir, the returned artifact appears first (index 0)
+        and the filesystem-collected artifact is appended after (index 1).
+        """
+        returned_artifact = FileArtifact(
+            id="returned", path=tmp_path / "returned.txt"
+        )
+
+        def func(task: BaseTask) -> FileArtifact:
+            (task.side_artifacts_dir / "fs.txt").write_text("from fs")
+            return returned_artifact
+
+        task = FunctionTask(
+            id="merge_task",
+            name="merge_task",
+            runtime=PythonFunctionRuntime(func=func),
+            target=LocalTarget(working_directory=tmp_path),
+        )
+
+        await task.run()
+
+        assert len(task.side_artifacts) == 2
+        assert task.side_artifacts[0] is returned_artifact
+        assert task.side_artifacts[1].id == "merge_task_fs.txt"

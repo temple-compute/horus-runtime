@@ -26,6 +26,7 @@ from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.i18n import tr as _
+from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -54,9 +55,13 @@ class PythonExecExecutor(BaseExecutor):
 
         ctx = HorusContext.get_context()
 
+        # Expose side-artifacts directory to the snippet.
         scope = {
             "ctx": ctx,
             "task": task,
+            runtime_settings.SIDE_ARTIFACTS_DIR_ENV: str(
+                task.side_artifacts_dir
+            ),
         }
 
         # Security Warning: using exec to execute arbitrary code can be

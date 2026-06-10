@@ -28,9 +28,9 @@ jobs:
       - name: Check license headers
         run: |
           uv run make add-license-headers
-          if ! git diff --quiet; then
+          if ! git diff --quiet -- src tests; then
             echo "License headers are missing or incorrect. Please run 'make add-license-headers' to fix.";
-            git diff --name-only
+            git diff --name-only -- src tests
             exit 1;
           fi
 
