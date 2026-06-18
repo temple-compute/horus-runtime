@@ -20,6 +20,7 @@ Basic tests for the middleware system.
 """
 
 from collections.abc import Callable, Generator
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -30,6 +31,7 @@ from horus_runtime.core.interaction.base import BaseInteraction
 from horus_runtime.core.interaction.renderer import BaseInteractionRenderer
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.channel import ChannelProcess, RemotePath
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
@@ -131,6 +133,38 @@ class TrackingTarget(BaseTarget):
         Return a zero-cost access estimate.
         """
         return 0.0
+
+    async def run_command(
+        self,
+        cmd: str,
+        *,
+        cwd: RemotePath | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        raise NotImplementedError
+
+    async def put_file(
+        self,
+        content: bytes | Path,
+        remote_path: RemotePath,
+    ) -> None:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+
+    async def get_file(self, _remote_path: RemotePath) -> bytes:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        return b""
+
+    async def mkdir(self, path: RemotePath) -> None:
+        """
+        Stub channel method — not used in middleware tests.
+        """
 
 
 class DummyInteraction(BaseInteraction[str]):

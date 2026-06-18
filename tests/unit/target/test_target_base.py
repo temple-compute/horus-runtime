@@ -20,14 +20,14 @@ Unit tests for BaseTarget abstract base class.
 """
 
 from abc import ABC
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.target.channel import ChannelProcess, RemotePath
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -45,35 +45,43 @@ class ConcreteTestTarget(BaseTarget):
         """
         return "test://localhost"
 
-    async def _dispatch(self, task: BaseTask) -> None:
-        """
-        Simulate dispatching a task to this target.
-        """
-        pass
-
-    async def wait(self) -> None:
-        """
-        Simulate waiting for a dispatched task to complete.
-        """
-        pass
-
-    async def cancel(self) -> None:
-        """
-        Simulate canceling a dispatched task.
-        """
-        pass
-
-    async def get_status(self) -> TaskStatus:
-        """
-        Simulate retrieving the status of a dispatched task.
-        """
-        return TaskStatus.IDLE
-
     def access_cost(self, _: BaseArtifact) -> float | None:
         """
         Simulate calculating the access cost for an artifact.
         """
         return 0.0
+
+    async def run_command(
+        self,
+        cmd: str,
+        *,
+        cwd: RemotePath | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        """
+        Stub channel method — not used in base-class tests.
+        """
+        raise NotImplementedError
+
+    async def put_file(
+        self,
+        content: bytes | Path,
+        remote_path: RemotePath,
+    ) -> None:
+        """
+        Stub channel method — not used in base-class tests.
+        """
+
+    async def get_file(self, _remote_path: RemotePath) -> bytes:
+        """
+        Stub channel method — not used in base-class tests.
+        """
+        return b""
+
+    async def mkdir(self, _path: RemotePath) -> None:
+        """
+        Stub channel method — not used in base-class tests.
+        """
 
 
 @pytest.mark.unit

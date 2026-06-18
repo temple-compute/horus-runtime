@@ -24,6 +24,7 @@ a command or running it inside a SLURM job, either remote or locally.
 """
 
 from abc import abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_builtin.artifact.file import FileArtifact
@@ -80,9 +81,9 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         subclasses should implement the `_execute` method, which contains the
         specific execution logic for different types of executors.
         """
-        # The task's side-artifacts directory is created here so every executor
-        # can rely on it existing without recreating it.
-        task.side_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        # Create the side-artifacts directory through the channel so the same
+        # code works on both local and remote targets (M2.3).
+        await task.target.mkdir(task.side_artifacts_dir)
 
         try:
             await ExecutorMiddleware.call_with_middleware(
@@ -105,13 +106,24 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         """
         Collect side artifacts produced during task execution.
 
-        By default, it iterates the side-artifacts directory for any files
-        produced and adds them as side-artifacts to the task.
+        For ``LocalTarget`` (and any target whose ``side_artifacts_dir`` is
+        accessible as a local path), this iterates the directory and registers
+        every file and folder as a side artifact on the task.
+
+        For remote targets the directory is not locally accessible, so this
+        method is best-effort: it attempts a local ``Path`` walk and silently
+        skips collection when the path does not exist locally.
+
+        .. ponytail: full remote collection via channel ``ls`` + ``get_file``
+           is the upgrade path (M2.3 follow-up); not needed for the local demo.
         """
-        if not task.side_artifacts_dir.exists():
+        # TODO: Use the channel to list and retrieve side artifacts from
+        # remote targets.
+        local_path = Path(str(task.side_artifacts_dir))
+        if not local_path.exists():
             return
 
-        for artifact_path in task.side_artifacts_dir.iterdir():
+        for artifact_path in local_path.iterdir():
             if artifact_path.is_file():
                 task.side_artifacts.append(
                     FileArtifact(
