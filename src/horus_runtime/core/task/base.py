@@ -23,7 +23,6 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
-from pathlib import Path
 from typing import ClassVar, Self, final
 
 from pydantic import Field, model_validator
@@ -36,6 +35,7 @@ from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.channel import RemotePath
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -140,18 +140,28 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
 
     @property
-    def working_dir(self) -> Path:
+    def working_dir(self) -> RemotePath:
         """
         The task's working directory: a per-task folder under its target's
         working directory. Inputs are materialized here and outputs and
         side-products are written relative to it.
+
+        This is a :data:`~horus_runtime.core.target.channel.RemotePath`
+        (``PurePosixPath``) — a target-side path that must **never** be
+        opened, stat-ed, or walked locally.  Only the target's own channel
+        methods may touch it.
         """
         return self.target.working_directory / self.id
 
     @property
-    def side_artifacts_dir(self) -> Path:
+    def side_artifacts_dir(self) -> RemotePath:
         """
         Directory where side-product artifacts are written by convention.
+
+        This is a :data:`~horus_runtime.core.target.channel.RemotePath`
+        (``PurePosixPath``) — a target-side path that must **never** be
+        opened, stat-ed, or walked locally.  Only the target's own channel
+        methods may touch it.
         """
         return self.working_dir / "side-artifacts"
 

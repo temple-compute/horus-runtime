@@ -20,13 +20,13 @@
 Unit tests for ShellExecutor and related builtin executors.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.task.exceptions import TaskExecutionError
@@ -107,39 +107,41 @@ class TestShellExecutor:
         executor = ShellExecutor()
         assert executor.kind == "shell"
 
-    @patch("asyncio.create_subprocess_shell")
     async def test_execute_successful_command(
         self,
-        mock_run: AsyncMock,
         make_shell_task: MakeTaskType,
         horus_context: HorusContext,
     ) -> None:
         """
-        Test executing a successful command returns correct exit code.
+        Test executing a successful command injects SIDE_ARTIFACTS_DIR env var
+        via the target channel's run_command.
         """
         del horus_context
-        # Mock asyncio.create_subprocess_shell to return successful execution
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b"", b""))
-        mock_run.return_value = mock_process
 
         hello_world_task = make_shell_task("echo 'Hello World'")
 
-        executor = ShellExecutor()
-        await executor.execute(hello_world_task)
+        # Mock at the channel boundary: LocalTarget.run_command.
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.wait = AsyncMock(return_value=0)
 
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        assert args == ("echo 'Hello World'",)
-        assert kwargs["stdout"] == asyncio.subprocess.PIPE
-        assert kwargs["stderr"] == asyncio.subprocess.PIPE
-        # The executor injects the per-task side-artifacts directory into the
-        # subprocess environment.
-        assert runtime_settings.SIDE_ARTIFACTS_DIR_ENV in kwargs["env"]
-        assert kwargs["env"][runtime_settings.SIDE_ARTIFACTS_DIR_ENV].endswith(
-            "side-artifacts"
-        )
+        with patch.object(
+            LocalTarget,
+            "run_command",
+            new=AsyncMock(return_value=mock_proc),
+        ) as mock_run_command:
+            executor = ShellExecutor()
+            await executor.execute(hello_world_task)
+
+            mock_run_command.assert_called_once()
+            __, kwargs = mock_run_command.call_args
+            # The executor injects the per-task side-artifacts directory into
+            # the subprocess environment via the channel's env parameter.
+            assert runtime_settings.SIDE_ARTIFACTS_DIR_ENV in kwargs["env"]
+            assert kwargs["env"][
+                runtime_settings.SIDE_ARTIFACTS_DIR_ENV
+            ].endswith("side-artifacts")
 
 
 @pytest.mark.unit

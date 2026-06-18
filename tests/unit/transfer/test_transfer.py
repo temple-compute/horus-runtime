@@ -19,12 +19,15 @@
 Unit tests for BaseTransferStrategy abstract base class.
 """
 
+from pathlib import Path
+
 import pytest
 
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.transfer.local_noop import LocalNoOpTransfer
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.channel import ChannelProcess, RemotePath
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
@@ -59,6 +62,38 @@ class _UnregisteredTarget(BaseTarget):
     def access_cost(self, artifact: BaseArtifact) -> float | None:
         del artifact
         return 0.0
+
+    async def run_command(
+        self,
+        cmd: str,
+        *,
+        cwd: RemotePath | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        """
+        Stub — not used in transfer tests.
+        """
+        raise NotImplementedError
+
+    async def put_file(
+        self,
+        content: bytes | Path,
+        remote_path: RemotePath,
+    ) -> None:
+        """
+        Stub — not used in transfer tests.
+        """
+
+    async def get_file(self, _remote_path: RemotePath) -> bytes:
+        """
+        Stub — not used in transfer tests.
+        """
+        return b""
+
+    async def mkdir(self, path: RemotePath) -> None:
+        """
+        Stub — not used in transfer tests.
+        """
 
 
 @pytest.mark.unit

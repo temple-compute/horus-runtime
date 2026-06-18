@@ -19,13 +19,18 @@
 The Horus target indicates where a task should be dispatched and executed.
 """
 
+import asyncio
 from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
+from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.target import (
     TargetMiddleware,
     TargetMiddlewareContext,
@@ -56,11 +61,31 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     Human-friendly description of this kind of target.
     """
 
-    working_directory: Path = Field(default_factory=Path.cwd)
+    working_directory: RemotePath = Field(
+        default_factory=lambda: RemotePath(Path.cwd())
+    )
     """
-    Base directory on the remote host where per-task working directories are
+    Base directory on the target host where per-task working directories are
     created.
+
+    This is a :data:`~horus_runtime.core.target.channel.RemotePath`
+    (``PurePosixPath``) — a target-side path that must **never** be opened,
+    stat-ed, or walked locally.  Only the target's own channel methods may
+    touch it.  ``LocalTarget`` maps it to a local ``Path`` inside its channel
+    methods and nowhere else.
     """
+
+    # ------------------------------------------------------------------
+    # Dispatch lifecycle state (M1.4)
+    #
+    # Hoisted from LocalTarget so every target gets the same default
+    # asyncio.create_task-based lifecycle.  Targets that need a different
+    # mechanism (e.g. SSHTarget) can override _dispatch/wait/cancel/
+    # get_status, but they do not need to — the defaults just work.
+    # ------------------------------------------------------------------
+
+    _task: "BaseTask | None" = PrivateAttr(default=None)
+    _task_future: "asyncio.Task[None] | None" = PrivateAttr(default=None)
 
     @property
     @abstractmethod
@@ -95,33 +120,82 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             lambda: self._dispatch(task),
         )
 
-    @abstractmethod
     async def _dispatch(self, task: "BaseTask") -> None:
         """
-        Internal dispatch method to be implemented by subclasses. This is
-        called by the public dispatch() method, which handles common logic like
-        retries and error handling.
-        """
+        Schedule *task* as an ``asyncio.Task`` in the current event loop.
 
-    @abstractmethod
+        The task starts executing immediately; call :meth:`wait` to block
+        until it finishes.  Override this in subclasses that need a different
+        dispatch mechanism (e.g. submitting a remote job).
+
+        Raises:
+            TaskExecutionError: If the task is already running on this target.
+        """
+        if self._task_future is not None and not self._task_future.done():
+            raise TaskExecutionError(
+                _("Task '%(task_name)s' is already running on this target.")
+                % {"task_name": task.name}
+            )
+
+        self._task = task
+        self._task_future = asyncio.create_task(self._task.run())
+        horus_logger.log.debug(
+            _("Dispatched task '%(task_name)s' to %(kind)s target")
+            % {"task_name": task.name, "kind": self.kind}
+        )
+
     async def wait(self) -> None:
         """
-        Wait for the task to complete. Raises ``TaskExecutionError`` if the
-        task fails during execution.
-        """
+        Wait for the task to complete.
 
-    @abstractmethod
+        Raises:
+            TaskExecutionError: If the task has not been dispatched yet.
+        """
+        if self._task_future is None:
+            raise TaskExecutionError(_("Task has not been dispatched yet."))
+
+        horus_logger.log.debug(
+            _(
+                "Waiting for task '%(task_name)s' to complete"
+                " on %(kind)s target"
+            )
+            % {
+                "task_name": self._task.name if self._task else "unknown",
+                "kind": self.kind,
+            }
+        )
+        await self._task_future
+
     async def cancel(self) -> None:
         """
-        Cancel the task if it is still running. Raises ``TaskExecutionError``
-        if the task fails to cancel.
+        Cancel the running task by injecting ``CancelledError`` at its next
+        ``await`` point, then wait for it to finish any cleanup.
         """
+        if self._task_future is None or self._task_future.done():
+            return
+        horus_logger.log.debug(
+            _("Cancelling task '%(task_name)s' on %(kind)s target")
+            % {
+                "task_name": self._task.name if self._task else "unknown",
+                "kind": self.kind,
+            }
+        )
+        self._task_future.cancel()
+        try:
+            await self._task_future
+        except asyncio.CancelledError:
+            pass
 
-    @abstractmethod
-    async def get_status(self) -> "TaskStatus":
+    async def get_status(self) -> TaskStatus:
         """
         Get the current status of the task.
+
+        Raises:
+            TaskExecutionError: If no task has been dispatched yet.
         """
+        if self._task is None:
+            raise TaskExecutionError(_("Task has not been dispatched yet."))
+        return self._task.status
 
     @abstractmethod
     def access_cost(self, artifact: "BaseArtifact") -> float | None:
@@ -148,3 +222,94 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         By default, recovery is not supported and this method returns False.
         """
         return False
+
+    # ------------------------------------------------------------------
+    # Channel primitives (M1.1)
+    #
+    # These methods form the *agentless channel* — the low-level I/O
+    # surface that executors use to run commands and move files without
+    # requiring any Horus installation on the remote side.
+    #
+    # Semantics (write these into every concrete implementation):
+    #   - All streams are **bytes**; callers decode as needed.
+    #   - ``env`` is *merged* onto the channel's base environment (not a
+    #     full replacement).  For ``LocalTarget`` the base is
+    #     ``os.environ``; for SSH targets the base is the remote shell's
+    #     login environment.
+    #   - ``cwd`` is a target-side path.  The **channel** applies it —
+    #     ``LocalTarget`` via ``subprocess cwd=``; remote targets by
+    #     inlining ``cd <cwd> && …`` (do not rely on sshd ``AcceptEnv``).
+    #   - ``RemotePath`` is ``PurePosixPath``.  Target-side paths are
+    #     never ``.mkdir()``/``.iterdir()``-ed locally — always go through
+    #     the channel.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def run_command(
+        self,
+        cmd: str,
+        *,
+        cwd: RemotePath | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        """
+        Run *cmd* on the target and return a :class:`.ChannelProcess` handle.
+
+        The process is started immediately; callers drive it via
+        :meth:`~.ChannelProcess.communicate`, :meth:`~.ChannelProcess.wait`,
+        or :meth:`~.ChannelProcess.kill`.
+
+        Args:
+            cmd: Shell command string to execute.
+            cwd: Working directory on the *target* host.  The channel
+                applies this — ``LocalTarget`` passes it as
+                ``subprocess cwd=``; remote targets inline
+                ``cd <cwd> && …`` before the command.
+            env: Additional environment variables to merge onto the
+                channel's base environment.  Keys/values are plain strings.
+
+        Returns:
+            A :class:`.ChannelProcess` handle for the running command.
+        """
+
+    @abstractmethod
+    async def put_file(
+        self,
+        content: bytes | Path,
+        remote_path: RemotePath,
+    ) -> None:
+        """
+        Write *content* to *remote_path* on the target.
+
+        Args:
+            content: Either raw :class:`bytes` or a local
+                :class:`~pathlib.Path` whose contents are read and sent.
+            remote_path: Destination path on the *target* host.  This is
+                a ``RemotePath`` (``PurePosixPath``) and must not be
+                touched locally except by ``LocalTarget``'s own
+                implementation.
+        """
+
+    @abstractmethod
+    async def get_file(self, remote_path: RemotePath) -> bytes:
+        """
+        Read *remote_path* from the target and return its contents as bytes.
+
+        Args:
+            remote_path: Path on the *target* host to read.
+
+        Returns:
+            The file contents as :class:`bytes`.  Callers decode as needed.
+        """
+
+    @abstractmethod
+    async def mkdir(self, path: RemotePath) -> None:
+        """
+        Create *path* (and all missing parents) on the target.
+
+        Semantics are equivalent to ``mkdir -p``; no error is raised if the
+        directory already exists.
+
+        Args:
+            path: Directory path to create on the *target* host.
+        """
