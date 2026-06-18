@@ -508,7 +508,7 @@ class TestFunctionTaskSideArtifacts:
 
         def func(task: BaseTask) -> FileArtifact:
             # side_artifacts_dir is a RemotePath (PurePosixPath); map to a
-            # local Path inside the in-process function — LocalTarget only.
+            # local Path inside the in-process function.
             Path(str(task.side_artifacts_dir / "fs.txt")).write_text("from fs")
             return returned_artifact
 

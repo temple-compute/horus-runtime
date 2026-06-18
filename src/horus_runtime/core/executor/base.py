@@ -117,6 +117,8 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         .. ponytail: full remote collection via channel ``ls`` + ``get_file``
            is the upgrade path (M2.3 follow-up); not needed for the local demo.
         """
+        # TODO: Use the channel to list and retrieve side artifacts from
+        # remote targets.
         local_path = Path(str(task.side_artifacts_dir))
         if not local_path.exists():
             return

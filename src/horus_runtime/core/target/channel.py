@@ -18,21 +18,12 @@
 """
 Channel primitives for agentless target communication.
 
-A *channel* is the low-level I/O substrate that a :class:`BaseTarget` exposes
-so that executors can run commands and move files **without requiring any
-Horus installation on the remote side**.
-
 Key types
 ---------
 RemotePath
     A :class:`~pathlib.PurePosixPath` alias.  Target-side paths are always
     POSIX paths on whatever host the target represents.  They are *never*
-    opened, stat-ed, or walked locally — only the target's own channel
-    methods may touch them.  ``LocalTarget`` is the sole exception: it maps
-    ``RemotePath → Path`` *inside* its channel methods and nowhere else.
-
-    <!-- ponytail: PurePosixPath on a Windows orchestrator is the upgrade
-         path; document the rule, don't build RemotePath cleverness now -->
+    opened, stat-ed, or walked locally.
 
 ChannelProcess
     An abstract handle returned by :meth:`BaseTarget.run_command`.  Callers
@@ -78,7 +69,7 @@ class ChannelProcess(ABC):
     async def communicate(self) -> tuple[bytes, bytes]:
         """
         Wait for the process to finish, then return ``(stdout, stderr)`` as
-        raw bytes.  Callers decode as needed.
+        raw bytes. Callers decode as needed.
 
         Returns:
             A ``(stdout, stderr)`` tuple, both as :class:`bytes`.
@@ -87,20 +78,13 @@ class ChannelProcess(ABC):
     @abstractmethod
     def kill(self) -> None:
         """
-        Kill the process **and its entire process group** (SIGKILL).
-
-        Implementations must ensure that child processes spawned by the command
-        are also terminated — use ``kill -- -PGID`` / ``os.killpg`` locally,
-        or the equivalent signal on the remote side.
-
-        This method is synchronous so it can be called from ``CancelledError``
-        handlers without an extra ``await``.
+        Kill the process.
         """
 
     @abstractmethod
     def signal(self, sig: int) -> None:
         """
-        Send *sig* to the process group.
+        Send *sig* to the process.
 
         Args:
             sig: A signal number (e.g. ``signal.SIGTERM``).

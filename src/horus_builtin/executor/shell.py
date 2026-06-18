@@ -17,13 +17,7 @@
 #
 """
 Defines the ShellExecutor class, which represents an executor that runs a
-task via the target's channel (``run_command``).
-
-``ShellExecutor`` drives the agentless channel: it renders the command via the
-task's runtime, then delegates execution to ``task.target.run_command`` rather
-than spawning a subprocess directly.  This means the same executor works
-identically on ``LocalTarget`` and on any future remote target (SSH, etc.)
-without modification.
+task via the target's channel.
 """
 
 import asyncio
@@ -43,20 +37,11 @@ if TYPE_CHECKING:
 class ShellExecutor(BaseExecutor):
     """
     Run the task via the target channel (``run_command``).
-
-    The executor renders the command through the task's
-    :class:`~horus_builtin.runtime.command.CommandRuntime`, passes the
-    per-task side-artifacts directory as an environment variable, and drives
-    the returned :class:`~horus_runtime.core.target.channel.ChannelProcess`
-    handle.  Cancellation kills the entire process group so no orphaned
-    children are left behind.
     """
 
     kind: str = "shell"
     kind_name: ClassVar[str] = "Shell Executor"
-    kind_description: ClassVar[str] = _(
-        "Executes a shell command via the target channel."
-    )
+    kind_description: ClassVar[str] = _("Executes a shell command.")
 
     runtimes: ClassVar[RuntimeFilterType] = (CommandRuntime,)
 

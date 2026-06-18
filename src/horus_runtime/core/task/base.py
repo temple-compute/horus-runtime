@@ -145,11 +145,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
         The task's working directory: a per-task folder under its target's
         working directory. Inputs are materialized here and outputs and
         side-products are written relative to it.
-
-        This is a :data:`~horus_runtime.core.target.channel.RemotePath`
-        (``PurePosixPath``) — a target-side path that must **never** be
-        opened, stat-ed, or walked locally.  Only the target's own channel
-        methods may touch it.
         """
         return self.target.working_directory / self.id
 
@@ -157,11 +152,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
     def side_artifacts_dir(self) -> RemotePath:
         """
         Directory where side-product artifacts are written by convention.
-
-        This is a :data:`~horus_runtime.core.target.channel.RemotePath`
-        (``PurePosixPath``) — a target-side path that must **never** be
-        opened, stat-ed, or walked locally.  Only the target's own channel
-        methods may touch it.
         """
         return self.working_dir / "side-artifacts"
 

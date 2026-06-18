@@ -62,27 +62,12 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     """
 
     working_directory: RemotePath = Field(
-        default_factory=lambda: RemotePath(Path.cwd())
+        default_factory=lambda: RemotePath(Path.cwd().as_posix())
     )
     """
     Base directory on the target host where per-task working directories are
     created.
-
-    This is a :data:`~horus_runtime.core.target.channel.RemotePath`
-    (``PurePosixPath``) — a target-side path that must **never** be opened,
-    stat-ed, or walked locally.  Only the target's own channel methods may
-    touch it.  ``LocalTarget`` maps it to a local ``Path`` inside its channel
-    methods and nowhere else.
     """
-
-    # ------------------------------------------------------------------
-    # Dispatch lifecycle state (M1.4)
-    #
-    # Hoisted from LocalTarget so every target gets the same default
-    # asyncio.create_task-based lifecycle.  Targets that need a different
-    # mechanism (e.g. SSHTarget) can override _dispatch/wait/cancel/
-    # get_status, but they do not need to — the defaults just work.
-    # ------------------------------------------------------------------
 
     _task: "BaseTask | None" = PrivateAttr(default=None)
     _task_future: "asyncio.Task[None] | None" = PrivateAttr(default=None)
@@ -223,27 +208,6 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         return False
 
-    # ------------------------------------------------------------------
-    # Channel primitives (M1.1)
-    #
-    # These methods form the *agentless channel* — the low-level I/O
-    # surface that executors use to run commands and move files without
-    # requiring any Horus installation on the remote side.
-    #
-    # Semantics (write these into every concrete implementation):
-    #   - All streams are **bytes**; callers decode as needed.
-    #   - ``env`` is *merged* onto the channel's base environment (not a
-    #     full replacement).  For ``LocalTarget`` the base is
-    #     ``os.environ``; for SSH targets the base is the remote shell's
-    #     login environment.
-    #   - ``cwd`` is a target-side path.  The **channel** applies it —
-    #     ``LocalTarget`` via ``subprocess cwd=``; remote targets by
-    #     inlining ``cd <cwd> && …`` (do not rely on sshd ``AcceptEnv``).
-    #   - ``RemotePath`` is ``PurePosixPath``.  Target-side paths are
-    #     never ``.mkdir()``/``.iterdir()``-ed locally — always go through
-    #     the channel.
-    # ------------------------------------------------------------------
-
     @abstractmethod
     async def run_command(
         self,
@@ -254,10 +218,6 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     ) -> ChannelProcess:
         """
         Run *cmd* on the target and return a :class:`.ChannelProcess` handle.
-
-        The process is started immediately; callers drive it via
-        :meth:`~.ChannelProcess.communicate`, :meth:`~.ChannelProcess.wait`,
-        or :meth:`~.ChannelProcess.kill`.
 
         Args:
             cmd: Shell command string to execute.

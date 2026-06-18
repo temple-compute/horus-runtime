@@ -71,7 +71,7 @@ class _UnregisteredTarget(BaseTarget):
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
-        Stub — not used in transfer tests.
+        Not used in transfer tests.
         """
         raise NotImplementedError
 
@@ -81,18 +81,18 @@ class _UnregisteredTarget(BaseTarget):
         remote_path: RemotePath,
     ) -> None:
         """
-        Stub — not used in transfer tests.
+        Not used in transfer tests.
         """
 
     async def get_file(self, _remote_path: RemotePath) -> bytes:
         """
-        Stub — not used in transfer tests.
+        Not used in transfer tests.
         """
         return b""
 
     async def mkdir(self, path: RemotePath) -> None:
         """
-        Stub — not used in transfer tests.
+        Not used in transfer tests.
         """
 
 

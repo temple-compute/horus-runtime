@@ -18,13 +18,6 @@
 """
 Local target: executes tasks in the current process, running commands via
 ``asyncio.create_subprocess_shell`` with process-group isolation.
-
-``LocalTarget`` implements the channel primitives by mapping
-:data:`~horus_runtime.core.target.channel.RemotePath` to local
-:class:`~pathlib.Path` objects — the only place in the codebase where that
-mapping is allowed.  All other code must treat target-side paths as opaque
-``RemotePath`` values and interact with the filesystem exclusively through
-the channel methods.
 """
 
 import asyncio
@@ -39,15 +32,14 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import ChannelProcess, RemotePath
 
 
-class _LocalChannelProcess(ChannelProcess):
+class LocalChannelProcess(ChannelProcess):
     """
     ``ChannelProcess`` backed by an ``asyncio.subprocess.Process``.
 
     The subprocess is spawned with ``start_new_session=True`` so it leads
     its own process group.  :meth:`kill` terminates the entire group via
     ``os.killpg``, which prevents orphaned child processes when a command
-    itself spawns children (the key correctness property for M1.2 / issue
-    #66).
+    itself spawns children.
     """
 
     def __init__(self, proc: asyncio.subprocess.Process) -> None:
@@ -70,24 +62,23 @@ class _LocalChannelProcess(ChannelProcess):
 
     def kill(self) -> None:
         """
-        Kill the process group (SIGKILL), not just the process itself.
+        Kill the process group (SIGKILL).
 
         Uses ``os.killpg`` so that any child processes spawned by the command
         are also terminated.  Safe to call even if the process has already
-        exited (ignores ``ProcessLookupError``).
+        exited.
         """
-        pid = self._proc.pid
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-        except ProcessLookupError:
-            # Process already exited; nothing to kill.
-            pass
+        self.signal(signal.SIGKILL)
 
     def signal(self, sig: int) -> None:
         """Send *sig* to the process group."""
         pid = self._proc.pid
+
+        kill_func = os.killpg if os.name == "posix" else os.kill
+        parsed_pid = os.getpgid(pid) if os.name == "posix" else pid
+
         try:
-            os.killpg(os.getpgid(pid), sig)
+            kill_func(parsed_pid, sig)
         except ProcessLookupError:
             pass
 
@@ -95,10 +86,6 @@ class _LocalChannelProcess(ChannelProcess):
 class LocalTarget(BaseTarget):
     """
     Executes tasks directly in the current process.
-
-    The dispatch lifecycle (``_dispatch``, ``wait``, ``cancel``,
-    ``get_status``) is inherited from :class:`~.BaseTarget`.  This class
-    only adds ``location_id``, ``access_cost``, and the channel primitives.
     """
 
     kind: str = "local"
@@ -120,13 +107,6 @@ class LocalTarget(BaseTarget):
         """
         return 0.0 if artifact.path.exists() else None
 
-    # ------------------------------------------------------------------
-    # Channel primitives (M1.2)
-    #
-    # RemotePath → Path mapping happens *only* here.  All paths received
-    # as RemotePath are converted to local Path objects via Path(str(p)).
-    # ------------------------------------------------------------------
-
     async def run_command(
         self,
         cmd: str,
@@ -137,11 +117,6 @@ class LocalTarget(BaseTarget):
         """
         Run *cmd* in a subprocess with process-group isolation.
 
-        ``start_new_session=True`` gives the child its own process group
-        (equivalent to ``setsid``).  :class:`_LocalChannelProcess.kill` then
-        signals the whole group so that any grandchildren are also killed —
-        the process-group isolation that issue #66 requires.
-
         Args:
             cmd: Shell command string.
             cwd: Working directory on the local filesystem (mapped from
@@ -149,8 +124,14 @@ class LocalTarget(BaseTarget):
             env: Extra variables merged onto ``os.environ``.
 
         Returns:
-            A :class:`_LocalChannelProcess` wrapping the spawned process.
+            A :class:`LocalChannelProcess` wrapping the spawned process.
         """
+        # Windows does not support process groups, so we cannot use
+        # start_new_session=True.  Instead, we rely on the default behavior
+        # of subprocesses on Windows to terminate child processes when the
+        # parent process exits. (windows os.name == "nt")
+        start_new_session = True if os.name == "posix" else False
+
         merged_env = {**os.environ, **(env or {})}
         local_cwd: Path | None = Path(str(cwd)) if cwd is not None else None
 
@@ -160,9 +141,9 @@ class LocalTarget(BaseTarget):
             stderr=asyncio.subprocess.PIPE,
             env=merged_env,
             cwd=local_cwd,
-            start_new_session=True,
+            start_new_session=start_new_session,
         )
-        return _LocalChannelProcess(proc)
+        return LocalChannelProcess(proc)
 
     async def put_file(
         self,

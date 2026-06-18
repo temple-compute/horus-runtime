@@ -28,7 +28,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from horus_builtin.target.local import LocalTarget
+from horus_builtin.target.local import LocalChannelProcess, LocalTarget
 from horus_runtime.core.target.channel import ChannelProcess, RemotePath
 
 
@@ -243,11 +243,14 @@ class TestLocalTargetGroupKill:
         proc = await target.run_command(
             "sleep 60 & CHILD_PID=$!; echo $CHILD_PID; wait $CHILD_PID"
         )
+
+        assert isinstance(proc, LocalChannelProcess)
+
         # Read the child PID from the first line of stdout (non-blocking:
         # communicate() blocks until the process finishes, so instead we
         # read from the pipe via proc._proc.stdout).
-        assert proc._proc.stdout is not None  # type: ignore[attr-defined]
-        first_line = await proc._proc.stdout.readline()  # type: ignore[attr-defined]
+        assert proc._proc.stdout is not None
+        first_line = await proc._proc.stdout.readline()
         child_pid = int(first_line.strip())
 
         # Confirm the grandchild is alive before kill().
