@@ -16,49 +16,20 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for channel primitives: RemotePath, ChannelProcess ABC,
-and LocalTarget channel implementation (M1.1 / M1.2 / issue #65 / #66).
+Unit tests for channel primitives: ChannelProcess ABC, and LocalTarget channel
+implementation.
 """
 
 import os
 import signal
 import sys
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 
 from horus_builtin.target.local import LocalChannelProcess, LocalTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
-
-
-@pytest.mark.unit
-class TestRemotePath:
-    """
-    Tests for the RemotePath type alias.
-    """
-
-    def test_remote_path_is_pure_posix_path(self) -> None:
-        """
-        RemotePath must be PurePosixPath — the SSH agent builds to this alias.
-        """
-        assert RemotePath is PurePosixPath
-
-    def test_remote_path_construction(self) -> None:
-        """
-        RemotePath can be constructed and used like PurePosixPath.
-        """
-        p = RemotePath("/home/user/work")
-        assert str(p) == "/home/user/work"
-        assert p.name == "work"
-
-    def test_remote_path_division(self) -> None:
-        """
-        RemotePath supports / operator like PurePosixPath.
-        """
-        base = RemotePath("/home/user")
-        child = base / "task_id" / "side-artifacts"
-        assert str(child) == "/home/user/task_id/side-artifacts"
+from horus_runtime.core.target.channel import ChannelProcess
 
 
 @pytest.mark.unit
@@ -112,7 +83,7 @@ class TestLocalTargetRunCommand:
         """
         run_command returns a ChannelProcess instance.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("echo hello")
         stdout, _stderr = await proc.communicate()
         assert isinstance(proc, ChannelProcess)
@@ -125,7 +96,7 @@ class TestLocalTargetRunCommand:
         """
         communicate() returns (stdout, stderr) as raw bytes.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("echo 'hello world'")
         stdout, stderr = await proc.communicate()
         assert b"hello world" in stdout
@@ -137,7 +108,7 @@ class TestLocalTargetRunCommand:
         """
         Stderr bytes are available via communicate().
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("echo err >&2")
         _stdout, stderr = await proc.communicate()
         assert b"err" in stderr
@@ -148,7 +119,7 @@ class TestLocalTargetRunCommand:
         """
         Return code is 0 for a successful command.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("true")
         await proc.wait()
         assert proc.returncode == 0
@@ -159,7 +130,7 @@ class TestLocalTargetRunCommand:
         """
         Return code is non-zero for a failing command.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("false")
         await proc.wait()
         assert proc.returncode != 0
@@ -168,7 +139,7 @@ class TestLocalTargetRunCommand:
         """
         Extra env vars from the ``env`` kwarg are present in the subprocess.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command(
             "echo $MY_TEST_VAR",
             env={"MY_TEST_VAR": "channel_works"},
@@ -180,10 +151,10 @@ class TestLocalTargetRunCommand:
         """
         The ``cwd`` kwarg sets the working directory for the subprocess.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command(
             "pwd",
-            cwd=RemotePath(tmp_path),
+            cwd=tmp_path.as_posix(),
         )
         stdout, _ = await proc.communicate()
         # tmp_path may contain symlinks; resolve both sides.
@@ -195,7 +166,7 @@ class TestLocalTargetRunCommand:
         """
         wait() returns the integer exit code.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command(
             "exit 42",
         )
@@ -208,7 +179,7 @@ class TestLocalTargetRunCommand:
         """
         signal() delivers the given signal to the process group.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("sleep 30")
         proc.signal(signal.SIGTERM)
         code = await proc.wait()
@@ -237,7 +208,7 @@ class TestLocalTargetGroupKill:
         Spawn ``sh -c 'sleep 60 & echo $!'``, capture the grandchild PID,
         call kill(), then assert the grandchild is gone.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
+        target = LocalTarget(working_directory=tmp_path.as_posix())
 
         # The grandchild PID is printed to stdout so we can probe it later.
         proc = await target.run_command(
@@ -288,8 +259,8 @@ class TestLocalTargetFileOps:
         """
         put_file(bytes) then get_file returns the original bytes.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        dest = RemotePath(tmp_path / "test_file.bin")
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        dest = (tmp_path / "test_file.bin").as_posix()
         content = b"\x00\x01\x02hello"
 
         await target.put_file(content, dest)
@@ -306,8 +277,8 @@ class TestLocalTargetFileOps:
         src = tmp_path / "src.txt"
         src.write_bytes(b"from path")
 
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        dest = RemotePath(tmp_path / "subdir" / "dst.txt")
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        dest = (tmp_path / "subdir" / "dst.txt").as_posix()
 
         await target.put_file(src, dest)
         result = await target.get_file(dest)
@@ -318,31 +289,31 @@ class TestLocalTargetFileOps:
         """
         put_file creates missing parent directories automatically.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        dest = RemotePath(tmp_path / "a" / "b" / "c" / "file.txt")
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        dest = (tmp_path / "a" / "b" / "c" / "file.txt").as_posix()
 
         await target.put_file(b"nested", dest)
 
-        assert Path(str(dest)).exists()
+        assert Path(dest).exists()
 
     async def test_mkdir_creates_directory(self, tmp_path: Path) -> None:
         """
         The mkdir method creates the directory on the local filesystem.
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        new_dir = RemotePath(tmp_path / "new_dir")
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        new_dir = (tmp_path / "new_dir").as_posix()
 
         await target.mkdir(new_dir)
 
-        assert Path(str(new_dir)).is_dir()
+        assert Path(new_dir).is_dir()
 
     async def test_mkdir_is_idempotent(self, tmp_path: Path) -> None:
         """
         The mkdir method does not raise when the directory exists (mkdir -p).
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        existing = RemotePath(tmp_path / "already_there")
-        Path(str(existing)).mkdir()
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        existing = (tmp_path / "already_there").as_posix()
+        Path(existing).mkdir()
 
         await target.mkdir(existing)  # must not raise
 
@@ -350,9 +321,9 @@ class TestLocalTargetFileOps:
         """
         The mkdir method creates all intermediate parents (mkdir -p semantics).
         """
-        target = LocalTarget(working_directory=RemotePath(tmp_path))
-        deep = RemotePath(tmp_path / "x" / "y" / "z")
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        deep = (tmp_path / "x" / "y" / "z").as_posix()
 
         await target.mkdir(deep)
 
-        assert Path(str(deep)).is_dir()
+        assert Path(deep).is_dir()

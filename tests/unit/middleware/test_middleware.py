@@ -31,7 +31,7 @@ from horus_runtime.core.interaction.base import BaseInteraction
 from horus_runtime.core.interaction.renderer import BaseInteractionRenderer
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
@@ -138,7 +138,7 @@ class TrackingTarget(BaseTarget):
         self,
         cmd: str,
         *,
-        cwd: RemotePath | None = None,
+        cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
@@ -149,19 +149,19 @@ class TrackingTarget(BaseTarget):
     async def put_file(
         self,
         content: bytes | Path,
-        remote_path: RemotePath,
+        remote_path: str,
     ) -> None:
         """
         Stub channel method — not used in middleware tests.
         """
 
-    async def get_file(self, _remote_path: RemotePath) -> bytes:
+    async def get_file(self, _remote_path: str) -> bytes:
         """
         Stub channel method — not used in middleware tests.
         """
         return b""
 
-    async def mkdir(self, path: RemotePath) -> None:
+    async def mkdir(self, path: str) -> None:
         """
         Stub channel method — not used in middleware tests.
         """

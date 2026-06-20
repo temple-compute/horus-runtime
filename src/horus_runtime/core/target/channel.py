@@ -17,28 +17,9 @@
 #
 """
 Channel primitives for agentless target communication.
-
-Key types
----------
-RemotePath
-    A :class:`~pathlib.PurePosixPath` alias.  Target-side paths are always
-    POSIX paths on whatever host the target represents.  They are *never*
-    opened, stat-ed, or walked locally.
-
-ChannelProcess
-    An abstract handle returned by :meth:`BaseTarget.run_command`.  Callers
-    receive it immediately (before the command finishes) and then drive it
-    through :meth:`communicate`, :meth:`wait`, :meth:`kill`, or
-    :meth:`signal`.
 """
 
 from abc import ABC, abstractmethod
-from pathlib import PurePosixPath
-
-# Target-side paths.  These are always POSIX paths on the target host and must
-# never be opened, stat-ed, or iterated locally.  ``LocalTarget`` maps them to
-# ``Path`` only inside its own channel methods.
-RemotePath = PurePosixPath
 
 
 class ChannelProcess(ABC):

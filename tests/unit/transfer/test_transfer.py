@@ -27,7 +27,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.transfer.local_noop import LocalNoOpTransfer
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
@@ -67,7 +67,7 @@ class _UnregisteredTarget(BaseTarget):
         self,
         cmd: str,
         *,
-        cwd: RemotePath | None = None,
+        cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
@@ -78,19 +78,19 @@ class _UnregisteredTarget(BaseTarget):
     async def put_file(
         self,
         content: bytes | Path,
-        remote_path: RemotePath,
+        remote_path: str,
     ) -> None:
         """
         Not used in transfer tests.
         """
 
-    async def get_file(self, _remote_path: RemotePath) -> bytes:
+    async def get_file(self, _remote_path: str) -> bytes:
         """
         Not used in transfer tests.
         """
         return b""
 
-    async def mkdir(self, path: RemotePath) -> None:
+    async def mkdir(self, path: str) -> None:
         """
         Not used in transfer tests.
         """
