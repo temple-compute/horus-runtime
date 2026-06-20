@@ -34,7 +34,6 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.target.channel import RemotePath
 from horus_runtime.core.task.base import BaseTask
 
 
@@ -507,16 +506,14 @@ class TestFunctionTaskSideArtifacts:
         )
 
         def func(task: BaseTask) -> FileArtifact:
-            # side_artifacts_dir is a RemotePath (PurePosixPath); map to a
-            # local Path inside the in-process function.
-            Path(str(task.side_artifacts_dir / "fs.txt")).write_text("from fs")
+            (Path(task.side_artifacts_dir) / "fs.txt").write_text("from fs")
             return returned_artifact
 
         task = FunctionTask(
             id="merge_task",
             name="merge_task",
             runtime=PythonFunctionRuntime(func=func),
-            target=LocalTarget(working_directory=RemotePath(tmp_path)),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
         )
 
         await task.run()

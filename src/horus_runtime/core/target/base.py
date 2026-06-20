@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, ClassVar, final
 
 from pydantic import Field, PrivateAttr
 
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
@@ -61,8 +61,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     Human-friendly description of this kind of target.
     """
 
-    working_directory: RemotePath = Field(
-        default_factory=lambda: RemotePath(Path.cwd().as_posix())
+    working_directory: str = Field(
+        default_factory=lambda: Path.cwd().as_posix()
     )
     """
     Base directory on the target host where per-task working directories are
@@ -213,7 +213,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         self,
         cmd: str,
         *,
-        cwd: RemotePath | None = None,
+        cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
@@ -236,7 +236,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     async def put_file(
         self,
         content: bytes | Path,
-        remote_path: RemotePath,
+        remote_path: str,
     ) -> None:
         """
         Write *content* to *remote_path* on the target.
@@ -244,14 +244,11 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         Args:
             content: Either raw :class:`bytes` or a local
                 :class:`~pathlib.Path` whose contents are read and sent.
-            remote_path: Destination path on the *target* host.  This is
-                a ``RemotePath`` (``PurePosixPath``) and must not be
-                touched locally except by ``LocalTarget``'s own
-                implementation.
+            remote_path: Destination path on the *target* host.
         """
 
     @abstractmethod
-    async def get_file(self, remote_path: RemotePath) -> bytes:
+    async def get_file(self, remote_path: str) -> bytes:
         """
         Read *remote_path* from the target and return its contents as bytes.
 
@@ -263,7 +260,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
 
     @abstractmethod
-    async def mkdir(self, path: RemotePath) -> None:
+    async def mkdir(self, path: str) -> None:
         """
         Create *path* (and all missing parents) on the target.
 

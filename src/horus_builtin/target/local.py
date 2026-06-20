@@ -29,7 +29,7 @@ from typing import ClassVar
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.target.channel import ChannelProcess
 
 
 class LocalChannelProcess(ChannelProcess):
@@ -111,7 +111,7 @@ class LocalTarget(BaseTarget):
         self,
         cmd: str,
         *,
-        cwd: RemotePath | None = None,
+        cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
@@ -119,8 +119,7 @@ class LocalTarget(BaseTarget):
 
         Args:
             cmd: Shell command string.
-            cwd: Working directory on the local filesystem (mapped from
-                ``RemotePath`` to ``Path``).
+            cwd: Working directory on the local filesystem
             env: Extra variables merged onto ``os.environ``.
 
         Returns:
@@ -148,7 +147,7 @@ class LocalTarget(BaseTarget):
     async def put_file(
         self,
         content: bytes | Path,
-        remote_path: RemotePath,
+        remote_path: str,
     ) -> None:
         """
         Write *content* to *remote_path* on the local filesystem.
@@ -157,14 +156,14 @@ class LocalTarget(BaseTarget):
             content: Raw bytes or a local ``Path`` whose contents are copied.
             remote_path: Destination path (mapped to a local ``Path``).
         """
-        dest = Path(str(remote_path))
+        dest = Path(remote_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(content, (bytes, bytearray)):
             dest.write_bytes(content)
         else:
             dest.write_bytes(content.read_bytes())
 
-    async def get_file(self, remote_path: RemotePath) -> bytes:
+    async def get_file(self, remote_path: str) -> bytes:
         """
         Read *remote_path* from the local filesystem and return its bytes.
 
@@ -174,9 +173,9 @@ class LocalTarget(BaseTarget):
         Returns:
             File contents as :class:`bytes`.
         """
-        return Path(str(remote_path)).read_bytes()
+        return Path(remote_path).read_bytes()
 
-    async def mkdir(self, path: RemotePath) -> None:
+    async def mkdir(self, path: str) -> None:
         """
         Create *path* (and all missing parents) on the local filesystem.
 
@@ -185,4 +184,4 @@ class LocalTarget(BaseTarget):
         Args:
             path: Directory to create (mapped to a local ``Path``).
         """
-        Path(str(path)).mkdir(parents=True, exist_ok=True)
+        Path(path).mkdir(parents=True, exist_ok=True)

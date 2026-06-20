@@ -32,7 +32,6 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.context import HorusContext, _runtime_ctx
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.target.channel import RemotePath
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
 from horus_runtime.registry.auto_registry import AutoRegistry
 
@@ -81,7 +80,7 @@ def make_shell_task(tmp_path: Path) -> MakeTaskType:
             outputs=[],
             runtime=CommandRuntime(command=cmd),
             executor=ShellExecutor(),
-            target=LocalTarget(working_directory=RemotePath(tmp_path)),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
         )
 
     return _make_shell_task

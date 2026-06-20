@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemotePath
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -55,7 +55,7 @@ class ConcreteTestTarget(BaseTarget):
         self,
         cmd: str,
         *,
-        cwd: RemotePath | None = None,
+        cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
         """
@@ -66,19 +66,19 @@ class ConcreteTestTarget(BaseTarget):
     async def put_file(
         self,
         content: bytes | Path,
-        remote_path: RemotePath,
+        remote_path: str,
     ) -> None:
         """
         Stub channel method — not used in base-class tests.
         """
 
-    async def get_file(self, _remote_path: RemotePath) -> bytes:
+    async def get_file(self, _remote_path: str) -> bytes:
         """
         Stub channel method — not used in base-class tests.
         """
         return b""
 
-    async def mkdir(self, _path: RemotePath) -> None:
+    async def mkdir(self, _path: str) -> None:
         """
         Stub channel method — not used in base-class tests.
         """
