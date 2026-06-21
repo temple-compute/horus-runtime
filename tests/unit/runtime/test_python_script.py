@@ -1,0 +1,104 @@
+#
+# horus-runtime
+# Copyright (C) 2026 Temple Compute
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+"""
+Tests for PythonScriptRuntime and target-aware command formatting.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from horus_builtin.artifact.json import JSONArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import (
+    CommandRuntime,
+    _ArtifactRef,
+    format_command,
+)
+from horus_builtin.runtime.python_script import PythonScriptRuntime
+from horus_builtin.target.local import LocalTarget
+from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.core.artifact.base import BaseArtifact
+
+
+def _task(
+    tmp_path: Path,
+    runtime: CommandRuntime,
+    output: JSONArtifact,
+) -> HorusTask:
+    return HorusTask(
+        id="run",
+        name="run",
+        runtime=runtime,
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=tmp_path.as_posix()),
+        outputs=[output],
+    )
+
+
+@pytest.mark.usefixtures("horus_context")
+async def test_python_script_ships_script_and_builds_command(
+    tmp_path: Path,
+) -> None:
+    """The runtime puts the script on the target and runs it there."""
+    script = tmp_path / "src" / "job.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('hi')\n")
+
+    result = JSONArtifact(id="result", path=tmp_path / "out" / "result.json")
+    task = _task(
+        tmp_path,
+        PythonScriptRuntime(script=script, args="{result}"),
+        result,
+    )
+
+    cmd = await task.runtime.setup_runtime(task)
+
+    placed = Path(task.working_dir) / "job.py"
+    # Script was shipped into the task's working dir on the target...
+    assert placed.read_text() == "print('hi')\n"
+    # ...and the command runs it with the output's on-target path appended —
+    # no remote path constructed by the caller.
+    assert cmd == f"python {placed} {result.path}"
+
+
+def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
+    """{x} -> path_on_target; {x.path}/{x.id} forward to the artifact."""
+
+    class _StubTarget(LocalTarget):
+        def path_on_target(self, artifact: BaseArtifact) -> str:
+            return f"/remote/{artifact.path.name}"
+
+    result = JSONArtifact(id="result", path=tmp_path / "result.json")
+    ref = _ArtifactRef(result, _StubTarget())
+
+    assert f"{ref}" == "/remote/result.json"
+    assert str(ref.path) == str(result.path)
+    assert ref.id == "result"
+
+
+def test_format_command_uses_local_path_for_local_target(
+    tmp_path: Path,
+) -> None:
+    """On a LocalTarget, {result} resolves to the local artifact path."""
+    result = JSONArtifact(id="result", path=tmp_path / "result.json")
+    task = _task(tmp_path, CommandRuntime(command="x"), result)
+
+    assert format_command("{result}", task) == str(result.path)
+    assert format_command("{result.path}", task) == str(result.path)
+    assert format_command("{result.id}", task) == "result"

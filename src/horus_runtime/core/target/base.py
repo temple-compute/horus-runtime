@@ -208,6 +208,19 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         return False
 
+    def path_on_target(self, artifact: "BaseArtifact") -> str:
+        """
+        Absolute path where *artifact* lives on **this target's** filesystem.
+
+        Lets runtimes reference artifacts without the caller hand-building
+        remote paths: a command like ``python {script}`` resolves to the right
+        location on whichever target the task runs on. The default assumes the
+        artifact is reachable at its own path (same filesystem as the
+        orchestrator); targets that copy artifacts elsewhere (e.g. SSH)
+        override this to point at the on-host copy.
+        """
+        return str(artifact.path)
+
     @abstractmethod
     async def run_command(
         self,
