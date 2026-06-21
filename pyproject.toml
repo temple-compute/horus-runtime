@@ -53,6 +53,7 @@ workflow_time = "horus_builtin.middleware.workflow_time"
 command = "horus_builtin.runtime.command"
 python_string = "horus_builtin.runtime.python_string"
 python = "horus_builtin.runtime.python"
+python_script = "horus_builtin.runtime.python_script"
 
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"
