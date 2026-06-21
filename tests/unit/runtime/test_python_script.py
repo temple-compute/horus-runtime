@@ -20,6 +20,7 @@ Tests for PythonScriptRuntime and target-aware command formatting.
 """
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,6 +35,7 @@ from horus_builtin.runtime.python_script import PythonScriptRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.target.base import BaseTarget
 
 
 def _task(
@@ -80,12 +82,17 @@ async def test_python_script_ships_script_and_builds_command(
 def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
     """{x} -> path_on_target; {x.path}/{x.id} forward to the artifact."""
 
-    class _StubTarget(LocalTarget):
+    class _StubTarget:
         def path_on_target(self, artifact: BaseArtifact) -> str:
             return f"/remote/{artifact.path.name}"
 
     result = JSONArtifact(id="result", path=tmp_path / "result.json")
-    ref = _ArtifactRef(result, _StubTarget())
+    ref = _ArtifactRef(
+        # Ducktyping: _StubTarget has path_on_target() so it's a BaseTarget
+        # for our purposes.
+        result,
+        cast(BaseTarget, _StubTarget()),
+    )
 
     assert f"{ref}" == "/remote/result.json"
     assert str(ref.path) == str(result.path)
