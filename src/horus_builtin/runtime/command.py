@@ -66,10 +66,16 @@ def format_command(template: str, task: "BaseTask") -> str:
     Render *template* against *task*: artifacts are exposed by id (``{script}``
     resolves to the artifact's on-target path) and via the ``task`` namespace.
     """
-    refs = {
-        artifact.id: _ArtifactRef(artifact, task.target)
-        for artifact in (*task.inputs, *task.outputs)
-    }
+    artifacts = (*task.inputs, *task.outputs)
+    if any(a.id == "task" for a in artifacts):
+        raise ValueError(
+            _(
+                "Artifact id 'task' is reserved for command templates. "
+                "Please rename this artifact."
+            )
+        )
+    refs = {a.id: _ArtifactRef(a, task.target) for a in artifacts}
+
     return template.format(task=_TaskNamespace(task), **refs)
 
 

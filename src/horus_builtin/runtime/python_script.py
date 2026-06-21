@@ -20,6 +20,7 @@ PythonScriptRuntime: run a local ``.py`` file on whatever target the task uses,
 without the caller managing any remote paths.
 """
 
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -66,12 +67,18 @@ class PythonScriptRuntime(CommandRuntime):
 
     async def _setup_runtime(self, task: "BaseTask") -> str:
         remote_path = f"{task.working_dir}/{self.script.name}"
+
         # Placing the file also creates task.working_dir on the target, which
         # the executor uses as cwd and where the script's outputs land.
-        await task.target.put_file(self.script.read_bytes(), remote_path)
+        await task.target.put_file(self.script, remote_path)
 
         args = format_command(self.args, task) if self.args else ""
-        cmd = f"{self.python} {remote_path} {args}".rstrip()
+        # remote_path is ours to quote (single token); python is a trusted
+        # interpreter spec that may carry flags, and args is user-authored
+        # shell, so both stay verbatim.
+        # ponytail: placeholder paths inside args aren't quoted — quote at the
+        # substitution point in format_command if untrusted args land here.
+        cmd = f"{self.python} {shlex.quote(remote_path)} {args}".rstrip()
         self.formatted_command = cmd
 
         HorusContext.get_context().bus.emit(

@@ -19,6 +19,7 @@
 Tests for PythonScriptRuntime and target-aware command formatting.
 """
 
+import shlex
 from pathlib import Path
 from typing import cast
 
@@ -77,6 +78,33 @@ async def test_python_script_ships_script_and_builds_command(
     # ...and the command runs it with the output's on-target path appended —
     # no remote path constructed by the caller.
     assert cmd == f"python {placed} {result.path}"
+
+
+@pytest.mark.usefixtures("horus_context")
+async def test_python_script_quotes_remote_path_with_spaces(
+    tmp_path: Path,
+) -> None:
+    """A working dir with spaces is shell-quoted, not split into two args."""
+    work = tmp_path / "my project"
+    work.mkdir()
+    script = tmp_path / "job.py"
+    script.write_text("print('hi')\n")
+
+    result = JSONArtifact(id="result", path=tmp_path / "result.json")
+    task = HorusTask(
+        id="run",
+        name="run",
+        runtime=PythonScriptRuntime(script=script),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=work.as_posix()),
+        outputs=[result],
+    )
+
+    cmd = await task.runtime.setup_runtime(task)
+
+    placed = Path(task.working_dir) / "job.py"
+    assert cmd == f"python {shlex.quote(str(placed))}"
+    assert "'" in cmd  # the space forced quoting, so the path is one arg
 
 
 def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
