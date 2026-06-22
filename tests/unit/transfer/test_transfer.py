@@ -27,7 +27,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.transfer.local_noop import LocalNoOpTransfer
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
@@ -94,6 +94,12 @@ class _UnregisteredTarget(BaseTarget):
         """
         Not used in transfer tests.
         """
+
+    async def list_dir(self, _path: str) -> list[RemoteDirEntry]:
+        """
+        Not used in transfer tests.
+        """
+        return []
 
 
 @pytest.mark.unit

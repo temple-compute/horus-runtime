@@ -29,7 +29,7 @@ from typing import ClassVar
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
 
 
 class LocalChannelProcess(ChannelProcess):
@@ -185,3 +185,36 @@ class LocalTarget(BaseTarget):
             path: Directory to create (mapped to a local ``Path``).
         """
         Path(path).mkdir(parents=True, exist_ok=True)
+
+    async def list_dir(self, path: str) -> list[RemoteDirEntry]:
+        """
+        List the immediate children of *path* on the local filesystem.
+
+        Uses ``pathlib`` (no shell, OS-agnostic) and skips symlinks.
+
+        Args:
+            path: Directory to list (mapped to a local ``Path``).
+
+        Returns:
+            One :class:`RemoteDirEntry` per child, or ``[]`` if *path* is not a
+            directory.
+        """
+        base = Path(path)
+        if not base.is_dir():
+            return []
+
+        entries: list[RemoteDirEntry] = []
+        for child in base.iterdir():
+            if child.is_symlink():
+                continue
+            is_dir = child.is_dir()
+            size = 0 if is_dir else child.stat().st_size
+            entries.append(
+                RemoteDirEntry(
+                    name=child.name,
+                    path=child.as_posix(),
+                    is_dir=is_dir,
+                    size=size,
+                )
+            )
+        return entries

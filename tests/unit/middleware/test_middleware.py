@@ -31,7 +31,7 @@ from horus_runtime.core.interaction.base import BaseInteraction
 from horus_runtime.core.interaction.renderer import BaseInteractionRenderer
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
@@ -165,6 +165,12 @@ class TrackingTarget(BaseTarget):
         """
         Stub channel method — not used in middleware tests.
         """
+
+    async def list_dir(self, _path: str) -> list[RemoteDirEntry]:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        return []
 
 
 class DummyInteraction(BaseInteraction[str]):

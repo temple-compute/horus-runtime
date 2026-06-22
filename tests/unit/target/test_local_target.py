@@ -176,3 +176,50 @@ class TestLocalTargetDispatch:
         await task.target.cancel()
 
         assert task.status == TaskStatus.CANCELED
+
+
+@pytest.mark.unit
+class TestLocalTargetListDir:
+    """
+    Tests for LocalTarget.list_dir.
+    """
+
+    async def test_lists_files_and_dirs_with_sizes(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Files report their size; directories report 0 and is_dir=True.
+        """
+        (tmp_path / "a.txt").write_text("hello")  # 5 bytes
+        (tmp_path / "sub").mkdir()
+
+        target = LocalTarget()
+        entries = {
+            e.name: e for e in await target.list_dir(tmp_path.as_posix())
+        }
+
+        assert set(entries) == {"a.txt", "sub"}
+        assert entries["a.txt"].is_dir is False
+        assert entries["a.txt"].size == 5
+        assert entries["a.txt"].path == (tmp_path / "a.txt").as_posix()
+        assert entries["sub"].is_dir is True
+        assert entries["sub"].size == 0
+
+    async def test_skips_symlinks(self, tmp_path: Path) -> None:
+        """
+        Symlinks are not listed (cycle/noise protection).
+        """
+        (tmp_path / "real.txt").write_text("x")
+        (tmp_path / "link.txt").symlink_to(tmp_path / "real.txt")
+
+        target = LocalTarget()
+        names = {e.name for e in await target.list_dir(tmp_path.as_posix())}
+
+        assert names == {"real.txt"}
+
+    async def test_missing_dir_returns_empty(self, tmp_path: Path) -> None:
+        """
+        Listing a non-existent path returns an empty list.
+        """
+        target = LocalTarget()
+        assert await target.list_dir((tmp_path / "nope").as_posix()) == []

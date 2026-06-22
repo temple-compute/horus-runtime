@@ -23,6 +23,7 @@ specified runtime in a certain environment, for example running it locally as
 a command or running it inside a SLURM job, either remote or locally.
 """
 
+import tempfile
 from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
@@ -31,11 +32,13 @@ from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.executor import (
     ExecutorMiddleware,
     ExecutorMiddlewareContext,
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -104,37 +107,113 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
 
     async def collect_side_artifacts(self, task: "BaseTask") -> None:
         """
-        Collect side artifacts produced during task execution.
+        Collect side artifacts produced during task execution and bring them
+        back to the orchestrator's local filesystem.
 
-        For ``LocalTarget`` (and any target whose ``side_artifacts_dir`` is
-        accessible as a local path), this iterates the directory and registers
-        every file and folder as a side artifact on the task.
+        Side artifacts live in ``task.side_artifacts_dir`` on the **target**
+        host, which is not necessarily the orchestrator's filesystem. They are
+        listed and transferred over the target channel (``list_dir`` +
+        ``get_file``) into a local temporary directory, then registered as
+        :class:`FileArtifact` (top-level files) or :class:`FolderArtifact`
+        (top-level folders, with their nested contents reconstructed locally).
 
-        For remote targets the directory is not locally accessible, so this
-        method is best-effort: it attempts a local ``Path`` walk and silently
-        skips collection when the path does not exist locally.
+        Side artifacts are meant to be small, inspectable outputs (logs,
+        plots, small intermediates). Files larger than
+        ``runtime_settings.MAX_SIDE_ARTIFACT_BYTES`` are skipped with a
+        warning; large data should be declared as task inputs/outputs, which
+        have their own transfer strategies.
 
-        .. ponytail: full remote collection via channel ``ls`` + ``get_file``
-           is the upgrade path (M2.3 follow-up); not needed for the local demo.
+        This runs in ``execute()``'s ``finally`` block, so it is best-effort:
+        any failure is logged and swallowed so it never masks the task's own
+        exception.
         """
-        # TODO: Use the channel to list and retrieve side artifacts from
-        # remote targets.
-        local_path = Path(str(task.side_artifacts_dir))
-        if not local_path.exists():
+        try:
+            entries = await task.target.list_dir(task.side_artifacts_dir)
+        except Exception as exc:
+            horus_logger.log.warning(
+                _(
+                    "Failed to list side artifacts for task "
+                    "%(task_id)s: %(err)s"
+                )
+                % {"task_id": task.id, "err": exc}
+            )
             return
 
-        for artifact_path in local_path.iterdir():
-            if artifact_path.is_file():
-                task.side_artifacts.append(
-                    FileArtifact(
-                        id=f"{task.id}_{artifact_path.name}",
-                        path=artifact_path,
+        if not entries:
+            return
+
+        cap = runtime_settings.MAX_SIDE_ARTIFACT_BYTES
+        landing = Path(tempfile.mkdtemp(prefix=f"horus-side-{task.id}-"))
+
+        for entry in entries:
+            try:
+                if entry.is_dir:
+                    local_path = await self._pull_tree(
+                        task, entry.path, landing / entry.name, cap
                     )
-                )
-            elif artifact_path.is_dir():
-                task.side_artifacts.append(
-                    FolderArtifact(
-                        id=f"{task.id}_{artifact_path.name}",
-                        path=artifact_path,
+                    task.side_artifacts.append(
+                        FolderArtifact(
+                            id=f"{task.id}_{entry.name}", path=local_path
+                        )
                     )
+                else:
+                    if entry.size > cap:
+                        horus_logger.log.warning(
+                            _(
+                                "Skipping large side artifact %(name)s "
+                                "(%(size)d bytes)"
+                            )
+                            % {"name": entry.name, "size": entry.size}
+                        )
+                        continue
+                    local_path = landing / entry.name
+                    local_path.write_bytes(
+                        await task.target.get_file(entry.path)
+                    )
+                    task.side_artifacts.append(
+                        FileArtifact(
+                            id=f"{task.id}_{entry.name}", path=local_path
+                        )
+                    )
+            except Exception as exc:
+                horus_logger.log.warning(
+                    _("Failed to collect side artifact %(name)s: %(err)s")
+                    % {"name": entry.name, "err": exc}
                 )
+
+    async def _pull_tree(
+        self,
+        task: "BaseTask",
+        remote_root: str,
+        local_root: Path,
+        cap: int,
+    ) -> Path:
+        """
+        Reconstruct the target directory tree rooted at *remote_root* under
+        *local_root*, using the channel (``list_dir`` + ``get_file``).
+
+        Walks iteratively (no recursion-depth limit). Every directory is
+        created locally so empty directories are preserved; files larger than
+        *cap* are skipped with a warning. Returns *local_root*.
+        """
+        stack: list[tuple[str, Path]] = [(remote_root, local_root)]
+        while stack:
+            remote_dir, local_dir = stack.pop()
+            local_dir.mkdir(parents=True, exist_ok=True)
+            for child in await task.target.list_dir(remote_dir):
+                local_child = local_dir / child.name
+                if child.is_dir:
+                    stack.append((child.path, local_child))
+                elif child.size > cap:
+                    horus_logger.log.warning(
+                        _(
+                            "Skipping large side artifact %(name)s "
+                            "(%(size)d bytes)"
+                        )
+                        % {"name": child.name, "size": child.size}
+                    )
+                else:
+                    local_child.write_bytes(
+                        await task.target.get_file(child.path)
+                    )
+        return local_root

@@ -96,8 +96,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
     )
     """
     Transient, undeclared artifacts produced by the task that the user may want
-    to inspect (logs, intermediate files, etc.) but which are not consumed by
-    any downstream task.
+    to inspect (logs, plots, small intermediate files, etc.) but which are not
+    consumed by any downstream task.
     """
 
     executor: BaseExecutor
@@ -151,7 +151,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
     @property
     def side_artifacts_dir(self) -> str:
         """
-        Directory where side-product artifacts are written by convention.
+        Directory **on the target host** where side-product artifacts are
+        written by convention. This is a target-side path: it must not be
+        opened with local filesystem operations for remote targets. Use the
+        target channel (``list_dir`` / ``get_file``) to read it.
         """
         return (Path(self.working_dir) / "side-artifacts").as_posix()
 
