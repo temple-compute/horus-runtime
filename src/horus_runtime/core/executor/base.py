@@ -53,9 +53,6 @@ def _is_safe_component(name: str) -> bool:
     Side-artifact entry names come from a target's ``list_dir`` (possibly a
     remote, untrusted channel), so reject path separators and parent refs to
     prevent traversal when building local paths.
-
-    ponytail: explicit separator check (not ``Path``) so it is correct on both
-    POSIX and Windows orchestrators regardless of the listing's origin.
     """
     return (
         name not in ("", ".", "..")
