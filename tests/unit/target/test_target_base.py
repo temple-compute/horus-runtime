@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -82,6 +82,12 @@ class ConcreteTestTarget(BaseTarget):
         """
         Stub channel method — not used in base-class tests.
         """
+
+    async def list_dir(self, _path: str) -> list[RemoteDirEntry]:
+        """
+        Stub channel method — not used in base-class tests.
+        """
+        return []
 
 
 @pytest.mark.unit

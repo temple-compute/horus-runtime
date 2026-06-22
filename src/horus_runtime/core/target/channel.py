@@ -20,6 +20,26 @@ Channel primitives for agentless target communication.
 """
 
 from abc import ABC, abstractmethod
+from typing import NamedTuple
+
+
+class RemoteDirEntry(NamedTuple):
+    """
+    One entry in a target directory listing, returned by
+    :meth:`~horus_runtime.core.target.base.BaseTarget.list_dir`.
+    """
+
+    name: str
+    """Basename of the entry (the executor builds local paths from names)."""
+
+    path: str
+    """Absolute path of the entry on the **target** host."""
+
+    is_dir: bool
+    """Whether the entry is a directory."""
+
+    size: int
+    """File size in bytes; ``0`` for directories."""
 
 
 class ChannelProcess(ABC):

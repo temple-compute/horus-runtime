@@ -31,6 +31,13 @@ class HorusRuntimeSettings(BaseSettings):
 
     SIDE_ARTIFACTS_DIR_ENV: str = "HORUS_SIDE_ARTIFACTS_DIR"
 
+    MAX_SIDE_ARTIFACT_BYTES: int = 100 * 1024 * 1024
+    """
+    Maximum size (bytes) of a single side-artifact file collected back to
+    the orchestrator. Files above this are skipped with a warning; large
+    data should be declared as task inputs/outputs instead.
+    """
+
 
 runtime_settings = HorusRuntimeSettings()
 

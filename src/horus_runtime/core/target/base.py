@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, ClassVar, final
 
 from pydantic import Field, PrivateAttr
 
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
@@ -282,4 +282,25 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
         Args:
             path: Directory path to create on the *target* host.
+        """
+
+    @abstractmethod
+    async def list_dir(self, path: str) -> list[RemoteDirEntry]:
+        """
+        List the immediate children of *path* on the target host
+        (non-recursive).
+
+        Implementations must use a **native, non-shell** mechanism so this is
+        OS-agnostic (``pathlib`` locally, SFTP/agent API remotely) and must
+        **skip symlinks** (they cause cycles and are almost always noise in a
+        side-artifacts directory). Each :class:`.RemoteDirEntry` carries the
+        file ``size`` (``0`` for directories) so callers can enforce a size cap
+        before transferring.
+
+        Args:
+            path: Directory path on the *target* host to list.
+
+        Returns:
+            One :class:`.RemoteDirEntry` per top-level child, or an empty list
+            if *path* does not exist or is not a directory.
         """
