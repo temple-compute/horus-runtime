@@ -24,7 +24,7 @@ import contextlib
 import os
 from collections.abc import AsyncIterator
 
-# ponytail: os.chdir is process-global, so concurrently dispatched in-process
+# os.chdir is process-global, so concurrently dispatched in-process
 # tasks (different LocalTargets, same event loop) would clobber each other's
 # cwd. This lock serializes the chdir window across both Python executors.
 # Drop it only if these executors stop using chdir.

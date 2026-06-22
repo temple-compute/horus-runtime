@@ -60,6 +60,17 @@ class AutoMiddleware[T = Any](ABC):
 
         # Concrete subclass — find its domain root and register there
         if isabstract(cls):
+            # Debug log to indicate that this class is being
+            # skipped for registration.
+            horus_logger.log.debug(
+                _(
+                    "%(cls_name)s is abstract or opted-out, "
+                    "skipping registration. "
+                    "Concrete subclasses will still be registered if they "
+                    "inherit from AutoMiddleware."
+                )
+                % {"cls_name": cls.__name__}
+            )
             return
 
         for root in AutoMiddleware._registry_roots:

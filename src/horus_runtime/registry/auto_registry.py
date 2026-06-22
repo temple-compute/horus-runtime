@@ -183,6 +183,17 @@ class AutoRegistry(BaseModel, ABC):
         # Abstract classes and opted-out classes are never registered as
         # concrete implementations.
         if isabstract(cls) or not cls.add_to_registry:
+            # Debug log to indicate that this class is being
+            # skipped for registration.
+            horus_logger.log.debug(
+                _(
+                    "%(cls_name)s is abstract or opted-out, "
+                    "skipping registration. "
+                    "Concrete subclasses will still be registered if they "
+                    "inherit from AutoRegistry."
+                )
+                % {"cls_name": cls.__name__}
+            )
             return
 
         # Every concrete subclass must declare a 'registry_key' class variable
