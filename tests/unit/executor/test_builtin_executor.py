@@ -20,13 +20,18 @@
 Unit tests for ShellExecutor and related builtin executors.
 """
 
+import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from horus_builtin.executor.python_exec import PythonExecExecutor
 from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_builtin.target.local import LocalTarget
+from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.task.exceptions import TaskExecutionError
@@ -191,3 +196,37 @@ class TestShellExecutorIntegration:
         # Use 'true' command which should always exit with 0
         task = make_shell_task("true")
         await executor.execute(task)
+
+
+@pytest.mark.unit
+class TestPythonExecExecutor:
+    """
+    Test that the in-process Python executor runs in the task working dir.
+    """
+
+    async def test_exec_runs_in_task_working_dir(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Relative paths in exec'd code resolve to ``task.working_dir`` (issue
+        #82), and the process cwd is restored afterwards.
+        """
+        del horus_context
+
+        task = HorusTask(
+            name="py_task",
+            id="py_task_id",
+            inputs=[],
+            outputs=[],
+            runtime=PythonCodeStringRuntime(
+                code="open('out.txt', 'w').write('ok')"
+            ),
+            executor=PythonExecExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+
+        cwd_before = os.getcwd()
+        await PythonExecExecutor().execute(task)
+
+        assert (Path(task.working_dir) / "out.txt").read_text() == "ok"
+        assert os.getcwd() == cwd_before

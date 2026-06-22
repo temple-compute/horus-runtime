@@ -20,6 +20,7 @@ Python executor for in-memory workflows in horus-runtime. (Function
 executor).
 """
 
+import contextlib
 from inspect import isawaitable
 from typing import ClassVar
 
@@ -60,7 +61,13 @@ class PythonFunctionExecutor(BaseExecutor):
         # Get the function and resolved arguments from the runtime.
         func, args = await task.runtime.setup_runtime(task)
 
-        result = func(**args)
+        # Run in the task's working dir so relative paths match ShellExecutor.
+        # Resolve the awaitable inside the block so async functions run under
+        # the working dir too.
+        with contextlib.chdir(task.working_dir):
+            result = func(**args)
+            if isawaitable(result):
+                result = await result
 
         await self._parse_result_artifacts(task, result)
 
