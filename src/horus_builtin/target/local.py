@@ -190,8 +190,6 @@ class LocalTarget(BaseTarget):
         """
         List the immediate children of *path* on the local filesystem.
 
-        Uses ``pathlib`` (no shell, OS-agnostic) and skips symlinks.
-
         Args:
             path: Directory to list (mapped to a local ``Path``).
 

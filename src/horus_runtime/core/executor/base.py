@@ -122,10 +122,6 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         ``runtime_settings.MAX_SIDE_ARTIFACT_BYTES`` are skipped with a
         warning; large data should be declared as task inputs/outputs, which
         have their own transfer strategies.
-
-        This runs in ``execute()``'s ``finally`` block, so it is best-effort:
-        any failure is logged and swallowed so it never masks the task's own
-        exception.
         """
         try:
             entries = await task.target.list_dir(task.side_artifacts_dir)
