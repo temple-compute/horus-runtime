@@ -46,6 +46,25 @@ if TYPE_CHECKING:
 RuntimeFilterType = tuple[type[BaseRuntime], ...]
 
 
+def _is_safe_component(name: str) -> bool:
+    """
+    True if *name* is a single, safe path component.
+
+    Side-artifact entry names come from a target's ``list_dir`` (possibly a
+    remote, untrusted channel), so reject path separators and parent refs to
+    prevent traversal when building local paths.
+
+    ponytail: explicit separator check (not ``Path``) so it is correct on both
+    POSIX and Windows orchestrators regardless of the listing's origin.
+    """
+    return (
+        name not in ("", ".", "..")
+        and "/" not in name
+        and "\\" not in name
+        and "\x00" not in name
+    )
+
+
 class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
     The base executor represents the abstract concept of an executor in the
@@ -139,10 +158,19 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
             return
 
         cap = runtime_settings.MAX_SIDE_ARTIFACT_BYTES
-        landing = Path(tempfile.mkdtemp(prefix=f"horus-side-{task.id}-"))
+        safe_id = "".join(
+            c if (c.isalnum() or c in "-_.") else "_" for c in task.id
+        )
+        landing = Path(tempfile.mkdtemp(prefix=f"horus-side-{safe_id}-"))
 
         for entry in entries:
             try:
+                if not _is_safe_component(entry.name):
+                    horus_logger.log.warning(
+                        _("Skipping side artifact with unsafe name %(name)s")
+                        % {"name": entry.name}
+                    )
+                    continue
                 if entry.is_dir:
                     local_path = await self._pull_tree(
                         task, entry.path, landing / entry.name, cap
@@ -197,6 +225,12 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
             remote_dir, local_dir = stack.pop()
             local_dir.mkdir(parents=True, exist_ok=True)
             for child in await task.target.list_dir(remote_dir):
+                if not _is_safe_component(child.name):
+                    horus_logger.log.warning(
+                        _("Skipping side artifact with unsafe name %(name)s")
+                        % {"name": child.name}
+                    )
+                    continue
                 local_child = local_dir / child.name
                 if child.is_dir:
                     stack.append((child.path, local_child))

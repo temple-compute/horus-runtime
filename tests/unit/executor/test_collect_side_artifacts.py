@@ -212,3 +212,80 @@ class TestCollectRemoteSideArtifacts:
         sub = by_id["job_sub"]
         assert isinstance(sub, FolderArtifact)
         assert (sub.path / "inner.bin").read_bytes() == b"\x00\x01\x02"
+
+
+class _MaliciousRemoteTarget(BaseTarget):
+    """
+    A target whose channel returns entry names containing path separators /
+    parent refs, to verify collection rejects them (no path traversal).
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "_malicious_remote"
+
+    @property
+    def location_id(self) -> str:
+        return "inmem://malicious"
+
+    def access_cost(self, _: BaseArtifact) -> float | None:
+        return None
+
+    async def run_command(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        raise NotImplementedError
+
+    async def put_file(
+        self, content: bytes | Path, remote_path: str
+    ) -> None: ...
+
+    async def get_file(self, _remote_path: str) -> bytes:
+        return b"evil"
+
+    async def mkdir(self, path: str) -> None: ...
+
+    async def list_dir(self, path: str) -> list[RemoteDirEntry]:
+        if path.endswith("/sub"):
+            # A nested traversal child, to exercise the _pull_tree guard.
+            return [RemoteDirEntry("..", f"{path}/..", False, 4)]
+        return [
+            RemoteDirEntry("../evil.txt", f"{path}/../evil.txt", False, 4),
+            RemoteDirEntry("sub", f"{path}/sub", True, 0),
+        ]
+
+
+@pytest.mark.unit
+class TestCollectRejectsUnsafeNames:
+    """
+    Path-traversal protection against untrusted channel listings.
+    """
+
+    async def test_rejects_unsafe_entry_names(self) -> None:
+        """
+        Entries whose name is not a single path component are skipped, both at
+        the top level and inside reconstructed folders.
+        """
+        target = _MaliciousRemoteTarget(working_directory="/remote")
+        task = HorusTask(
+            name="t",
+            id="job",
+            inputs=[],
+            outputs=[],
+            runtime=CommandRuntime(command="noop"),
+            executor=ShellExecutor(),
+            target=target,
+        )
+
+        await task.executor.collect_side_artifacts(task)
+
+        by_id = {a.id: a for a in task.side_artifacts}
+        # Top-level "../evil.txt" is rejected; only the safe folder remains.
+        assert set(by_id) == {"job_sub"}
+        sub = by_id["job_sub"]
+        assert isinstance(sub, FolderArtifact)
+        # The nested ".." child was rejected, so the folder stays empty.
+        assert list(sub.path.iterdir()) == []
