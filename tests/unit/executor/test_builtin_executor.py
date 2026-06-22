@@ -28,7 +28,9 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executor.python_exec import PythonExecExecutor
+from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
@@ -219,14 +221,57 @@ class TestPythonExecExecutor:
             inputs=[],
             outputs=[],
             runtime=PythonCodeStringRuntime(
-                code="open('out.txt', 'w').write('ok')"
+                code="from pathlib import Path; "
+                "Path('out.txt').write_text('ok')"
             ),
             executor=PythonExecExecutor(),
             target=LocalTarget(working_directory=tmp_path.as_posix()),
         )
 
         cwd_before = os.getcwd()
-        await PythonExecExecutor().execute(task)
+        await task.executor.execute(task)
+
+        assert (Path(task.working_dir) / "out.txt").read_text() == "ok"
+        assert os.getcwd() == cwd_before
+
+
+@pytest.mark.unit
+class TestPythonFunctionExecutor:
+    """
+    Test that the in-process Python function executor runs in the task
+    working dir (issue #82), for both sync and async functions.
+    """
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_function_runs_in_task_working_dir(
+        self, use_async: bool, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Relative paths in the wrapped function resolve to ``task.working_dir``,
+        and the process cwd is restored afterwards.
+        """
+        del horus_context
+
+        def sync_fn() -> None:
+            Path("out.txt").write_text("ok")
+
+        async def async_fn() -> None:
+            Path("out.txt").write_text("ok")
+
+        task = HorusTask(
+            name="fn_task",
+            id="fn_task_id",
+            inputs=[],
+            outputs=[],
+            runtime=PythonFunctionRuntime(
+                func=async_fn if use_async else sync_fn
+            ),
+            executor=PythonFunctionExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+
+        cwd_before = os.getcwd()
+        await task.executor.execute(task)
 
         assert (Path(task.working_dir) / "out.txt").read_text() == "ok"
         assert os.getcwd() == cwd_before
