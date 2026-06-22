@@ -22,6 +22,7 @@ a Python code task in-process in the Horus runtime.
 
 from typing import TYPE_CHECKING, ClassVar
 
+from horus_builtin.executor._cwd_lock import chdir_locked
 from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
@@ -66,4 +67,6 @@ class PythonExecExecutor(BaseExecutor):
 
         # Security Warning: using exec to execute arbitrary code can be
         # dangerous and should be done with caution.
-        exec(code, scope)
+        # Run in the task's working dir so relative paths match ShellExecutor.
+        async with chdir_locked(task.working_dir):
+            exec(code, scope)
