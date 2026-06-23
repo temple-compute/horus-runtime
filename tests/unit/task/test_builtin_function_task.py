@@ -364,6 +364,11 @@ class TestFunctionTaskExecution:
         assert output_artifact.path.read_text() == "HELLO"
 
 
+def _user_artifacts(task: BaseTask) -> list[BaseArtifact]:
+    """side_artifacts minus the per-task log file the middleware auto-adds."""
+    return [a for a in task.side_artifacts if a.id != f"{task.id}_logs"]
+
+
 @pytest.mark.unit
 class TestFunctionTaskSideArtifacts:
     """
@@ -388,7 +393,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == [artifact]
+        assert _user_artifacts(task) == [artifact]
 
     async def test_sync_function_returning_list_of_artifacts_captured(
         self,
@@ -409,7 +414,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == [art1, art2]
+        assert _user_artifacts(task) == [art1, art2]
 
     async def test_async_function_returning_single_artifact_captured(
         self,
@@ -432,7 +437,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == [artifact]
+        assert _user_artifacts(task) == [artifact]
 
     async def test_async_function_returning_list_of_artifacts_captured(
         self,
@@ -456,7 +461,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == [art1, art2]
+        assert _user_artifacts(task) == [art1, art2]
 
     async def test_none_return_leaves_side_artifacts_empty(self) -> None:
         """
@@ -470,7 +475,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == []
+        assert _user_artifacts(task) == []
 
     @patch("horus_builtin.executor.python_fn.horus_logger")
     async def test_unexpected_return_type_logs_warning_and_skips(
@@ -489,7 +494,7 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == []
+        assert _user_artifacts(task) == []
         mock_logger.log.warning.assert_called_once()
 
     async def test_returned_and_filesystem_artifacts_are_both_captured(
@@ -518,10 +523,28 @@ class TestFunctionTaskSideArtifacts:
 
         await task.run()
 
-        assert task.side_artifacts == [returned_artifact]
+        # run() collects filesystem side artifacts itself (executor.execute's
+        # finally), so the returned artifact stays first and the collected
+        # fs.txt is appended after it.
+        user = _user_artifacts(task)
+        assert len(user) == 2
+        assert user[0] is returned_artifact
+        assert user[1].id == "merge_task_fs.txt"
 
-        await task.executor.collect_side_artifacts(task)
+    async def test_print_is_captured_in_task_log(self) -> None:
+        """
+        print() inside a task is forwarded to loguru by the log-file
+        middleware, so it lands in the per-task ``.log`` side artifact.
+        """
+        task = FunctionTask(
+            id="print_task",
+            name="print_task",
+            runtime=PythonFunctionRuntime(
+                func=lambda: print("marker-xyz")  # noqa: T201
+            ),
+        )
 
-        assert len(task.side_artifacts) == 2
-        assert task.side_artifacts[0] is returned_artifact
-        assert task.side_artifacts[1].id == "merge_task_fs.txt"
+        await task.run()
+
+        log = next(a for a in task.side_artifacts if a.id == "print_task_logs")
+        assert "marker-xyz" in Path(log.path).read_text()
