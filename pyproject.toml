@@ -45,6 +45,7 @@ cli = "horus_builtin.interaction.cli"
 
 [project.entry-points."horus.middleware.task"]
 task_time = "horus_builtin.middleware.task_time"
+task_log_file = "horus_builtin.middleware.task_log_file"
 
 [project.entry-points."horus.middleware.workflow"]
 workflow_time = "horus_builtin.middleware.workflow_time"

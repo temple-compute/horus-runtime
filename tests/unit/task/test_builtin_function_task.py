@@ -497,9 +497,11 @@ class TestFunctionTaskSideArtifacts:
         tmp_path: Path,
     ) -> None:
         """
-        When a function both returns a BaseArtifact and writes a file to
-        task.side_artifacts_dir, the returned artifact appears first (index 0)
-        and the filesystem-collected artifact is appended after (index 1).
+        ``run()`` captures only what the function returns; filesystem side
+        artifacts are gathered by ``collect_side_artifacts`` (driven by the
+        side-product upload middleware, not the executor). After collection the
+        returned artifact stays first (index 0) and the filesystem-collected
+        artifact is appended after (index 1).
         """
         returned_artifact = FileArtifact(
             id="returned", path=tmp_path / "returned.txt"
@@ -517,6 +519,10 @@ class TestFunctionTaskSideArtifacts:
         )
 
         await task.run()
+
+        assert task.side_artifacts == [returned_artifact]
+
+        await task.executor.collect_side_artifacts(task)
 
         assert len(task.side_artifacts) == 2
         assert task.side_artifacts[0] is returned_artifact
