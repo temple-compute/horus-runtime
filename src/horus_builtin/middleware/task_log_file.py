@@ -61,10 +61,11 @@ class _LoguruStream(io.TextIOBase):
 
 
 class TaskLogFileMiddleware(TaskMiddleware):
-    """Captures loguru output to {side_artifacts_dir}/{task.name}.log.
-
-    The file is collected and uploaded by the side-product upload middleware
-    after the task finishes (on success *and* failure).
+    """
+    Capture the task's loguru output (plus its stdout/stderr) to its own
+    ``<horus_logger.log_directory>/<task.name>.log`` file and register that
+    file as a side artifact on the task once it finishes (on success *and*
+    failure).
     """
 
     async def wrap(
