@@ -111,7 +111,16 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
             )
         finally:
             # Collect side artifacts after execution.
-            await self.collect_side_artifacts(task)
+            try:
+                await self.collect_side_artifacts(task)
+            except Exception as exc:
+                horus_logger.log.warning(
+                    _(
+                        "Failed to collect side artifacts for task "
+                        "%(task_id)s: %(err)s"
+                    )
+                    % {"task_id": task.id, "err": exc}
+                )
 
     @abstractmethod
     async def _execute(self, task: "BaseTask") -> None:

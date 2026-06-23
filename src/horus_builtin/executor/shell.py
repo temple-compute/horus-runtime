@@ -87,22 +87,29 @@ class ShellExecutor(BaseExecutor):
         )
 
         try:
-            __, stderr = await proc.communicate()
+            stdout, stderr = await proc.communicate()
         except asyncio.CancelledError:
             proc.kill()
             await proc.wait()
             raise
 
+        # Surface command output into the per-run log stream.
+        out = stdout.decode(errors="replace").strip() if stdout else ""
+        err = stderr.decode(errors="replace").strip() if stderr else ""
+        if out:
+            horus_logger.log.info(out)
+        if err:
+            horus_logger.log.warning(err)
+
         if proc.returncode != 0:
             horus_logger.log.error(
                 _(
                     "Command execution failed for task %(task_id)s with "
-                    "return code %(return_code)s. Stderr: %(stderr)s"
+                    "return code %(return_code)s"
                 )
                 % {
                     "task_id": task.id,
                     "return_code": proc.returncode,
-                    "stderr": stderr.decode().strip(),
                 }
             )
             raise TaskExecutionError(
