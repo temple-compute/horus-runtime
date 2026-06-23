@@ -93,9 +93,7 @@ class ShellExecutor(BaseExecutor):
             await proc.wait()
             raise
 
-        # Surface command output into the per-run log stream. Without this,
-        # successful task output is discarded (previously stderr was only
-        # logged on failure, and stdout never at all).
+        # Surface command output into the per-run log stream.
         out = stdout.decode(errors="replace").strip() if stdout else ""
         err = stderr.decode(errors="replace").strip() if stderr else ""
         if out:

@@ -497,11 +497,9 @@ class TestFunctionTaskSideArtifacts:
         tmp_path: Path,
     ) -> None:
         """
-        ``run()`` captures only what the function returns; filesystem side
-        artifacts are gathered by ``collect_side_artifacts`` (driven by the
-        side-product upload middleware, not the executor). After collection the
-        returned artifact stays first (index 0) and the filesystem-collected
-        artifact is appended after (index 1).
+        When a function both returns a BaseArtifact and writes a file to
+        task.side_artifacts_dir, the returned artifact appears first (index 0)
+        and the filesystem-collected artifact is appended after (index 1).
         """
         returned_artifact = FileArtifact(
             id="returned", path=tmp_path / "returned.txt"

@@ -104,13 +104,23 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         # code works on both local and remote targets (M2.3).
         await task.target.mkdir(task.side_artifacts_dir)
 
-        # Side artifacts are collected (and uploaded) by the side-product
-        # upload middleware after the task finishes, so it runs even when a
-        # task fails before reaching the executor (e.g. input validation).
-        await ExecutorMiddleware.call_with_middleware(
-            ExecutorMiddlewareContext(executor=self, task=task),
-            lambda: self._execute(task),
-        )
+        try:
+            await ExecutorMiddleware.call_with_middleware(
+                ExecutorMiddlewareContext(executor=self, task=task),
+                lambda: self._execute(task),
+            )
+        finally:
+            # Collect side artifacts after execution.
+            try:
+                await self.collect_side_artifacts(task)
+            except Exception as exc:
+                horus_logger.log.warning(
+                    _(
+                        "Failed to collect side artifacts for task "
+                        "%(task_id)s: %(err)s"
+                    )
+                    % {"task_id": task.id, "err": exc}
+                )
 
     @abstractmethod
     async def _execute(self, task: "BaseTask") -> None:

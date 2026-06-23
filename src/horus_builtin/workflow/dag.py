@@ -48,7 +48,7 @@ class UnknownTaskError(KeyError, WorkflowError):
     pass
 
 
-def build_artifact_producers(tasks: list[BaseTask]) -> dict[str, str]:
+def build_artifact_producers(tasks: list["BaseTask"]) -> dict[str, str]:
     """
     Returns a map of artifact_id -> task_id for every output artifact
     declared across all tasks. Raises if two tasks declare the same
@@ -64,7 +64,7 @@ def build_artifact_producers(tasks: list[BaseTask]) -> dict[str, str]:
 
 
 def build_dependencies(
-    tasks: list[BaseTask],
+    tasks: list["BaseTask"],
     producers: dict[str, str],
 ) -> dict[str, set[str]]:
     """
@@ -168,7 +168,7 @@ def topological_sort(
 
 
 def execution_plan(
-    tasks: list[BaseTask],
+    tasks: list["BaseTask"],
     trigger_id: str,
 ) -> list[str]:
     """

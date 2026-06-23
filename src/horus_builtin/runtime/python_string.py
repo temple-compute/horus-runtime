@@ -21,6 +21,7 @@ PythonCodeStringRuntime implementation for horus-runtime.
 
 from typing import TYPE_CHECKING, ClassVar
 
+from horus_builtin.runtime.command import format_command
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.i18n import tr as _
 
@@ -44,9 +45,12 @@ class PythonCodeStringRuntime(BaseRuntime[str]):
     The Python code to execute.
     """
 
-    async def _setup_runtime(self, _: "BaseTask") -> str:
+    async def _setup_runtime(self, task: "BaseTask") -> str:
         """
         For the PythonCodeStringRuntime, setting up the runtime simply involves
         returning the code as is.
         """
-        return self.code
+        # Format palceholders as if it was a command.
+        # This allows users to use placeholders like {input} or {output} in
+        # their code string.
+        return format_command(self.code, task)
