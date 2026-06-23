@@ -17,8 +17,6 @@
 #
 """Task middleware that writes a per-task log file as a side-artifact."""
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar

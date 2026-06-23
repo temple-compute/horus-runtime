@@ -19,8 +19,6 @@
 DAG utilities for Horus built-in workflows.
 """
 
-from __future__ import annotations
-
 import heapq
 from typing import TYPE_CHECKING
 
