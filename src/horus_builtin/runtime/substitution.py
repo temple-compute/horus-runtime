@@ -71,9 +71,7 @@ class _ArtifactRef:
 
 # Create a namespace object to allow for attribute-style access to task
 # variables in template placeholders.  This allows users to write placeholders
-# like ``${task.name}`` in a workflow YAML.  Artifacts are exposed at the top
-# level (``$id``), not under ``task.``, so an artifact id may safely match a
-# task field name (e.g. ``description``).
+# like ``${task.name}`` in a workflow YAML.
 class _TaskNamespace:
     def __init__(self, task: "BaseTask") -> None:
         for name, value in vars(task).items():

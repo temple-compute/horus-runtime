@@ -188,7 +188,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # Root artifacts must have unique ids across the workflow.
         _check_unique_artifact_ids(self.artifacts)
 
-        # Output artifacts must have unique ids within each task.
+        # Output and input artifacts must have unique ids within each task.
         for task in self.tasks:
             _check_unique_artifact_ids(task.outputs)
             _check_unique_artifact_ids(task.inputs)

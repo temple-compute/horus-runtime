@@ -66,7 +66,7 @@ class TaskIdsAreNotUniqueError(WorkflowError):
 class ArtifactIdsAreNotUniqueError(WorkflowError):
     """
     Raised when two or more tasks in the workflow declare the
-    same output artifact ID.
+    same artifact ID inside inputs or outputs.
     """
 
     def __init__(self, duplicate_id: str):
