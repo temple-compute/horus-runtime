@@ -71,7 +71,9 @@ class HorusWorkflow(BaseWorkflow):
         """
         tasks = {task.id: task for task in self.tasks}
 
-        plan = execution_plan(self.tasks, trigger_id=trigger_id)
+        plan = execution_plan(
+            self.tasks, trigger_id=trigger_id, edges=self.edges
+        )
 
         for task_id in plan:
             task = tasks[task_id]

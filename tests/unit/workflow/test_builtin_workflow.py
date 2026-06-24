@@ -37,6 +37,7 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.edge import WorkflowEdge
 from tests.conftest import MakeTaskType, MakeWorkflowFileType
 
 
@@ -244,8 +245,19 @@ class TestWorkflowRun:
         )
 
         # Consumer is listed first to prove ordering follows the dependency
-        # graph, not the definition order.
-        wf = HorusWorkflow(name="order_test", tasks=[consumer, producer])
+        # graph (the edge), not the definition order.
+        wf = HorusWorkflow(
+            name="order_test",
+            tasks=[consumer, producer],
+            edges=[
+                WorkflowEdge(
+                    source="producer",
+                    source_output="shared",
+                    target="consumer",
+                    target_input="shared",
+                )
+            ],
+        )
 
         with patch.object(FileArtifact, "exists", return_value=True):
             await wf.run(trigger_id="producer")
@@ -304,7 +316,18 @@ class TestWorkflowRun:
             target=LocalTarget(),
         )
 
-        wf = HorusWorkflow(name="stop_test", tasks=[task_a, task_b])
+        wf = HorusWorkflow(
+            name="stop_test",
+            tasks=[task_a, task_b],
+            edges=[
+                WorkflowEdge(
+                    source="task_a",
+                    source_output="shared",
+                    target="task_b",
+                    target_input="shared",
+                )
+            ],
+        )
         with pytest.raises(TaskExecutionError):
             await wf.run(trigger_id="task_a")
 
@@ -394,7 +417,18 @@ class TestTransferArtifactsProducerMap:
         )
 
         # Consumer is listed BEFORE its producer on purpose.
-        wf = HorusWorkflow(name="dag_order", tasks=[consumer, producer])
+        wf = HorusWorkflow(
+            name="dag_order",
+            tasks=[consumer, producer],
+            edges=[
+                WorkflowEdge(
+                    source="producer",
+                    source_output="art_x",
+                    target="consumer",
+                    target_input="art_x",
+                )
+            ],
+        )
 
         captured: dict[str, object] = {}
 

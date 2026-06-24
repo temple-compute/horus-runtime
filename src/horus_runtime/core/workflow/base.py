@@ -26,8 +26,8 @@ always runs unconditionally.
 
 Task ordering and dependency resolution are delegated to the concrete
 workflow implementation. For example, :class:`HorusWorkflow` resolves
-dependencies from artifact producer/consumer relationships and executes tasks
-in topological (DAG) order, which may differ from the order they are defined.
+dependencies from the workflow's explicit edges and executes tasks in
+topological (DAG) order, which may differ from the order they are defined.
 """
 
 from abc import abstractmethod
@@ -48,6 +48,7 @@ from horus_runtime.core.transfer.exceptions import (
     TransferStrategyNotFoundError,
 )
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
     OneWorkflowAtATimeError,
@@ -110,6 +111,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     by connecting their input artifact IDs to a root artifact's ID.
     """
 
+    edges: list[WorkflowEdge] = Field(
+        default_factory=list,
+    )
+    """
+    Explicit connections between producer outputs and consumer inputs. These
+    are the sole source of truth for the DAG and the artifact transfer sources.
+    A workflow with no edges has independent tasks (no dependencies).
+    """
+
     orchestrator_target: BaseTarget | None = None
     """
     The target that represents the orchestrator (the machine running the
@@ -141,20 +151,32 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     @model_validator(mode="after")
     def check_unique_artifact_ids(self) -> Self:
         """
-        Validates that all output artifacts across all tasks and root
-        artifacts have unique ids.
-        This is required for correct dependency resolution and execution.
+        Validates artifact id uniqueness where edge resolution requires it:
+        output ids must be unique *within each task*, and root artifact ids
+        unique among roots. Output ids may repeat across tasks, edges resolve
+        on ``(task id, output id)`` and task ids are unique, so the same
+        reusable task can be placed more than once.
         """
-        seen_ids = set()
-        for artifact in self.artifacts:
-            if artifact.id in seen_ids:
-                raise ArtifactIdsAreNotUniqueError(artifact.id)
-            seen_ids.add(artifact.id)
-        for task in self.tasks:
-            for artifact in task.outputs:
+
+        def _check_unique_artifact_ids(artifacts: list[BaseArtifact]) -> None:
+            """
+            Helper function to check for unique artifact ids within a list of
+            artifacts. Raises an error if duplicates are found.
+            """
+            seen_ids: set[str] = set()
+            for artifact in artifacts:
                 if artifact.id in seen_ids:
                     raise ArtifactIdsAreNotUniqueError(artifact.id)
                 seen_ids.add(artifact.id)
+
+        # Root artifacts must have unique ids across the workflow.
+        _check_unique_artifact_ids(self.artifacts)
+
+        # Output artifacts must have unique ids within each task.
+        for task in self.tasks:
+            _check_unique_artifact_ids(task.outputs)
+            _check_unique_artifact_ids(task.inputs)
+
         return self
 
     @classmethod
@@ -170,6 +192,44 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             A fully constructed :class:`BaseWorkflow` instance.
         """
 
+    def _build_source_maps(
+        self,
+    ) -> tuple[
+        dict[tuple[str, str], BaseTarget],
+        dict[tuple[str, str], BaseArtifact],
+    ]:
+        """
+        Resolve, for the whole workflow, where each consumer input is sourced.
+
+        Returns, keyed by (target task id, input id): the producer's target and
+        the producing artifact. The producing artifact carries the id the data
+        is stored under (a task output id, or a root artifact id), which
+        differs from the consumer input id and the canonical source path.
+        """
+        edge_source_target: dict[tuple[str, str], BaseTarget] = {}
+        edge_source_artifact: dict[tuple[str, str], BaseArtifact] = {}
+
+        targets_by_task = {t.id: t.target for t in self.tasks}
+        outputs_by_task = {
+            (t.id, o.id): o for t in self.tasks for o in t.outputs
+        }
+        roots_by_id = {a.id: a for a in self.artifacts}
+        for edge in self.edges:
+            key = (edge.target, edge.target_input)
+            producer_target = targets_by_task.get(edge.source)
+            if producer_target is not None:
+                # Task source.
+                edge_source_target[key] = producer_target
+                out = outputs_by_task.get((edge.source, edge.source_output))
+                if out is not None:
+                    edge_source_artifact[key] = out
+            else:
+                # Root source ("artifact-<id>"): sourced from orchestrator.
+                root = roots_by_id.get(edge.source_output)
+                if root is not None:
+                    edge_source_artifact[key] = root
+        return edge_source_target, edge_source_artifact
+
     async def transfer_artifacts(self, task: BaseTask) -> None:
         """
         Transfer the input artifacts of the given task to the target where the
@@ -180,12 +240,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         already access an artifact (``access_cost`` returns a non-None value),
         no transfer is performed for that artifact.
 
-        The source target for each artifact is resolved as follows:
+        The source target for each input artifact is resolved as follows:
 
-        1. If the artifact id matches an output of any task in the workflow,
-           that task's target is used as the source.
-        2. Otherwise the artifact is treated as a root input (user-provided)
-           and ``self.orchestrator_target`` is used as the source. If
+        1. If a workflow edge feeds the input from another task's output, that
+           producer task's target is used as the source.
+        2. Otherwise (no edge, or the edge's source is a root artifact) the
+           input is treated as a root input (user-provided) and
+           ``self.orchestrator_target`` is used as the source. If
            ``orchestrator_target`` is ``None`` a
            :exc:`OrchestratorTargetNotSetError` is raised.
 
@@ -198,27 +259,26 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             TransferStrategyNotFoundError: When no registered strategy handles
                 the resolved source → destination target pair.
         """
-        # Build a reverse map: artifact id → the target of the task that
-        # produced it. This covers outputs of every task in the workflow,
-        # regardless of definition order: tasks may execute in topological
-        # (DAG) order, so a producer can run before a consumer even when it is
-        # defined later in ``self.tasks``. Artifact ids are validated unique
-        # (see ``check_unique_artifact_ids``), so this mapping is unambiguous.
-        id_to_source: dict[str, BaseTarget] = {}
-        for t in self.tasks:
-            for artifact in t.outputs:
-                id_to_source[artifact.id] = t.target
+        edge_source_target, edge_source_artifact = self._build_source_maps()
 
         for artifact in task.inputs:
+            key = (task.id, artifact.id)
             # Resolve the source target.
-            source_target = id_to_source.get(artifact.id)
+            source_target = edge_source_target.get(key)
             if source_target is None:
-                # Root artifact: must come from the orchestrator.
+                # Root input: must come from the orchestrator.
                 if self.orchestrator_target is None:
                     raise OrchestratorTargetNotSetError(
                         artifact.id, task.target
                     )
                 source_target = self.orchestrator_target
+
+            # Transfer a copy of the *producing* artifact: it carries the id
+            # the data is stored under (so the lookup hits) and source path.
+            # The consumer input keeps its own id (the template key); we only
+            # point its path at the materialized result.
+            src_artifact = edge_source_artifact.get(key)
+            transfer_art = (src_artifact or artifact).model_copy()
 
             # Look up the registered strategy for this (source, dest) pair.
             strategy_cls = BaseTransferStrategy.get_from_registry(
@@ -235,15 +295,19 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     " to '%(dst)s' via %(strategy)s."
                 )
                 % {
-                    "id": artifact.id,
+                    "id": transfer_art.id,
                     "src": source_target.kind,
                     "dst": task.target.kind,
                     "strategy": strategy_cls.__name__,
                 }
             )
 
-            # Perform the transfer.
-            await strategy_cls().transfer(artifact, source_target, task.target)
+            # Perform the transfer, then point the consumer input at the
+            # materialized location so its body templating resolves correctly.
+            await strategy_cls().transfer(
+                transfer_art, source_target, task.target
+            )
+            artifact.path = transfer_art.path
 
     @final
     async def run(self, trigger_id: str) -> None:

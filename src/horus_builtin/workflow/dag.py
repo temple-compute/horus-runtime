@@ -22,14 +22,12 @@ DAG utilities for Horus built-in workflows.
 import heapq
 from typing import TYPE_CHECKING
 
-from horus_runtime.core.workflow.exceptions import (
-    ArtifactIdsAreNotUniqueError,
-    WorkflowError,
-)
+from horus_runtime.core.workflow.exceptions import WorkflowError
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
+    from horus_runtime.core.workflow.edge import WorkflowEdge
 
 
 class CyclicDependencyError(WorkflowError):
@@ -48,35 +46,30 @@ class UnknownTaskError(KeyError, WorkflowError):
     pass
 
 
-def build_artifact_producers(tasks: list["BaseTask"]) -> dict[str, str]:
-    """
-    Returns a map of artifact_id -> task_id for every output artifact
-    declared across all tasks. Raises if two tasks declare the same
-    output artifact id (that would be a malformed DAG).
-    """
-    producers: dict[str, str] = {}
-    for task in tasks:
-        for artifact in task.outputs:
-            if artifact.id in producers:
-                raise ArtifactIdsAreNotUniqueError(artifact.id)
-            producers[artifact.id] = task.id
-    return producers
-
-
 def build_dependencies(
     tasks: list["BaseTask"],
-    producers: dict[str, str],
+    edges: list["WorkflowEdge"] | None = None,
 ) -> dict[str, set[str]]:
     """
     Returns a map of task_id -> set of task_ids that must complete before it.
-    Input artifacts with no producer are root inputs (files, user uploads...).
+
+    Edges are the sole source of truth: a ``source`` task must complete before
+    its ``target`` task. Edges whose source is a root artifact (not a task) are
+    ignored as they are root inputs. A workflow with no edges yields
+    independent tasks (no dependencies).
     """
     deps: dict[str, set[str]] = {task.id: set() for task in tasks}
-    for task in tasks:
-        for artifact in task.inputs:
-            upstream = producers.get(artifact.id)
-            if upstream is not None:
-                deps[task.id].add(upstream)
+
+    # Independent tasks
+    if not edges:
+        return deps
+
+    # Build the dependency map from edges.
+    task_ids = set(deps)
+    for edge in edges:
+        if edge.source in task_ids and edge.target in deps:
+            deps[edge.target].add(edge.source)
+
     return deps
 
 
@@ -170,6 +163,7 @@ def topological_sort(
 def execution_plan(
     tasks: list["BaseTask"],
     trigger_id: str,
+    edges: list["WorkflowEdge"] | None = None,
 ) -> list[str]:
     """
     Returns an ordered list of task_ids to execute.
@@ -180,13 +174,13 @@ def execution_plan(
     entirely. Tasks whose outputs already exist are skipped at run time by
     ``BaseTask.run`` via ``is_complete``.
 
-    Raises UnknownTaskError if trigger_id is not in tasks.
+    Dependencies come from ``edges``. Raises UnknownTaskError if trigger_id is
+    not in tasks.
     """
     task_ids = {task.id for task in tasks}
     if trigger_id not in task_ids:
         raise UnknownTaskError(f"Trigger task '{trigger_id}' not found.")
 
-    producers = build_artifact_producers(tasks)
-    deps = build_dependencies(tasks, producers)
+    deps = build_dependencies(tasks, edges)
     scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
     return topological_sort(scope, deps)

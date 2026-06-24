@@ -81,8 +81,18 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
 
     id: str
     """
-    The artifact's user-friendly ID. This Id is used to sort task dependencies
-    and should be unique within a workflow.
+    The artifact's stable ID.
+    """
+
+    name: str = ""
+    """
+    Human-readable display label for this artifact (shown on the node handles).
+    Defaults to ``id`` when omitted.
+    """
+
+    description: str = ""
+    """
+    Optional free-text description of the artifact, shown in the UI.
     """
 
     path: Annotated[Path, BeforeValidator(validate_path)]
@@ -129,6 +139,16 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         Normalize artifact paths to absolute resolved paths.
         """
         self.path = self.path.resolve()
+        return self
+
+    @model_validator(mode="after")
+    def default_name(self) -> Self:
+        """
+        Fall back to ``id`` as the display name when none is provided.
+        """
+        if not self.name:
+            self.name = self.id
+
         return self
 
     @abstractmethod
