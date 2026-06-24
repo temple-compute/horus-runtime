@@ -71,12 +71,26 @@ class BaseTask(AutoRegistry, entry_point="task"):
 
     id: str
     """
-    The task ID
+    The task ID. Unique within a workflow: it is the DAG node key (edges,
+    ``working_dir``, and UI positions all reference it).
+    """
+
+    definition_id: str | None = None
+    """
+    Optional reference to the catalog/library task this placement was created
+    from. Not unique: the same reusable task placed twice shares one
+    ``definition_id`` while each placement keeps its own unique ``id``.
+    ``None`` for ad-hoc tasks not sourced from the catalog.
     """
 
     name: str
     """
     Human-readable name for this task.
+    """
+
+    description: str = ""
+    """
+    Optional free-text description of the task, shown in the UI.
     """
 
     inputs: list[BaseArtifact] = Field(default_factory=list)

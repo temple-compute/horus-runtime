@@ -2,6 +2,13 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 
+[options]
+exclude-newer = "2026-06-22T10:33:42.434861Z"
+exclude-newer-span = "P2D"
+
+[options.exclude-newer-package]
+horus-runtime = false
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
