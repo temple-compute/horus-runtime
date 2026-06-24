@@ -77,6 +77,14 @@ class _TaskNamespace:
         for name, value in vars(task).items():
             setattr(self, name, value)
         for artifact in (*task.inputs, *task.outputs):
+            if hasattr(self, artifact.id):
+                raise ValueError(
+                    _(
+                        "Artifact id '%(id)s' conflicts with a task attribute in templates. "
+                        "Please rename this artifact."
+                    )
+                    % {"id": artifact.id}
+                )
             setattr(self, artifact.id, _ArtifactRef(artifact, task.target))
 
 
