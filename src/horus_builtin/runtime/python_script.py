@@ -24,7 +24,8 @@ import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
-from horus_builtin.runtime.command import CommandRuntime, format_command
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.substitution import substitute
 from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.events import RuntimeEvent
 from horus_runtime.i18n import tr as _
@@ -57,8 +58,8 @@ class PythonScriptRuntime(CommandRuntime):
     """Local path to the ``.py`` file to run."""
 
     args: str = ""
-    """Extra CLI args appended after the script; supports ``{input}`` /
-    ``{output}`` placeholders (resolved to their on-target paths)."""
+    """Extra CLI args appended after the script; supports ``$input`` /
+    ``${output}`` placeholders (resolved to their on-target paths)."""
 
     python: str = "python"
     """Interpreter to invoke on the target (override if not ``python``)."""
@@ -72,7 +73,7 @@ class PythonScriptRuntime(CommandRuntime):
         # the executor uses as cwd and where the script's outputs land.
         await task.target.put_file(self.script, remote_path)
 
-        args = format_command(self.args, task) if self.args else ""
+        args = substitute(self.args, task) if self.args else ""
         cmd = f"{self.python} {shlex.quote(remote_path)} {args}".rstrip()
         self.formatted_command = cmd
 

@@ -19,9 +19,9 @@
 PythonCodeStringRuntime implementation for horus-runtime.
 """
 
-from string import Template
 from typing import TYPE_CHECKING, ClassVar
 
+from horus_builtin.runtime.substitution import substitute
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.i18n import tr as _
 
@@ -47,15 +47,12 @@ class PythonCodeStringRuntime(BaseRuntime[str]):
 
     async def _setup_runtime(self, task: "BaseTask") -> str:
         """
-        Substitute ``$input`` / ``${output}`` placeholders with artifact paths.
+        Substitute ``$input`` / ``${output}`` / ``${id.attr}`` /
+        ``${task.attr}`` placeholders with artifact paths.
 
         Uses ``string.Template`` (not ``str.format``) so Python's ``{}`` —
         dict/set literals, f-strings, comprehensions — is left untouched.
-        Placeholders are artifact ids mapping to their on-target path;
-        unknown ``$name`` references are left as-is via ``safe_substitute``.
+        Unknown ``$name`` references are left as-is via ``safe_substitute``.
+        Use ``$$`` to emit a literal ``$``.
         """
-        paths = {
-            a.id: str(task.target.path_on_target(a))
-            for a in (*task.inputs, *task.outputs)
-        }
-        return Template(self.code).safe_substitute(paths)
+        return substitute(self.code, task)

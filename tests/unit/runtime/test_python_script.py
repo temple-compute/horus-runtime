@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Tests for PythonScriptRuntime and target-aware command formatting.
+Tests for PythonScriptRuntime and target-aware artifact substitution.
 """
 
 import shlex
@@ -27,12 +27,9 @@ import pytest
 
 from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.executor.shell import ShellExecutor
-from horus_builtin.runtime.command import (
-    CommandRuntime,
-    _ArtifactRef,
-    format_command,
-)
+from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python_script import PythonScriptRuntime
+from horus_builtin.runtime.substitution import _ArtifactRef, substitute
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -66,7 +63,7 @@ async def test_python_script_ships_script_and_builds_command(
     result = JSONArtifact(id="result", path=tmp_path / "out" / "result.json")
     task = _task(
         tmp_path,
-        PythonScriptRuntime(script=script, args="{result}"),
+        PythonScriptRuntime(script=script, args="$result"),
         result,
     )
 
@@ -108,7 +105,7 @@ async def test_python_script_quotes_remote_path_with_spaces(
 
 
 def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
-    """{x} -> path_on_target; {x.path}/{x.id} forward to the artifact."""
+    """str(ref) -> path_on_target; ref.path/ref.id forward to the artifact."""
 
     class _StubTarget:
         def path_on_target(self, artifact: BaseArtifact) -> str:
@@ -123,17 +120,18 @@ def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
     )
 
     assert f"{ref}" == "/remote/result.json"
+    assert str(ref) == "/remote/result.json"
     assert str(ref.path) == str(result.path)
     assert ref.id == "result"
 
 
-def test_format_command_uses_local_path_for_local_target(
+def test_substitute_uses_local_path_for_local_target(
     tmp_path: Path,
 ) -> None:
-    """On a LocalTarget, {result} resolves to the local artifact path."""
+    """On a LocalTarget, $result resolves to the local artifact path."""
     result = JSONArtifact(id="result", path=tmp_path / "result.json")
     task = _task(tmp_path, CommandRuntime(command="x"), result)
 
-    assert format_command("{result}", task) == str(result.path)
-    assert format_command("{result.path}", task) == str(result.path)
-    assert format_command("{result.id}", task) == "result"
+    assert substitute("$result", task) == str(result.path)
+    assert substitute("${result.path}", task) == str(result.path)
+    assert substitute("${result.id}", task) == "result"

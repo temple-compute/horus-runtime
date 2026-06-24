@@ -21,62 +21,14 @@ Command implementation for the runtime.
 
 from typing import TYPE_CHECKING, ClassVar
 
+from horus_builtin.runtime.substitution import substitute
 from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.runtime.events import RuntimeEvent
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
-    from horus_runtime.core.artifact.base import BaseArtifact
-    from horus_runtime.core.target.base import BaseTarget
     from horus_runtime.core.task.base import BaseTask
-
-
-# Wraps an artifact so that "{script}" in a command formats to the artifact's
-# path *on the task's target* (target.path_on_target), while "{script.path}",
-# "{script.id}", etc. still forward to the artifact. This is what lets a
-# command be written once and run unchanged on a local or remote target.
-class _ArtifactRef:
-    def __init__(self, artifact: "BaseArtifact", target: "BaseTarget"):
-        self._a = artifact
-        self._t = target
-
-    def __getattr__(self, name: str) -> object:
-        if name.startswith("__") and name.endswith("__"):
-            raise AttributeError(name)
-        return getattr(self._a, name)
-
-    def __format__(self, spec: str) -> str:
-        return format(self._t.path_on_target(self._a), spec)
-
-
-# Create a namespace object to allow for attribute-style access to task
-# variables and inputs in the command formatting. This allows users to
-# write commands like "echo {task.input1.path}" in the workflow yaml
-class _TaskNamespace:
-    def __init__(self, task: "BaseTask"):
-        for name, value in vars(task).items():
-            setattr(self, name, value)
-        for artifact in (*task.inputs, *task.outputs):
-            setattr(self, artifact.id, _ArtifactRef(artifact, task.target))
-
-
-def format_command(template: str, task: "BaseTask") -> str:
-    """
-    Render *template* against *task*: artifacts are exposed by id (``{script}``
-    resolves to the artifact's on-target path) and via the ``task`` namespace.
-    """
-    artifacts = (*task.inputs, *task.outputs)
-    if any(a.id == "task" for a in artifacts):
-        raise ValueError(
-            _(
-                "Artifact id 'task' is reserved for command templates. "
-                "Please rename this artifact."
-            )
-        )
-    refs = {a.id: _ArtifactRef(a, task.target) for a in artifacts}
-
-    return template.format(task=_TaskNamespace(task), **refs)
 
 
 class CommandRuntime(BaseRuntime[str]):
@@ -94,7 +46,9 @@ class CommandRuntime(BaseRuntime[str]):
 
     command: str
     """
-    The command to execute.
+    The command to execute. Supports ``$id`` / ``${id}`` / ``${id.attr}`` /
+    ``${task.attr}`` placeholders (``string.Template`` syntax). ``{}`` passes
+    through untouched.
     """
 
     formatted_command: str = ""
@@ -104,11 +58,10 @@ class CommandRuntime(BaseRuntime[str]):
 
     async def _setup_runtime(self, task: "BaseTask") -> str:
         """
-        For the CommandRuntime, setting up the runtime simply involves
-        returning the command as is, since there are no placeholders to
-        replace.
+        Render ``$``/``${}`` placeholders in the command against *task*'s
+        artifacts and task namespace, then emit a ``RuntimeEvent``.
         """
-        fmt = format_command(self.command, task)
+        fmt = substitute(self.command, task)
 
         self.formatted_command = fmt
 

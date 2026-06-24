@@ -113,14 +113,14 @@ class TestCommandRuntime:
         """
         del horus_context
         task = make_shell_task(
-            cmd="echo 'Input artifact path is {input1.path}'",
+            cmd="echo 'Input artifact path is ${input1.path}'",
             inputs=[FileArtifact(id="input1", path=Path("test"))],
         )
 
         formatted_cmd = await task.runtime.setup_runtime(task)
 
         assert "Input artifact path is" in formatted_cmd
-        assert "{input1.path}" not in formatted_cmd
+        assert "${input1.path}" not in formatted_cmd
 
     async def test_command_runtime_formats_command_with_task_variables(
         self, make_shell_task: MakeTaskType, horus_context: HorusContext
@@ -130,7 +130,7 @@ class TestCommandRuntime:
         formatting.
         """
         del horus_context
-        task = make_shell_task("echo 'Task kind is {task.kind}'")
+        task = make_shell_task("echo 'Task kind is ${task.kind}'")
 
         formatted_cmd = await task.runtime.setup_runtime(task)
 
