@@ -80,7 +80,8 @@ class _TaskNamespace:
             if hasattr(self, artifact.id):
                 raise ValueError(
                     _(
-                        "Artifact id '%(id)s' conflicts with a task attribute in templates. "
+                        "Artifact id '%(id)s' conflicts with a task attribute"
+                        " in templates. "
                         "Please rename this artifact."
                     )
                     % {"id": artifact.id}
