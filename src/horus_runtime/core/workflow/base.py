@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import ClassVar, Self, final
+from typing import ClassVar, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 from pydantic import Field, model_validator
@@ -51,8 +51,10 @@ from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
+    DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
     TaskIdsAreNotUniqueError,
+    UnknownEdgeEndpointError,
 )
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.i18n import tr as _
@@ -62,6 +64,20 @@ from horus_runtime.middleware.workflow import (
     WorkflowMiddlewareContext,
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
+
+
+class _EdgeSource(NamedTuple):
+    """
+    Where a consumer input is sourced from, resolved from the workflow edges.
+
+    ``target`` is the producer task's target, or ``None`` for a root source
+    (which comes from the orchestrator). ``artifact`` is the producing
+    artifact (a task output or a root artifact); it carries the id the data is
+    stored under, which differs from the consumer input id.
+    """
+
+    target: BaseTarget | None
+    artifact: BaseArtifact | None
 
 
 class BaseWorkflow(AutoRegistry, entry_point="workflow"):
@@ -179,6 +195,56 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         return self
 
+    @model_validator(mode="after")
+    def check_edges_resolve(self) -> Self:
+        """
+        Validate that every edge references real endpoints.
+
+        Edges are the sole source of truth for the DAG and for transfer
+        sources, so an unresolved endpoint (typo, stale reference) would
+        silently drop a dependency or misroute a transfer. Each edge must:
+
+        - target an existing task and one of its declared input ids;
+        - source either an existing task's declared output id, or a root
+          artifact id via the ``artifact-<rootId>`` convention;
+        - be the only edge feeding its ``(target, target_input)``.
+        """
+        task_inputs = {t.id: {a.id for a in t.inputs} for t in self.tasks}
+        task_outputs = {t.id: {a.id for a in t.outputs} for t in self.tasks}
+        root_ids = {a.id for a in self.artifacts}
+
+        seen_targets: set[tuple[str, str]] = set()
+        for edge in self.edges:
+            # Target must resolve to a real task input.
+            if edge.target not in task_inputs:
+                raise UnknownEdgeEndpointError("target task", edge.target)
+            if edge.target_input not in task_inputs[edge.target]:
+                raise UnknownEdgeEndpointError(
+                    "target input", edge.target_input
+                )
+
+            # At most one edge may feed a given consumer input.
+            key = (edge.target, edge.target_input)
+            if key in seen_targets:
+                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
+            seen_targets.add(key)
+
+            # Source must resolve to a task output or a root artifact.
+            if edge.source in task_outputs:
+                if edge.source_output not in task_outputs[edge.source]:
+                    raise UnknownEdgeEndpointError(
+                        "source output", edge.source_output
+                    )
+            elif edge.source.startswith("artifact-"):
+                if edge.source_output not in root_ids:
+                    raise UnknownEdgeEndpointError(
+                        "root artifact", edge.source_output
+                    )
+            else:
+                raise UnknownEdgeEndpointError("source task", edge.source)
+
+        return self
+
     @classmethod
     @abstractmethod
     def from_yaml(cls, path: str | Path) -> Self:
@@ -192,53 +258,49 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             A fully constructed :class:`BaseWorkflow` instance.
         """
 
-    def _build_source_maps(
-        self,
-    ) -> tuple[
-        dict[tuple[str, str], BaseTarget],
-        dict[tuple[str, str], BaseArtifact],
-    ]:
+    def _build_source_map(self) -> dict[tuple[str, str], _EdgeSource]:
         """
         Resolve, for the whole workflow, where each consumer input is sourced.
 
-        Returns, keyed by (target task id, input id): the producer's target and
-        the producing artifact. The producing artifact carries the id the data
-        is stored under (a task output id, or a root artifact id), which
-        differs from the consumer input id and the canonical source path.
+        Returns a map keyed by (target task id, input id) to an
+        :class:`_EdgeSource`. Edges are validated at construction
+        (see :meth:`check_edges_resolve`), so every entry resolves to a real
+        producer output or root artifact.
         """
-        edge_source_target: dict[tuple[str, str], BaseTarget] = {}
-        edge_source_artifact: dict[tuple[str, str], BaseArtifact] = {}
-
         targets_by_task = {t.id: t.target for t in self.tasks}
         outputs_by_task = {
             (t.id, o.id): o for t in self.tasks for o in t.outputs
         }
         roots_by_id = {a.id: a for a in self.artifacts}
+
+        source_map: dict[tuple[str, str], _EdgeSource] = {}
         for edge in self.edges:
             key = (edge.target, edge.target_input)
             producer_target = targets_by_task.get(edge.source)
             if producer_target is not None:
-                # Task source.
-                edge_source_target[key] = producer_target
-                out = outputs_by_task.get((edge.source, edge.source_output))
-                if out is not None:
-                    edge_source_artifact[key] = out
+                # Task source: producer's target + its output artifact.
+                source_map[key] = _EdgeSource(
+                    producer_target,
+                    outputs_by_task.get((edge.source, edge.source_output)),
+                )
             else:
                 # Root source ("artifact-<id>"): sourced from orchestrator.
-                root = roots_by_id.get(edge.source_output)
-                if root is not None:
-                    edge_source_artifact[key] = root
-        return edge_source_target, edge_source_artifact
+                source_map[key] = _EdgeSource(
+                    None, roots_by_id.get(edge.source_output)
+                )
+        return source_map
 
-    async def transfer_artifacts(self, task: BaseTask) -> None:
+    async def transfer_artifacts(
+        self,
+        task: BaseTask,
+        source_map: dict[tuple[str, str], _EdgeSource] | None = None,
+    ) -> None:
         """
         Transfer the input artifacts of the given task to the target where the
         task will run, using the appropriate transfer strategies.
 
         Called by the workflow before dispatching a task to ensure all inputs
-        are available on the task's target. If the destination target can
-        already access an artifact (``access_cost`` returns a non-None value),
-        no transfer is performed for that artifact.
+        are available on the task's target.
 
         The source target for each input artifact is resolved as follows:
 
@@ -252,6 +314,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         Args:
             task: The task whose input artifacts should be transferred.
+            source_map: Precomputed edge source map (see
+                :meth:`_build_source_map`). Built on demand when omitted;
+                ``_run`` builds it once and passes it for every task.
 
         Raises:
             OrchestratorTargetNotSetError: When a root artifact cannot be
@@ -259,12 +324,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             TransferStrategyNotFoundError: When no registered strategy handles
                 the resolved source → destination target pair.
         """
-        edge_source_target, edge_source_artifact = self._build_source_maps()
+        if source_map is None:
+            source_map = self._build_source_map()
 
         for artifact in task.inputs:
-            key = (task.id, artifact.id)
+            source = source_map.get((task.id, artifact.id))
             # Resolve the source target.
-            source_target = edge_source_target.get(key)
+            source_target = source.target if source is not None else None
             if source_target is None:
                 # Root input: must come from the orchestrator.
                 if self.orchestrator_target is None:
@@ -277,7 +343,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             # the data is stored under (so the lookup hits) and source path.
             # The consumer input keeps its own id (the template key); we only
             # point its path at the materialized result.
-            src_artifact = edge_source_artifact.get(key)
+            src_artifact = source.artifact if source is not None else None
             transfer_art = (src_artifact or artifact).model_copy()
 
             # Look up the registered strategy for this (source, dest) pair.

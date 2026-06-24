@@ -60,14 +60,11 @@ def build_dependencies(
     """
     deps: dict[str, set[str]] = {task.id: set() for task in tasks}
 
-    # Independent tasks
-    if not edges:
-        return deps
-
-    # Build the dependency map from edges.
-    task_ids = set(deps)
-    for edge in edges:
-        if edge.source in task_ids and edge.target in deps:
+    # Build the dependency map from edges. `deps` keys are exactly the task
+    # ids, so membership in `deps` doubles as "this endpoint is a task" (root
+    # sources are not tasks and are skipped). No edges => independent tasks.
+    for edge in edges or ():
+        if edge.source in deps and edge.target in deps:
             deps[edge.target].add(edge.source)
 
     return deps

@@ -41,6 +41,8 @@ from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
+    DuplicateEdgeTargetError,
+    UnknownEdgeEndpointError,
 )
 
 
@@ -336,3 +338,102 @@ class TestEdgeTransferResolution:
         assert captured.source is wf.orchestrator_target
         assert captured.artifact_id == "root_pdb"
         assert consumer.inputs[0].path == root_path.resolve()
+
+
+@pytest.mark.unit
+class TestEdgeValidation:
+    """Edges are validated against real endpoints at workflow construction."""
+
+    def _producer_consumer(
+        self, tmp_path: Path
+    ) -> tuple[HorusTask, HorusTask]:
+        producer = _task(
+            task_id="producer",
+            inputs=[],
+            outputs=[FileArtifact(id="out_real", path=tmp_path / "p.txt")],
+        )
+        consumer = _task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="in_x", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        return producer, consumer
+
+    def test_unknown_source_output_raises(self, tmp_path: Path) -> None:
+        """A typo in source_output is caught instead of silently misrouting."""
+        producer, consumer = self._producer_consumer(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[producer, consumer],
+                edges=[_edge("producer", "TYPO", "consumer", "in_x")],
+            )
+
+    def test_unknown_source_task_raises(self, tmp_path: Path) -> None:
+        """A source that is neither a known task nor a root edge fails."""
+        producer, consumer = self._producer_consumer(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[producer, consumer],
+                edges=[_edge("producr", "out_real", "consumer", "in_x")],
+            )
+
+    def test_unknown_target_input_raises(self, tmp_path: Path) -> None:
+        """A target_input that no task input declares is rejected."""
+        producer, consumer = self._producer_consumer(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[producer, consumer],
+                edges=[_edge("producer", "out_real", "consumer", "in_TYPO")],
+            )
+
+    def test_unknown_target_task_raises(self, tmp_path: Path) -> None:
+        """An edge targeting a non-existent task is rejected."""
+        producer, consumer = self._producer_consumer(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[producer, consumer],
+                edges=[_edge("producer", "out_real", "ghost", "in_x")],
+            )
+
+    def test_unknown_root_artifact_raises(self, tmp_path: Path) -> None:
+        """A root-sourced edge whose root id does not exist is rejected."""
+        _, consumer = self._producer_consumer(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[consumer],
+                edges=[_edge("artifact-nope", "nope", "consumer", "in_x")],
+            )
+
+    def test_duplicate_edge_into_same_input_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """Two edges feeding one consumer input are rejected (last-wins)."""
+        p1 = _task(
+            task_id="p1",
+            inputs=[],
+            outputs=[FileArtifact(id="o1", path=tmp_path / "1.txt")],
+        )
+        p2 = _task(
+            task_id="p2",
+            inputs=[],
+            outputs=[FileArtifact(id="o2", path=tmp_path / "2.txt")],
+        )
+        c = _task(
+            task_id="c",
+            inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        with pytest.raises(DuplicateEdgeTargetError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[p1, p2, c],
+                edges=[
+                    _edge("p1", "o1", "c", "in"),
+                    _edge("p2", "o2", "c", "in"),
+                ],
+            )

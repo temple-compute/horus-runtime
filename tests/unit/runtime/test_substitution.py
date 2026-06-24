@@ -106,6 +106,21 @@ def test_substitute_reserved_id_raises(tmp_path: Path) -> None:
         substitute("$task", task)
 
 
+def test_artifact_id_matching_task_field_is_allowed(tmp_path: Path) -> None:
+    """
+    An artifact id may match a task field name (e.g. 'description'): artifacts
+    live at the top level ($id), not under the task.* namespace, so there is
+    no collision.
+    """
+    described = JSONArtifact(id="description", path=tmp_path / "d.json")
+    task = _shell_task(tmp_path, "unused", described)
+
+    rendered = substitute("$description ${task.name}", task)
+
+    assert str(described.path) in rendered
+    assert "my_task" in rendered
+
+
 @pytest.mark.usefixtures("horus_context")
 async def test_command_runtime_result_path_end_to_end(tmp_path: Path) -> None:
     """${result.path} in a CommandRuntime resolves end-to-end."""

@@ -78,3 +78,35 @@ class ArtifactIdsAreNotUniqueError(WorkflowError):
             )
             % {"id": duplicate_id}
         )
+
+
+class UnknownEdgeEndpointError(WorkflowError):
+    """
+    Raised when a workflow edge references a task, output, input, or root
+    artifact that does not exist. Edges are the sole source of truth for the
+    DAG, so an unresolved endpoint would silently drop a dependency or
+    misroute an artifact transfer.
+    """
+
+    def __init__(self, endpoint: str, value: str):
+        super().__init__(
+            _("Workflow edge references unknown %(endpoint)s '%(value)s'.")
+            % {"endpoint": endpoint, "value": value}
+        )
+
+
+class DuplicateEdgeTargetError(WorkflowError):
+    """
+    Raised when two edges feed the same consumer input. A single input can be
+    sourced by at most one edge; otherwise transfer resolution would silently
+    keep only the last edge.
+    """
+
+    def __init__(self, target: str, target_input: str):
+        super().__init__(
+            _(
+                "Multiple edges feed input '%(input)s' of task '%(target)s'. "
+                "Each consumer input may be fed by at most one edge."
+            )
+            % {"input": target_input, "target": target}
+        )
