@@ -90,6 +90,21 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             ``horus-agent://agent-42``
         """
 
+    def bind(self, task: "BaseTask") -> None:
+        """Associate *task* with this target ahead of dispatch.
+
+        Resource-aware targets can then read ``task.resources`` during
+        (possibly lazy) provisioning. Provisioning targets (e.g. Terraform)
+        provision at transfer time, which happens before :meth:`dispatch` sets
+        the task reference, so binding first gives them access to the task's
+        declared resources in time.
+
+        Args:
+            task: The task about to be transferred to and dispatched on this
+                target.
+        """
+        self._task = task
+
     @final
     async def dispatch(self, task: "BaseTask") -> None:
         """

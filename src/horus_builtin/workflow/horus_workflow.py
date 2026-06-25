@@ -95,6 +95,11 @@ class HorusWorkflow(BaseWorkflow):
         for task_id in plan:
             task = tasks[task_id]
 
+            # Associate the task with its target before any transfer so
+            # resource-aware targets (which may provision lazily at transfer
+            # time, before dispatch) can read task.resources.
+            task.target.bind(task)
+
             # Transfer input artifacts to the task's target as needed.
             await self.transfer_artifacts(task, source_map)
 
