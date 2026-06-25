@@ -32,16 +32,17 @@ class TestHorusRuntimeIntegration:
 
     def test_main_script_execution(self) -> None:
         """
-        Test that main script can be executed.
+        Test that the main script runs and exposes the run command.
         """
         result = subprocess.run(
-            ["horus"],
+            ["horus", "--help"],
             capture_output=True,
             text=True,
             check=False,
         )
 
         assert result.returncode == 0
+        assert "run" in result.stdout
 
     @pytest.mark.slow
     def test_system_integration(self) -> None:
