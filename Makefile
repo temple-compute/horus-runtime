@@ -7,7 +7,7 @@ RUFF_FORMAT_CHECK_CMD = ruff format --check --diff .
 RUFF_FIX_CMD = ruff check --fix src/ tests/
 RUFF_FORMAT_CMD = ruff format .
 MYPY_CMD = mypy src/ tests/
-ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -cy -o 'Temple Compute' -n horus-runtime -u https://horus.bsc.es
+ADD_LICENSE_HEADERS_CMD = licenseheaders -t .agpl3.tmpl -cy -o 'Temple Compute' -n horus-runtime -u https://templecompute.com
 
 # i18n settings (babel)
 BABEL_CFG = babel.cfg

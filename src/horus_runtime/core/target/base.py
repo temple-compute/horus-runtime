@@ -90,6 +90,41 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             ``horus-agent://agent-42``
         """
 
+    @property
+    def task_or_raise(self) -> "BaseTask":
+        """
+        Return the task currently running on this target, or raise an error if
+        no task is running.
+        """
+        if self._task is None:
+            raise TaskExecutionError(
+                _("No task is currently running on this target.")
+            )
+        return self._task
+
+    def bind(self, task: "BaseTask") -> None:
+        """Associate *task* with this target ahead of dispatch.
+
+        Resource-aware targets can then read ``task.resources`` during
+        (possibly lazy) provisioning. Provisioning targets (e.g. Terraform)
+        provision at transfer time, which happens before :meth:`dispatch` sets
+        the task reference, so binding first gives them access to the task's
+        declared resources in time.
+
+        Args:
+            task: The task about to be transferred to and dispatched on this
+                target.
+
+        Raises:
+            TaskExecutionError: If a task is already running on this target.
+        """
+        if self._task_future is not None and not self._task_future.done():
+            raise TaskExecutionError(
+                _("Task '%(task_name)s' is already running on this target.")
+                % {"task_name": self._task.name if self._task else "unknown"}
+            )
+        self._task = task
+
     @final
     async def dispatch(self, task: "BaseTask") -> None:
         """
@@ -116,14 +151,10 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         Raises:
             TaskExecutionError: If the task is already running on this target.
         """
-        if self._task_future is not None and not self._task_future.done():
-            raise TaskExecutionError(
-                _("Task '%(task_name)s' is already running on this target.")
-                % {"task_name": task.name}
-            )
+        self.bind(task)
 
-        self._task = task
-        self._task_future = asyncio.create_task(self._task.run())
+        # Here _task is always set, so we can cast it
+        self._task_future = asyncio.create_task(self.task_or_raise.run())
         horus_logger.log.debug(
             _("Dispatched task '%(task_name)s' to %(kind)s target")
             % {"task_name": task.name, "kind": self.kind}
@@ -178,9 +209,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         Raises:
             TaskExecutionError: If no task has been dispatched yet.
         """
-        if self._task is None:
+        if self._task_future is None:
             raise TaskExecutionError(_("Task has not been dispatched yet."))
-        return self._task.status
+        return self.task_or_raise.status
 
     @abstractmethod
     def access_cost(self, artifact: "BaseArtifact") -> float | None:

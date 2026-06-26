@@ -25,6 +25,9 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
@@ -139,3 +142,22 @@ class TestBaseTarget:
         target = ConcreteTestTarget()
         assert isinstance(target.location_id, str)
         assert target.location_id
+
+    def test_bind_sets_task_reference(self) -> None:
+        """
+        bind() associates the task with the target before dispatch so
+        resource-aware targets can read task.resources during provisioning.
+        """
+        target = ConcreteTestTarget()
+        assert target._task is None
+
+        task = HorusTask(
+            id="bind_task",
+            name="bind_task",
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=target,
+        )
+        target.bind(task)
+
+        assert target._task is task

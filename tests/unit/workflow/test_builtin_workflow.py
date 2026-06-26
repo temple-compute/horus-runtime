@@ -334,6 +334,52 @@ class TestWorkflowRun:
         assert task_a.runs == 1
         assert task_b.runs == 0
 
+    async def test_run_binds_task_to_target_before_transfer(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+    ) -> None:
+        """
+        _run must call ``task.target.bind(task)`` before transferring
+        artifacts so resource-aware targets that provision lazily at transfer
+        time can read ``task.resources``. ``_task`` is otherwise only set by
+        dispatch, which runs *after* transfer, so observing it during transfer
+        proves bind ran first.
+        """
+        del horus_context
+        task = HorusTask(
+            id="bind_task",
+            name="bind_task",
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+        wf = HorusWorkflow(name="bind_order", tasks=[task])
+
+        recorded: dict[str, bool] = {}
+
+        async def _recording_transfer(
+            self: HorusWorkflow,
+            target_task: HorusTask,
+            source_map: object = None,
+        ) -> None:
+            del self, source_map
+            recorded["bound_before_transfer"] = (
+                target_task.target._task is target_task
+            )
+
+        # Patch on the class: pydantic models forbid setattr of non-field
+        # attributes on instances, so an instance-level patch.object fails.
+        with (
+            patch.object(
+                HorusWorkflow, "transfer_artifacts", _recording_transfer
+            ),
+            patch.object(HorusTask, "run", new=AsyncMock()),
+        ):
+            await wf.run(trigger_id="bind_task")
+
+        assert recorded["bound_before_transfer"] is True
+
     async def test_run_empty_workflow_raises_for_missing_trigger(
         self, horus_context: HorusContext
     ) -> None:

@@ -34,6 +34,7 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
+from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.status import TaskStatus
@@ -130,6 +131,14 @@ class BaseTask(AutoRegistry, entry_point="task"):
     target: BaseTarget
     """
     The target that indicates where this task should be dispatched.
+    """
+
+    resources: ResourceRequest | None = None
+    """
+    Advisory compute requirements for this task (CPUs, GPUs, memory, …). Read
+    by resource-aware targets (e.g. Slurm, Terraform) when provisioning;
+    targets that do not understand resources ignore it. Defaults to ``None`` so
+    existing workflows and YAML stay valid.
     """
 
     status: TaskStatus = TaskStatus.IDLE
