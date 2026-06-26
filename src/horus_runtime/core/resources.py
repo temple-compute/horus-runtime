@@ -24,7 +24,7 @@ into their own provisioning primitives. Targets that ignore resources are
 unaffected, which keeps the field fully backwards compatible.
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResourceRequest(BaseModel):
@@ -49,8 +49,8 @@ class ResourceRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cpus: int | None = None
-    gpus: int = 0
-    memory_gb: int | None = None
-    vram_gb: int | None = None
+    cpus: int | None = Field(default=None, ge=1)
+    gpus: int = Field(default=0, ge=0)
+    memory_gb: int | None = Field(default=None, ge=1)
+    vram_gb: int | None = Field(default=None, ge=1)
     walltime: str | None = None
