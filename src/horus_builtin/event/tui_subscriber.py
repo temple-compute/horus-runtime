@@ -123,7 +123,12 @@ _LEVEL_STYLE: dict[str, str] = {
 
 # Tasks in a terminal state count as "executed" for the progress bar.
 _TERMINAL: frozenset[TaskStatus] = frozenset(
-    {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}
+    {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELED,
+        TaskStatus.SKIPPED,
+    }
 )
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"

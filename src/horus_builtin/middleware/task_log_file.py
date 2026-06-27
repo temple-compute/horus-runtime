@@ -64,8 +64,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
     """
     Capture the task's loguru output (plus its stdout/stderr) to its own
     ``<horus_logger.log_directory>/<task.name>.log`` file and register that
-    file as a side artifact on the task once it finishes (on success *and*
-    failure).
+    file as a side artifact on the task before it runs (visible to all
+    middleware during execution, on success *and* failure).
     """
 
     async def wrap(
