@@ -20,15 +20,16 @@ Loguru setup for horus-runtime.
 """
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from loguru import logger
 
 if TYPE_CHECKING:
-    from loguru import Logger
+    from loguru import Logger, Message
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 HORUS_LOG_ENV_PREFIX = "HORUS_LOG_"
@@ -62,6 +63,11 @@ class HorusLogger(BaseSettings):
     compression: str | None = None
     filename_template: str = "log_{time:YYYY-MM-DD}.log"
 
+    #: Loguru handler id of the terminal sink, tracked so it can be swapped
+    #: (e.g. the live TUI redirects it to a panel) without touching the file
+    #: sink. ``None`` until :meth:`setup` runs.
+    _terminal_sink_id: int | None = PrivateAttr(default=None)
+
     @property
     def log(self) -> "Logger":
         """
@@ -91,8 +97,31 @@ class HorusLogger(BaseSettings):
             enqueue=True,
         )
 
-        # Add terminal logging as well
-        logger.add(
+        # Add terminal logging as well, tracking its id so it can be swapped.
+        self._terminal_sink_id = logger.add(
+            sink=sys.stdout,
+            format=self.format,
+            level=self.level,
+        )
+
+    def redirect_terminal(self, sink: "Callable[[Message], None]") -> None:
+        """
+        Replace the terminal (stdout) sink with *sink*, leaving the file sink
+        intact. Used by the live TUI to capture log records into a panel
+        instead of corrupting the Rich display. ``sink`` receives loguru
+        ``Message`` objects (``message.record`` holds the structured fields).
+        """
+        if self._terminal_sink_id is not None:
+            logger.remove(self._terminal_sink_id)
+        self._terminal_sink_id = logger.add(sink=sink, level=self.level)
+
+    def restore_terminal(self) -> None:
+        """
+        Restore stdout terminal logging after :meth:`redirect_terminal`.
+        """
+        if self._terminal_sink_id is not None:
+            logger.remove(self._terminal_sink_id)
+        self._terminal_sink_id = logger.add(
             sink=sys.stdout,
             format=self.format,
             level=self.level,

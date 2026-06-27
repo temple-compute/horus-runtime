@@ -25,19 +25,23 @@ from pathlib import Path
 
 import click
 
-from horus_builtin.event.tui_subscriber import WorkflowTUISubscriber
+from horus_builtin.event.tui_subscriber import render_workflow
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.i18n import tr as _
 from horus_runtime.version import __version__ as horus_version
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version=horus_version, prog_name="Horus Runtime")
-def main() -> None:
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """
     Run workflows and tasks using the Horus Runtime.
     """
+    # Bare `horus` (no subcommand) shows help rather than doing nothing.
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @main.command()
@@ -73,11 +77,8 @@ def run(workflow_yaml: Path, trigger_id: str | None, no_tui: bool) -> None:
         if no_tui:
             asyncio.run(workflow.run(trigger_id=trigger))
         else:
-            tui = WorkflowTUISubscriber()
-            tui.track(workflow)
-            ctx.bus.subscribe(tui)
-            with tui.live():
-                asyncio.run(workflow.run(trigger_id=trigger))
+            render_workflow(workflow, trigger_id=trigger)
+
     except click.ClickException:
         raise
     except Exception as exc:

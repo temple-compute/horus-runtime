@@ -28,6 +28,10 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_runtime.core.interaction.transport import (
+    InteractionAnsweredEvent,
+    InteractionAskedEvent,
+)
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.event.subscriber import BaseEventSubscriber
@@ -56,8 +60,8 @@ class TestWorkflowTUISubscriber:
         registered = BaseEventSubscriber.registry.values()
         assert WorkflowTUISubscriber not in registered
 
-    def test_render_shows_tasks_and_statuses(self) -> None:
-        """The table lists each task name and its colored status."""
+    def test_render_shows_tasks_and_workflow(self) -> None:
+        """Dashboard names each task, the workflow, and a progress total."""
         wf = _workflow()
         wf.tasks[0].status = TaskStatus.RUNNING
         wf.tasks[1].status = TaskStatus.COMPLETED
@@ -65,15 +69,19 @@ class TestWorkflowTUISubscriber:
         tui = WorkflowTUISubscriber()
         tui.track(wf)
 
-        console = Console(record=True, width=80)
+        console = Console(record=True, width=120)
         console.print(tui.render())
         out = console.export_text()
 
         assert "Alpha" in out
         assert "Beta" in out
-        assert "running" in out
-        assert "completed" in out
-        assert "demo_wf" in out  # table title is the workflow name
+        assert "demo_wf" in out  # header shows the workflow name
+        assert "tasks" in out  # progress label
+        assert "✓" in out  # completed glyph
+
+    def test_render_without_workflow_is_safe(self) -> None:
+        """render() must not raise when nothing is tracked or active."""
+        Console(record=True).print(WorkflowTUISubscriber().render())
 
     def test_handle_without_live_is_noop(self) -> None:
         """handle() must not raise when no Live display is active."""
@@ -87,6 +95,26 @@ class TestWorkflowTUISubscriber:
         tui.track(_workflow())
         with tui.live():
             tui.handle(HorusTaskEvent(task_name="Alpha"))
+
+    def test_interaction_pauses_and_resumes_live(self) -> None:
+        """An asked interaction stops the Live; the answer restarts it."""
+        tui = WorkflowTUISubscriber()
+        tui.track(_workflow())
+        asked = InteractionAskedEvent(
+            interaction_kind="string",
+            transport_kind="cli",
+            renderer_key="cli.string",
+            value_key="v",
+        )
+        answered = InteractionAnsweredEvent(
+            interaction_kind="string", transport_kind="cli", value_key="v"
+        )
+        with tui.live():
+            assert tui._paused is False
+            tui.handle(asked)
+            assert tui._paused is True
+            tui.handle(answered)
+            assert tui._paused is False
 
     def test_setup_is_noop(self) -> None:
         """setup() is a no-op and must not raise."""
