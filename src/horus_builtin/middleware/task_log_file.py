@@ -64,8 +64,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
     """
     Capture the task's loguru output (plus its stdout/stderr) to its own
     ``<horus_logger.log_directory>/<task.name>.log`` file and register that
-    file as a side artifact on the task once it finishes (on success *and*
-    failure).
+    file as a side artifact on the task before it runs (visible to all
+    middleware during execution, on success *and* failure).
     """
 
     async def wrap(
@@ -87,12 +87,24 @@ class TaskLogFileMiddleware(TaskMiddleware):
 
         log_path = logs_dir / f"{safe_name}.log"
 
-        # Add the file to the sink
+        # Add the file to the sink (this creates the file on disk).
         handler_id = logger.add(
             sink=log_path,
             format=horus_logger.format,
             level=horus_logger.level,
             enqueue=False,
+        )
+
+        # Register the log file as a side artifact up front, while we still own
+        # the ordering. Side-product upload runs in another task middleware's
+        # ``finally`` whose position in the chain (inner vs outer) is not
+        # guaranteed; if it is inner, its ``finally`` fires before ours, so
+        # appending here — before the task runs — is the only way to ensure the
+        # log is in ``side_artifacts`` when the upload reads it. The file is
+        # populated during ``call_next`` (loguru ``enqueue=False`` writes
+        # synchronously), so it is non-empty by the time any upload runs.
+        ctx.task.side_artifacts.append(
+            FileArtifact(id=f"{ctx.task.id}_logs", path=log_path)
         )
 
         # Route the task's print()/stdout (and stderr) through loguru so it
@@ -110,11 +122,3 @@ class TaskLogFileMiddleware(TaskMiddleware):
             out_stream.flush()
             err_stream.flush()
             logger.remove(handler_id)
-
-            # Create the side artifact for the log file
-            logs_artifact = FileArtifact(
-                id=f"{ctx.task.id}_logs", path=log_path
-            )
-
-            # Add the log file to the task's side artifacts
-            ctx.task.side_artifacts.append(logs_artifact)

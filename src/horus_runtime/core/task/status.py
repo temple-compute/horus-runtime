@@ -56,3 +56,8 @@ class TaskStatus(Enum):
     """
     The task has been canceled before completion.
     """
+
+    SKIPPED = "skipped"
+    """
+    The task was skipped because its outputs already exist.
+    """

@@ -276,6 +276,29 @@ class TestBaseTaskValidation:
 
 
 @pytest.mark.unit
+class TestBaseTaskRun:
+    """
+    Tests for the run() status contract on BaseTask.
+    """
+
+    async def test_skip_sets_status_to_skipped(
+        self, horus_context: object
+    ) -> None:
+        """
+        A task skipped because it is already complete must report SKIPPED, not
+        stay stuck at its pre-dispatch status.
+        """
+        del horus_context
+        # ConcreteTestTask.is_complete() returns True and skip_if_complete
+        # defaults to True, so run() takes the skip branch.
+        task = _make_concrete_task()
+
+        await task.run()
+
+        assert task.status == TaskStatus.SKIPPED
+
+
+@pytest.mark.unit
 class TestBaseTaskReset:
     """
     Tests for the reset / _reset contract on BaseTask.

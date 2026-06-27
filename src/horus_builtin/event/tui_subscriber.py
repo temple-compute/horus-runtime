@@ -73,6 +73,7 @@ _STATUS_STYLE: dict[TaskStatus, str] = {
     TaskStatus.COMPLETED: "bold green",
     TaskStatus.FAILED: "bold red",
     TaskStatus.CANCELED: "magenta",
+    TaskStatus.SKIPPED: "dim",
 }
 
 # Glyph per task status (RUNNING uses an animated spinner instead).
@@ -83,6 +84,7 @@ _STATUS_GLYPH: dict[TaskStatus, str] = {
     TaskStatus.COMPLETED: "✓",
     TaskStatus.FAILED: "✗",
     TaskStatus.CANCELED: "⊘",
+    TaskStatus.SKIPPED: "→",
 }
 
 # Rich style per workflow status.
@@ -121,7 +123,12 @@ _LEVEL_STYLE: dict[str, str] = {
 
 # Tasks in a terminal state count as "executed" for the progress bar.
 _TERMINAL: frozenset[TaskStatus] = frozenset(
-    {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}
+    {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELED,
+        TaskStatus.SKIPPED,
+    }
 )
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
