@@ -220,6 +220,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     task_name=self.name,
                 )
             )
+            self.status = TaskStatus.SKIPPED
             return
         self.status = TaskStatus.RUNNING
         horus_logger.log.debug(
