@@ -73,6 +73,7 @@ _STATUS_STYLE: dict[TaskStatus, str] = {
     TaskStatus.COMPLETED: "bold green",
     TaskStatus.FAILED: "bold red",
     TaskStatus.CANCELED: "magenta",
+    TaskStatus.SKIPPED: "dim",
 }
 
 # Glyph per task status (RUNNING uses an animated spinner instead).
@@ -83,6 +84,7 @@ _STATUS_GLYPH: dict[TaskStatus, str] = {
     TaskStatus.COMPLETED: "✓",
     TaskStatus.FAILED: "✗",
     TaskStatus.CANCELED: "⊘",
+    TaskStatus.SKIPPED: "→",
 }
 
 # Rich style per workflow status.
