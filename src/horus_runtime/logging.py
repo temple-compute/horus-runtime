@@ -107,9 +107,7 @@ class HorusLogger(BaseSettings):
     def redirect_terminal(self, sink: "Callable[[Message], None]") -> None:
         """
         Replace the terminal (stdout) sink with *sink*, leaving the file sink
-        intact. Used by the live TUI to capture log records into a panel
-        instead of corrupting the Rich display. ``sink`` receives loguru
-        ``Message`` objects (``message.record`` holds the structured fields).
+        intact. Used by the live TUI to capture log records into a panel.
         """
         if self._terminal_sink_id is not None:
             logger.remove(self._terminal_sink_id)
