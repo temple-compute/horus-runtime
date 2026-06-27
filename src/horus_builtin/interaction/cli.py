@@ -21,6 +21,10 @@ CLI interaction transport and renderers for common interactions.
 
 from typing import ClassVar
 
+from rich.console import Console
+from rich.prompt import Prompt
+from rich.text import Text
+
 from horus_builtin.interaction.common.confirm import ConfirmInteraction
 from horus_builtin.interaction.common.dropdown import DropdownInteraction
 from horus_builtin.interaction.common.file import FileInteraction
@@ -30,6 +34,10 @@ from horus_runtime.core.interaction.renderer import (
 )
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.i18n import tr as _
+
+#: Shared console for prompts. The live TUI pauses its display (via the
+#: interaction events) before a prompt runs, so writing here is safe.
+_console = Console()
 
 
 class CLIInteractionTransport(BaseInteractionTransport):
@@ -49,23 +57,18 @@ class CLIInteractionTransport(BaseInteractionTransport):
         placeholder: str | None = None,
     ) -> str:
         """
-        Ask for free-form text input.
+        Ask for free-form text input, returning the raw string answer.
         """
-        lines = []
         if title is not None:
-            lines.append(title)
-        if prompt is not None:
-            lines.append(prompt)
-        if default is not None:
-            lines.append(_("(default: %(default)s)") % {"default": default})
+            _console.print(Text(title, style="bold"))
+        question = prompt or _("Input")
         if placeholder is not None:
-            lines.append(
-                _("(placeholder: %(placeholder)s)")
-                % {"placeholder": placeholder}
-            )
-        lines.append("> ")
-        data = "\n".join(lines)
-        return input(data)
+            question += _(" (e.g. %(placeholder)s)") % {
+                "placeholder": placeholder
+            }
+        if default is None:
+            return Prompt.ask(question, console=_console)
+        return Prompt.ask(question, console=_console, default=default)
 
 
 class CLIStringRenderer(

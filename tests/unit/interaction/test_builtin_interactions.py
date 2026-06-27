@@ -274,25 +274,28 @@ class TestCLIInteractionTransport:
     Test cases for CLIInteractionTransport.
     """
 
-    def test_ask_text_formats_prompt_for_input(
+    def test_ask_text_uses_rich_prompt(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Test that ask_text() composes the CLI prompt before calling input().
+        Test that ask_text() prompts via Rich, folding in the prompt text,
+        placeholder hint, and default, and returns the raw string answer.
         """
-        prompts: list[str] = []
+        captured: dict[str, object] = {}
+
+        class _FakePrompt:
+            @staticmethod
+            def ask(question: str, **kwargs: object) -> str:
+                captured["question"] = question
+                captured["default"] = kwargs.get("default")
+                return "typed value"
+
+        monkeypatch.setattr(
+            "horus_builtin.interaction.cli.Prompt", _FakePrompt
+        )
+
         transport = CLIInteractionTransport()
-
-        def fake_input(prompt: str) -> str:
-            """
-            Record the prompt and return a fixed answer.
-            """
-            prompts.append(prompt)
-            return "typed value"
-
-        monkeypatch.setattr("builtins.input", fake_input)
-
         result = transport.ask_text(
             title="Title",
             prompt="Prompt",
@@ -301,9 +304,9 @@ class TestCLIInteractionTransport:
         )
 
         assert result == "typed value"
-        assert prompts == [
-            "Title\nPrompt\n(default: fallback)\n(placeholder: Type here)\n> "
-        ]
+        assert "Prompt" in str(captured["question"])
+        assert "Type here" in str(captured["question"])
+        assert captured["default"] == "fallback"
 
 
 @pytest.mark.unit

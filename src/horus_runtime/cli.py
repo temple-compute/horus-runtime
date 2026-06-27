@@ -20,24 +20,72 @@
 Entrypoint for horus-runtime.
 """
 
+import asyncio
+from pathlib import Path
+
 import click
 
+from horus_builtin.event.tui_subscriber import render_workflow
+from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
+from horus_runtime.i18n import tr as _
 from horus_runtime.version import __version__ as horus_version
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.version_option(version=horus_version, prog_name="Horus Runtime")
-def main() -> None:
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """
     Run workflows and tasks using the Horus Runtime.
     """
-    # Boot the runtime to initialize logging, load plugins,
-    # and set up global context
-    ctx = HorusContext.boot()
+    # Bare `horus` (no subcommand) shows help rather than doing nothing.
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
-    # Finish the application lifecycle.
-    ctx.shutdown()
+
+@main.command()
+@click.argument(
+    "workflow_yaml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--trigger",
+    "trigger_id",
+    default=None,
+    help="Task id to trigger. Defaults to the first task in the workflow.",
+)
+@click.option(
+    "--no-tui",
+    is_flag=True,
+    help="Disable the live TUI; stream log output only.",
+)
+def run(workflow_yaml: Path, trigger_id: str | None, no_tui: bool) -> None:
+    """
+    Run the workflow defined in WORKFLOW_YAML.
+
+    Boots the runtime, loads the workflow, and executes it from the trigger
+    task downstream. Exits non-zero if the workflow fails.
+    """
+    ctx = HorusContext.boot()
+    try:
+        workflow = HorusWorkflow.from_yaml(workflow_yaml)
+        if not workflow.tasks:
+            raise click.ClickException(_("Workflow has no tasks to run."))
+        trigger = trigger_id or workflow.tasks[0].id
+
+        if no_tui:
+            asyncio.run(workflow.run(trigger_id=trigger))
+        else:
+            render_workflow(workflow, trigger_id=trigger)
+
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        # Surface any workflow/loading failure as a non-zero CLI exit.
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        ctx.shutdown()
 
 
 if __name__ == "__main__":
