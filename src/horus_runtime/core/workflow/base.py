@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import ClassVar, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
+import yaml
 from pydantic import Field, model_validator
 
 from horus_runtime.context import HorusContext
@@ -246,7 +247,6 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         return self
 
     @classmethod
-    @abstractmethod
     def from_yaml(cls, path: str | Path) -> Self:
         """
         Load a workflow from a YAML file.
@@ -257,6 +257,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Returns:
             A fully constructed :class:`BaseWorkflow` instance.
         """
+        with Path(path).open("r", encoding="utf-8") as fh:
+            return cls.model_validate(yaml.safe_load(fh))
+
+    def to_yaml(self, path: str | Path) -> None:
+        """
+        Save the workflow to a YAML file.
+
+        Args:
+            path: Path to the YAML file.
+
+        Returns:
+            None
+        """
+        with Path(path).open("w", encoding="utf-8") as fh:
+            yaml.safe_dump(self.model_dump(), fh)
 
     def _build_source_map(self) -> dict[tuple[str, str], _EdgeSource]:
         """

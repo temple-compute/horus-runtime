@@ -20,10 +20,7 @@
 HorusWorkflow implementation for Horus built-in workflows.
 """
 
-from pathlib import Path
 from typing import ClassVar
-
-import yaml
 
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.workflow.dag import execution_plan
@@ -55,15 +52,6 @@ class HorusWorkflow(BaseWorkflow):
     The orchestrator runs locally; root input artifacts (those not produced by
     any upstream task) are sourced from the local filesystem.
     """
-
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> "HorusWorkflow":
-        """
-        Load a workflow from a YAML file and return an instance of
-        HorusWorkflow.
-        """
-        with Path(path).open("r", encoding="utf-8") as fh:
-            return cls.model_validate(yaml.safe_load(fh))
 
     async def _run(self, trigger_id: str) -> None:
         """
