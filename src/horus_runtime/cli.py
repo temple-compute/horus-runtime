@@ -26,8 +26,8 @@ from pathlib import Path
 import click
 
 from horus_builtin.event.tui_subscriber import render_workflow
-from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
+from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 from horus_runtime.version import __version__ as horus_version
 
@@ -69,7 +69,7 @@ def run(workflow_yaml: Path, trigger_id: str | None, no_tui: bool) -> None:
     """
     ctx = HorusContext.boot()
     try:
-        workflow = HorusWorkflow.from_yaml(workflow_yaml)
+        workflow = BaseWorkflow.from_yaml(workflow_yaml)
         if not workflow.tasks:
             raise click.ClickException(_("Workflow has no tasks to run."))
         trigger = trigger_id or workflow.tasks[0].id
