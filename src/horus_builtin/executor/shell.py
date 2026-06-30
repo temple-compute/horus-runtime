@@ -21,6 +21,7 @@ task via the target's channel.
 """
 
 import asyncio
+from contextlib import aclosing
 from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
@@ -87,19 +88,19 @@ class ShellExecutor(BaseExecutor):
         )
 
         try:
-            stdout, stderr = await proc.communicate()
+            async with aclosing(proc.stream()) as stream:
+                async for stream_name, line in stream:
+                    if stream_name == "stdout":
+                        horus_logger.log.info(line.decode("utf-8").rstrip())
+                    elif stream_name == "stderr":
+                        horus_logger.log.warning(line.decode("utf-8").rstrip())
         except asyncio.CancelledError:
             proc.kill()
             await proc.wait()
             raise
 
-        # Surface command output into the per-run log stream.
-        out = stdout.decode(errors="replace").strip() if stdout else ""
-        err = stderr.decode(errors="replace").strip() if stderr else ""
-        if out:
-            horus_logger.log.info(out)
-        if err:
-            horus_logger.log.warning(err)
+        # Wait for the process to finish and check the return code.
+        await proc.wait()
 
         if proc.returncode != 0:
             horus_logger.log.error(

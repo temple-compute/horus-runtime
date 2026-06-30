@@ -38,6 +38,12 @@ class HorusRuntimeSettings(BaseSettings):
     data should be declared as task inputs/outputs instead.
     """
 
+    STREAM_QUEUE_MAXSIZE: int = 100
+    """
+    Maximum number of lines to buffer in the stdout/stderr stream queue before
+    backpressure is applied to the target channel.
+    """
+
 
 runtime_settings = HorusRuntimeSettings()
 

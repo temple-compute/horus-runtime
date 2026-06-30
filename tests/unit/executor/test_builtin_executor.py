@@ -21,6 +21,7 @@ Unit tests for ShellExecutor and related builtin executors.
 """
 
 import os
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -124,14 +125,18 @@ class TestShellExecutor:
         via the target channel's run_command.
         """
         del horus_context
-
         hello_world_task = make_shell_task("echo 'Hello World'")
+
+        async def _empty_stream() -> AsyncGenerator[tuple[str, bytes]]:
+            return
+            yield
 
         # Mock at the channel boundary: LocalTarget.run_command.
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         mock_proc.communicate = AsyncMock(return_value=(b"", b""))
         mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stream = MagicMock(return_value=_empty_stream())
 
         with patch.object(
             LocalTarget,
@@ -141,14 +146,14 @@ class TestShellExecutor:
             executor = ShellExecutor()
             await executor.execute(hello_world_task)
 
-            mock_run_command.assert_called_once()
-            __, kwargs = mock_run_command.call_args
-            # The executor injects the per-task side-artifacts directory into
-            # the subprocess environment via the channel's env parameter.
-            assert runtime_settings.SIDE_ARTIFACTS_DIR_ENV in kwargs["env"]
-            assert kwargs["env"][
-                runtime_settings.SIDE_ARTIFACTS_DIR_ENV
-            ].endswith("side-artifacts")
+        mock_run_command.assert_called_once()
+        __, kwargs = mock_run_command.call_args
+        # The executor injects the per-task side-artifacts directory into
+        # the subprocess environment via the channel's env parameter.
+        assert runtime_settings.SIDE_ARTIFACTS_DIR_ENV in kwargs["env"]
+        assert kwargs["env"][runtime_settings.SIDE_ARTIFACTS_DIR_ENV].endswith(
+            "side-artifacts"
+        )
 
 
 @pytest.mark.unit

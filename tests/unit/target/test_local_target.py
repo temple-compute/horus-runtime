@@ -22,6 +22,7 @@ Unit tests for the LocalTarget builtin target.
 import asyncio
 import socket
 import tempfile
+from contextlib import aclosing
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -223,3 +224,150 @@ class TestLocalTargetListDir:
         """
         target = LocalTarget()
         assert await target.list_dir((tmp_path / "nope").as_posix()) == []
+
+
+@pytest.mark.unit
+class TestLocalTargetStream:
+    """
+    Tests for ChannelProcess.stream() on LocalChannelProcess — live
+    (stream_name, line) delivery instead of batch communicate().
+    """
+
+    async def test_stream_yields_stdout_lines(self, tmp_path: Path) -> None:
+        """stream() yields lines from stdout as they are produced."""
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("printf 'one\\ntwo\\nthree\\n'")
+
+        lines = [line async for _stream, line in proc.stream()]
+
+        assert lines == [b"one\n", b"two\n", b"three\n"]
+        assert await proc.wait() == 0
+
+    async def test_stream_yields_stderr_lines(self, tmp_path: Path) -> None:
+        """stream() yields lines from stderr as they are produced."""
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("printf 'err1\\nerr2\\n' >&2")
+
+        results = [(s, line) async for s, line in proc.stream()]
+
+        assert results == [("stderr", b"err1\n"), ("stderr", b"err2\n")]
+
+    async def test_stream_labels_stream_names_correctly(
+        self, tmp_path: Path
+    ) -> None:
+        """stream() labels lines with the correct stream name."""
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("echo out_line; echo err_line >&2")
+
+        by_stream: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
+        async for stream_name, line in proc.stream():
+            by_stream[stream_name].append(line)
+
+        assert by_stream["stdout"] == [b"out_line\n"]
+        assert by_stream["stderr"] == [b"err_line\n"]
+
+    async def test_stream_empty_output_yields_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A command that produces no output yields no lines from stream()."""
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("true")
+
+        lines = [line async for _stream, line in proc.stream()]
+
+        assert lines == []
+        assert await proc.wait() == 0
+
+    async def test_stream_exhaustion_then_wait_returns_real_exit_code(
+        self, tmp_path: Path
+    ) -> None:
+        """After exhausting stream(), wait() returns the real exit code."""
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("echo done; exit 7")
+
+        async for _stream, _line in proc.stream():
+            pass
+
+        assert await proc.wait() == 7
+
+    async def test_stream_delivers_lines_before_process_exits(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Lines must be observable while the process is still running, not
+        only after it exits — this is the whole point of stream() vs
+        communicate().
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("echo first; sleep 5; echo second")
+
+        gen = proc.stream()
+        stream_name, line = await asyncio.wait_for(gen.__anext__(), timeout=2)
+
+        assert (stream_name, line) == ("stdout", b"first\n")
+        # Confirm we observed it while the process is still alive/sleeping.
+        assert proc.returncode is None
+
+        await gen.aclose()
+        proc.kill()
+        await proc.wait()
+
+    async def test_stream_can_be_stopped_early_with_aclosing(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Breaking out of consumption via contextlib.aclosing cleans up the
+        underlying pump tasks deterministically.
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command(
+            "for i in $(seq 1 100); do echo $i; sleep 0.05; done"
+        )
+
+        seen = []
+        async with aclosing(proc.stream()) as lines:
+            async for _stream, line in lines:
+                seen.append(line)
+                if len(seen) == 3:
+                    break
+
+        assert seen == [b"1\n", b"2\n", b"3\n"]
+
+        proc.kill()
+        await proc.wait()
+
+    async def test_stream_allows_kill_mid_stream(self, tmp_path: Path) -> None:
+        """
+        A consumer can call kill() while iterating stream() — e.g. on
+        detecting a fatal stderr line — and the iterator ends cleanly.
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("echo bad >&2; sleep 30")
+
+        async with aclosing(proc.stream()) as lines:
+            async for stream_name, line in lines:
+                if stream_name == "stderr" and b"bad" in line:
+                    proc.kill()
+                    break
+
+        code = await proc.wait()
+        assert code != 0
+
+    async def test_stream_does_not_deadlock_on_large_output(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Output larger than a pipe buffer must not deadlock when consumed
+        via stream() (regression guard vs. naive wait()-then-read).
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command(
+            "for i in $(seq 1 5000); do echo line_$i; done"
+        )
+
+        count = 0
+        async for _stream, _line in proc.stream():
+            count += 1
+
+        assert count == 5000
+        assert await proc.wait() == 0

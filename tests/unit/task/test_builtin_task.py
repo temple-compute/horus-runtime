@@ -21,7 +21,7 @@ Unit tests for HorusTask builtin task.
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -33,7 +33,7 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
-from tests.conftest import MakeTaskType
+from tests.conftest import MakeMockSubprocessType, MakeTaskType
 
 
 @pytest.mark.unit
@@ -195,7 +195,9 @@ class TestHorusTaskExecution:
         with pytest.raises(ArtifactDoesNotExistError):
             await task.run()
 
-    async def test_horus_task_run_executes_via_executor(self) -> None:
+    async def test_horus_task_run_executes_via_executor(
+        self, make_mock_subprocess: MakeMockSubprocessType
+    ) -> None:
         """
         Test that HorusTask.run() executes the task via the executor.
         """
@@ -207,12 +209,9 @@ class TestHorusTaskExecution:
             inputs=[],  # No inputs to avoid file existence issues
         )
 
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b"", b""))
-
         with patch(
-            "asyncio.create_subprocess_shell", return_value=mock_process
+            "asyncio.create_subprocess_shell",
+            return_value=make_mock_subprocess(returncode=0),
         ) as mock_run:
             # Should not raise an exception
             await task.run()
@@ -222,6 +221,7 @@ class TestHorusTaskExecution:
 
     async def test_horus_task_run_raises_error_on_execution_failure(
         self,
+        make_mock_subprocess: MakeMockSubprocessType,
     ) -> None:
         """
         Test that HorusTask.run() raises TaskExecutionError when executor
@@ -234,18 +234,17 @@ class TestHorusTaskExecution:
             runtime=CommandRuntime(command="echo 'Hello World'"),
         )
 
-        mock_process_fail = AsyncMock()
-        mock_process_fail.returncode = 1
-        mock_process_fail.communicate = AsyncMock(return_value=(b"", b"error"))
-
         # Mock asyncio.create_subprocess_shell to return failure
         with patch(
-            "asyncio.create_subprocess_shell", return_value=mock_process_fail
+            "asyncio.create_subprocess_shell",
+            return_value=make_mock_subprocess(returncode=1),
         ):
             with pytest.raises(TaskExecutionError):
                 await task.run()
 
-    async def test_horus_task_run_with_no_inputs(self) -> None:
+    async def test_horus_task_run_with_no_inputs(
+        self, make_mock_subprocess: MakeMockSubprocessType
+    ) -> None:
         """
         Test that HorusTask.run() works correctly with no inputs.
         """
@@ -257,13 +256,10 @@ class TestHorusTaskExecution:
             inputs=[],  # No inputs
         )
 
-        mock_process_ok = AsyncMock()
-        mock_process_ok.returncode = 0
-        mock_process_ok.communicate = AsyncMock(return_value=(b"", b""))
-
         # Mock asyncio.create_subprocess_shell to return success
         with patch(
-            "asyncio.create_subprocess_shell", return_value=mock_process_ok
+            "asyncio.create_subprocess_shell",
+            return_value=make_mock_subprocess(returncode=0),
         ) as mock_run:
             # Should not raise an exception
             await task.run()

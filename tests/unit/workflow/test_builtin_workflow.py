@@ -38,7 +38,11 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from tests.conftest import MakeTaskType, MakeWorkflowFileType
+from tests.conftest import (
+    MakeMockSubprocessType,
+    MakeTaskType,
+    MakeWorkflowFileType,
+)
 
 
 @pytest.mark.unit
@@ -211,6 +215,7 @@ class TestWorkflowRun:
         mock_run: AsyncMock,
         tmp_path: Path,
         horus_context: HorusContext,
+        make_mock_subprocess: MakeMockSubprocessType,
     ) -> None:
         """
         Tasks execute in topological (dependency) order: a task that produces
@@ -218,10 +223,11 @@ class TestWorkflowRun:
         order in which they are listed in the workflow.
         """
         del horus_context
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b"", b""))
-        mock_run.return_value = mock_process
+        mock_run.side_effect = [
+            make_mock_subprocess(returncode=0),
+            make_mock_subprocess(returncode=0),
+        ]
+        # mock_run.return_value = make_mock_subprocess(returncode=0)
 
         shared_path = tmp_path / "shared.txt"
 
@@ -276,16 +282,15 @@ class TestWorkflowRun:
         mock_run: AsyncMock,
         tmp_path: Path,
         horus_context: HorusContext,
+        make_mock_subprocess: MakeMockSubprocessType,
     ) -> None:
         """
         If a task fails, the workflow should stop and not
         execute downstream tasks that depend on it.
         """
         del horus_context
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-        mock_process.communicate = AsyncMock(return_value=(b"", b""))
-        mock_run.return_value = mock_process
+
+        mock_run.return_value = make_mock_subprocess(returncode=1)
 
         class TaskWithFailure(HorusTask):
             add_to_registry: ClassVar[bool] = False

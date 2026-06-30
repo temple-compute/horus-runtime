@@ -24,12 +24,18 @@ import asyncio
 import os
 import signal
 import socket
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import ClassVar
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
+from horus_runtime.core.target.channel import (
+    ChannelProcess,
+    RemoteDirEntry,
+    StreamName,
+    merge_line_streams,
+)
 
 
 class LocalChannelProcess(ChannelProcess):
@@ -81,6 +87,14 @@ class LocalChannelProcess(ChannelProcess):
             kill_func(parsed_pid, sig)
         except ProcessLookupError:
             pass
+
+    def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
+        """
+        Yield ``(stream_name, line)`` pairs as the process produces them.
+        """
+        assert self._proc.stdout is not None
+        assert self._proc.stderr is not None
+        return merge_line_streams(self._proc.stdout, self._proc.stderr)
 
 
 class LocalTarget(BaseTarget):
