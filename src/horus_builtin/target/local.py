@@ -133,7 +133,7 @@ class LocalTarget(BaseTarget):
     # snappy for near-live streaming when detachment is requested.
     poll_interval: ClassVar[float] = 0.25
 
-    async def _run_command_sync(
+    async def run_command_sync(
         self,
         cmd: str,
         *,
@@ -170,7 +170,7 @@ class LocalTarget(BaseTarget):
         )
         return LocalChannelProcess(proc)
 
-    async def _launch(
+    async def launch(
         self,
         cmd: str,
         *,
@@ -202,7 +202,7 @@ class LocalTarget(BaseTarget):
         pid = int((Path(job_dir) / "pid").read_text().strip())
         return JobHandle(pid=pid, job_dir=job_dir)
 
-    async def _poll(self, handle: JobHandle) -> int | None:
+    async def poll(self, handle: JobHandle) -> int | None:
         """``None`` while running; the recorded exit code once finished."""
         ec = Path(handle.job_dir) / "exit_code"
         if ec.exists():
@@ -218,7 +218,7 @@ class LocalTarget(BaseTarget):
             pass
         return None
 
-    async def _read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
         """Read the captured stdout/stderr log files."""
 
         def _read(name: str) -> bytes:
@@ -227,7 +227,7 @@ class LocalTarget(BaseTarget):
 
         return _read("stdout.log"), _read("stderr.log")
 
-    async def _send_signal(self, handle: JobHandle, sig: int) -> None:
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
         """
         Signal the detached job's whole process group, so children it spawned
         die with it (the launcher used ``start_new_session``, so the job's

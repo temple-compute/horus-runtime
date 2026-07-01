@@ -33,7 +33,7 @@ import pytest
 
 from horus_builtin.target.local import LocalChannelProcess, LocalTarget
 from horus_runtime.core.target.channel import (
-    _PollingChannelProcess,
+    PollingChannelProcess,
     build_detach_command,
     new_job_dir,
 )
@@ -56,13 +56,13 @@ class TestDetachDefaults:
         assert isinstance(proc, LocalChannelProcess)
         assert await proc.wait() == 0
 
-    async def test_explicit_detach_returns_polling_process(
+    async def test_explicit_detach_returnspolling_process(
         self, tmp_path: Path
     ) -> None:
         """Explicit detach=True yields a polling process."""
         target = LocalTarget(working_directory=tmp_path.as_posix())
         proc = await target.run_command("true", detach=True)
-        assert isinstance(proc, _PollingChannelProcess)
+        assert isinstance(proc, PollingChannelProcess)
         assert await proc.wait() == 0
 
 

@@ -29,8 +29,8 @@ from pydantic import Field, PrivateAttr
 from horus_runtime.core.target.channel import (
     ChannelProcess,
     JobHandle,
+    PollingChannelProcess,
     RemoteDirEntry,
-    _PollingChannelProcess,
     new_job_dir,
 )
 from horus_runtime.core.task.exceptions import TaskExecutionError
@@ -260,19 +260,12 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
     poll_interval: ClassVar[float] = 1.0
     """
-    Seconds between status polls for detached jobs (see :meth:`run_command`).
-    Targets probing over the network (SSH) keep it modest; local targets can
-    lower it for snappier streaming.
+    Seconds between status polls for detached jobs.
     """
 
     detach_by_default: ClassVar[bool] = True
     """
     Whether :meth:`run_command` detaches when the caller doesn't specify.
-
-    Detachment matters where there is a droppable channel (SSH): the job then
-    survives a connection loss. Targets with no such channel (``LocalTarget``)
-    set this ``False`` so their live-streaming path stays the default and only
-    opt into detachment explicitly (e.g. for recovery).
     """
 
     async def run_command(
@@ -285,42 +278,16 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     ) -> ChannelProcess:
         """
         Run *cmd* on the target and return a :class:`.ChannelProcess` handle.
-
-        Template method: concrete targets implement the small primitives below
-        (:meth:`_launch`, :meth:`_poll`, :meth:`_read_output`,
-        :meth:`_send_signal`, plus the synchronous :meth:`_run_command_sync`)
-        rather than overriding this method. Targets that implement the
-        primitives get *detachment* for free — the returned process survives
-        the connection that launched it, so a dropped channel no longer kills
-        the job. (A target may still override ``run_command`` directly; it then
-        opts out of detachment.)
-
-        Args:
-            cmd: Shell command string to execute.
-            cwd: Working directory on the *target* host.  The channel
-                applies this — ``LocalTarget`` passes it as
-                ``subprocess cwd=``; remote targets inline
-                ``cd <cwd> && …`` before the command.
-            env: Additional environment variables to merge onto the
-                channel's base environment.  Keys/values are plain strings.
-            detach: Whether to launch detached (survives a dropped channel,
-                polled for completion) or run synchronously over the live
-                channel. Defaults to the target's :attr:`detach_by_default`.
-                Pass ``False`` for short control-plane commands (``mkdir``,
-                image build/cleanup) that should block as before.
-
-        Returns:
-            A :class:`.ChannelProcess` handle for the running command.
         """
         if detach is None:
             detach = self.detach_by_default
         if not detach:
-            return await self._run_command_sync(cmd, cwd=cwd, env=env)
+            return await self.run_command_sync(cmd, cwd=cwd, env=env)
         job_dir = new_job_dir(cwd or self.working_directory)
-        handle = await self._launch(cmd, cwd=cwd, env=env, job_dir=job_dir)
-        return _PollingChannelProcess(self, handle)
+        handle = await self.launch(cmd, cwd=cwd, env=env, job_dir=job_dir)
+        return PollingChannelProcess(self, handle)
 
-    async def _run_command_sync(
+    async def run_command_sync(
         self,
         cmd: str,
         *,
@@ -335,7 +302,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         raise NotImplementedError
 
-    async def _launch(
+    async def launch(
         self,
         cmd: str,
         *,
@@ -345,21 +312,18 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     ) -> JobHandle:
         """
         Start *cmd* so it outlives the launching channel and return a handle.
-
-        Implementations record stdout/stderr, the PID, and (on completion) the
-        exit code under *job_dir*; see :func:`.build_detach_command`.
         """
         raise NotImplementedError
 
-    async def _poll(self, handle: JobHandle) -> int | None:
+    async def poll(self, handle: JobHandle) -> int | None:
         """Non-blocking status: ``None`` while running, exit code once done."""
         raise NotImplementedError
 
-    async def _read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
         """Return the job's captured ``(stdout, stderr)`` so far."""
         raise NotImplementedError
 
-    async def _send_signal(self, handle: JobHandle, sig: int) -> None:
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
         """Best-effort signal delivery to a detached job (no live channel)."""
         raise NotImplementedError
 

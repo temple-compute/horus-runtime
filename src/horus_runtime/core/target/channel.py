@@ -107,16 +107,6 @@ class ChannelProcess(ABC):
     def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
         """
         Yield ``(stream_name, line)`` pairs as the process produces them.
-
-        Unlike :meth:`communicate`, this returns data live, a line is
-        yielded as soon as a newline is observed, not after the process
-        exits. Don't call both on the same process: ``stream`` drains
-        stdout/stderr as it goes, so a subsequent ``communicate`` would
-        hang waiting on streams that are already empty.
-
-        Exhausting the iterator means stdout/stderr have hit EOF; the
-        process may not be *reaped* yet, so call :meth:`wait` afterward
-        to get a reliable :attr:`returncode`.
         """
 
 
@@ -179,12 +169,6 @@ async def merge_line_streams(
 class JobHandle:
     """
     Opaque reference to a detached job launched by a target.
-
-    ``pid``/``job_dir`` cover PID-based targets (``LocalTarget``,
-    ``SSHTarget``). Targets with a different process model (e.g. a future
-    docker container-id handle) can carry it in :attr:`extra` without changing
-    the callers, which only pass the handle back to the same target's
-    primitives.
     """
 
     pid: int
@@ -203,27 +187,6 @@ def build_detach_command(
     """
     Wrap *inner* (a shell command string, with ``cd``/``export`` already
     inlined by the caller) so it runs detached from the launching channel.
-
-    The wrapper:
-
-    - ``mkdir -p`` the marker dir,
-    - launches the command with stdin closed and stdout/stderr redirected to
-      log files so it survives the channel/session closing,
-    - records the job PID to ``pid``,
-    - records the exit status to ``exit_code`` once the command finishes
-      (the authoritative "done" signal, observable after the channel is gone).
-
-    Args:
-        inner: The command to run (self-contained shell string).
-        job_dir: Marker directory for pid / exit_code / log files.
-        session_leader: When ``True``, launch under ``setsid`` so the job leads
-            its own session and process group, and its PID equals its PGID.
-            A signal can then reach the **whole process tree** via
-            ``kill -- -<pid>`` (so cancelling a job also stops the children it
-            spawned). ``setsid`` also drops the controlling tty, so ``SIGHUP``
-            on channel close is a non-issue. When ``False`` (e.g. macOS, which
-            has no ``setsid`` binary) the portable ``nohup`` is used instead
-            and callers must signal the group via ``os.getpgid`` at kill time.
 
     The launching shell returns immediately after backgrounding the job.
     Works in POSIX ``sh`` (no ``disown`` needed), so it is identical for local
@@ -245,21 +208,16 @@ def build_detach_command(
     )
 
 
-class _PollingChannelProcess(ChannelProcess):
+@dataclass
+class PollingChannelProcess(ChannelProcess):
     """
     :class:`ChannelProcess` for a detached job, driven by the launching
-    target's primitives (:meth:`BaseTarget._poll` /
-    :meth:`~BaseTarget._read_output` / :meth:`~BaseTarget._send_signal`)
-    instead of a held-open channel.
-
-    Because every method re-probes the target on demand, the underlying job
-    survives a dropped connection: a transient reconnect just resumes polling.
+    target's primitives.
     """
 
-    def __init__(self, target: "BaseTarget", handle: JobHandle) -> None:
-        self._target = target
-        self._handle = handle
-        self._returncode: int | None = None
+    _target: "BaseTarget"
+    _handle: JobHandle
+    _returncode: int | None = None
 
     @property
     def returncode(self) -> int | None:
@@ -269,7 +227,7 @@ class _PollingChannelProcess(ChannelProcess):
     async def wait(self) -> int:
         """Poll until the job finishes; return its exit code."""
         while self._returncode is None:
-            rc = await self._target._poll(self._handle)  # noqa: SLF001
+            rc = await self._target.poll(self._handle)
             if rc is not None:
                 self._returncode = rc
                 break
@@ -279,7 +237,7 @@ class _PollingChannelProcess(ChannelProcess):
     async def communicate(self) -> tuple[bytes, bytes]:
         """Wait for completion, then read back captured stdout/stderr."""
         await self.wait()
-        return await self._target._read_output(self._handle)  # noqa: SLF001
+        return await self._target.read_output(self._handle)
 
     def kill(self) -> None:
         """Best-effort SIGKILL to the detached job (fire-and-forget)."""
@@ -294,15 +252,12 @@ class _PollingChannelProcess(ChannelProcess):
         :meth:`wait` (which polls until ``exit_code`` appears).
         """
         asyncio.get_running_loop().create_task(
-            self._target._send_signal(self._handle, sig)  # noqa: SLF001
+            self._target.send_signal(self._handle, sig)
         )
 
     async def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
         """
         Yield ``(stream_name, line)`` pairs by polling the captured log files.
-
-        Lines appear with up to ``poll_interval`` latency rather than truly
-        live, which is the price of channel independence.
         """
         offsets = {"stdout": 0, "stderr": 0}
 
@@ -323,13 +278,11 @@ class _PollingChannelProcess(ChannelProcess):
         while True:
             done = self._returncode is not None
             if not done:
-                rc = await self._target._poll(self._handle)  # noqa: SLF001
+                rc = await self._target.poll(self._handle)
                 if rc is not None:
                     self._returncode = rc
                     done = True
-            out, err = await self._target._read_output(  # noqa: SLF001
-                self._handle
-            )
+            out, err = await self._target.read_output(self._handle)
             # Read the log files in chunks, yielding lines as they appear.
             # If the job is done, yield any remaining partial lines too.
             stdout_items = emit("stdout", out, final=done)
