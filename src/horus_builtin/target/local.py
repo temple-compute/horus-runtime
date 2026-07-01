@@ -22,6 +22,7 @@ Local target: executes tasks in the current process, running commands via
 
 import asyncio
 import os
+import shlex
 import signal
 import socket
 from collections.abc import AsyncGenerator
@@ -32,8 +33,10 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import (
     ChannelProcess,
+    JobHandle,
     RemoteDirEntry,
     StreamName,
+    build_detach_command,
     merge_line_streams,
 )
 
@@ -121,7 +124,16 @@ class LocalTarget(BaseTarget):
         """
         return 0.0 if artifact.path.exists() else None
 
-    async def run_command(
+    # No droppable channel locally, so keep the live-streaming path as the
+    # default; detachment is still available (e.g. for recovery) via the
+    # primitives below.
+    detach_by_default: ClassVar[bool] = False
+
+    # Local jobs live on the same filesystem, so polling is cheap; keep it
+    # snappy for near-live streaming when detachment is requested.
+    poll_interval: ClassVar[float] = 0.25
+
+    async def run_command_sync(
         self,
         cmd: str,
         *,
@@ -157,6 +169,77 @@ class LocalTarget(BaseTarget):
             start_new_session=start_new_session,
         )
         return LocalChannelProcess(proc)
+
+    async def launch(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        job_dir: str,
+    ) -> JobHandle:
+        """
+        Launch *cmd* detached: nohup'd, redirected to log files under
+        *job_dir*, surviving the orchestrator process.
+        """
+        exports = "".join(
+            f"export {k}={shlex.quote(v)}; " for k, v in (env or {}).items()
+        )
+        inner = f"{exports}{cmd}"
+        if cwd is not None:
+            inner = f"cd {shlex.quote(cwd)} && {inner}"
+        wrapper = build_detach_command(inner, job_dir)
+
+        # The launcher shell backgrounds the job and returns immediately; the
+        # nohup'd job reparents and keeps running independent of this process.
+        launcher = await asyncio.create_subprocess_shell(
+            wrapper,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=(os.name == "posix"),
+        )
+        await launcher.wait()
+        pid = int((Path(job_dir) / "pid").read_text().strip())
+        return JobHandle(pid=pid, job_dir=job_dir)
+
+    async def poll(self, handle: JobHandle) -> int | None:
+        """``None`` while running; the recorded exit code once finished."""
+        ec = Path(handle.job_dir) / "exit_code"
+        if ec.exists():
+            txt = ec.read_text().strip()
+            if txt:
+                return int(txt)
+        try:
+            os.kill(handle.pid, 0)
+        except ProcessLookupError:
+            # Gone without an exit_code: killed or lost.
+            return -1
+        except PermissionError:
+            pass
+        return None
+
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+        """Read the captured stdout/stderr log files."""
+
+        def _read(name: str) -> bytes:
+            p = Path(handle.job_dir) / name
+            return p.read_bytes() if p.exists() else b""
+
+        return _read("stdout.log"), _read("stderr.log")
+
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
+        """
+        Signal the detached job's whole process group, so children it spawned
+        die with it (the launcher used ``start_new_session``, so the job's
+        PGID is queryable via ``os.getpgid``).
+        """
+        try:
+            if os.name == "posix":
+                os.killpg(os.getpgid(handle.pid), sig)
+            else:
+                os.kill(handle.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     async def put_file(
         self,

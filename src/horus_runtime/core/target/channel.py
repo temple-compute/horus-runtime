@@ -21,11 +21,19 @@ Channel primitives for agentless target communication.
 
 import asyncio
 import contextlib
+import shlex
+import signal
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
-from typing import Literal, NamedTuple, Protocol
+from dataclasses import dataclass
+from itertools import zip_longest
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
 
 from horus_runtime.settings import runtime_settings
+
+if TYPE_CHECKING:
+    from horus_runtime.core.target.base import BaseTarget
 
 
 class RemoteDirEntry(NamedTuple):
@@ -99,16 +107,6 @@ class ChannelProcess(ABC):
     def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
         """
         Yield ``(stream_name, line)`` pairs as the process produces them.
-
-        Unlike :meth:`communicate`, this returns data live, a line is
-        yielded as soon as a newline is observed, not after the process
-        exits. Don't call both on the same process: ``stream`` drains
-        stdout/stderr as it goes, so a subsequent ``communicate`` would
-        hang waiting on streams that are already empty.
-
-        Exhausting the iterator means stdout/stderr have hit EOF; the
-        process may not be *reaped* yet, so call :meth:`wait` afterward
-        to get a reliable :attr:`returncode`.
         """
 
 
@@ -165,3 +163,134 @@ async def merge_line_streams(
         pump_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await pump_task
+
+
+@dataclass(frozen=True)
+class JobHandle:
+    """
+    Opaque reference to a detached job launched by a target.
+    """
+
+    pid: int
+    job_dir: str
+    extra: dict[str, str] | None = None
+
+
+def new_job_dir(base: str) -> str:
+    """Return a unique per-launch marker directory under *base*."""
+    return f"{base.rstrip('/')}/.horus_job/{uuid.uuid4().hex[:8]}"
+
+
+def build_detach_command(
+    inner: str, job_dir: str, *, session_leader: bool = False
+) -> str:
+    """
+    Wrap *inner* (a shell command string, with ``cd``/``export`` already
+    inlined by the caller) so it runs detached from the launching channel.
+
+    The launching shell returns immediately after backgrounding the job.
+    Works in POSIX ``sh`` (no ``disown`` needed), so it is identical for local
+    and remote targets.
+    """
+    q = shlex.quote(job_dir)
+    # Run the command in a subshell so a top-level `exit` in it can't skip the
+    # exit-code write.
+    body = f"( {inner} ); echo $? > {q}/exit_code"
+    launcher = "setsid" if session_leader else "nohup"
+    # mkdir runs in the foreground (`;`) so the marker dir exists before the
+    # pid write; only the job is backgrounded (`&`), and `echo $!` captures
+    # *its* pid (which is also its PGID under `setsid`).
+    return (
+        f"mkdir -p {q} || exit 1; "
+        f"{launcher} sh -c {shlex.quote(body)} "
+        f"> {q}/stdout.log 2> {q}/stderr.log < /dev/null & "
+        f"echo $! > {q}/pid"
+    )
+
+
+@dataclass
+class PollingChannelProcess(ChannelProcess):
+    """
+    :class:`ChannelProcess` for a detached job, driven by the launching
+    target's primitives.
+    """
+
+    _target: "BaseTarget"
+    _handle: JobHandle
+    _returncode: int | None = None
+
+    @property
+    def returncode(self) -> int | None:
+        """Cached exit code; set once :meth:`wait` sees completion."""
+        return self._returncode
+
+    async def wait(self) -> int:
+        """Poll until the job finishes; return its exit code."""
+        while self._returncode is None:
+            rc = await self._target.poll(self._handle)
+            if rc is not None:
+                self._returncode = rc
+                break
+            await asyncio.sleep(self._target.poll_interval)
+        return self._returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        """Wait for completion, then read back captured stdout/stderr."""
+        await self.wait()
+        return await self._target.read_output(self._handle)
+
+    def kill(self) -> None:
+        """Best-effort SIGKILL to the detached job (fire-and-forget)."""
+        self.signal(signal.SIGKILL)
+
+    def signal(self, sig: int) -> None:
+        """
+        Send *sig* to the detached job without a held-open channel.
+
+        Signal delivery may require a round trip (e.g. a short SSH exec), so it
+        is scheduled on the running loop; callers confirm the effect via
+        :meth:`wait` (which polls until ``exit_code`` appears).
+        """
+        asyncio.get_running_loop().create_task(
+            self._target.send_signal(self._handle, sig)
+        )
+
+    async def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
+        """
+        Yield ``(stream_name, line)`` pairs by polling the captured log files.
+        """
+        offsets = {"stdout": 0, "stderr": 0}
+
+        def emit(
+            name: StreamName, data: bytes, *, final: bool
+        ) -> list[tuple[StreamName, bytes]]:
+            out: list[tuple[StreamName, bytes]] = []
+            new = data[offsets[name] :]
+            *lines, rest = new.split(b"\n")
+            for line in lines:
+                out.append((name, line + b"\n"))
+            offsets[name] += len(new) - len(rest)
+            if final and rest:
+                out.append((name, rest))
+                offsets[name] += len(rest)
+            return out
+
+        while True:
+            done = self._returncode is not None
+            if not done:
+                rc = await self._target.poll(self._handle)
+                if rc is not None:
+                    self._returncode = rc
+                    done = True
+            out, err = await self._target.read_output(self._handle)
+            # Read the log files in chunks, yielding lines as they appear.
+            # If the job is done, yield any remaining partial lines too.
+            stdout_items = emit("stdout", out, final=done)
+            stderr_items = emit("stderr", err, final=done)
+            for pair in zip_longest(stdout_items, stderr_items):
+                for item in pair:
+                    if item is not None:
+                        yield item
+            if done:
+                return
+            await asyncio.sleep(self._target.poll_interval)

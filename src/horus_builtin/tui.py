@@ -15,3 +15,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+"""
+Re-export of the `render_workflow` function from the
+`horus_builtin.event.tui_subscriber` module for convenience.
+"""
+
+from horus_builtin.event.tui_subscriber import render_workflow
+
+__all__ = ["render_workflow"]
