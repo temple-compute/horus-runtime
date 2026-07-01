@@ -24,6 +24,7 @@ These exercise the real detach path (nohup'd subprocess + marker files) since
 """
 
 import asyncio
+import os
 import signal
 from contextlib import aclosing
 from pathlib import Path
@@ -127,6 +128,38 @@ class TestLocalDetachedExecution:
         rc = await asyncio.wait_for(proc.wait(), timeout=5)
         assert rc != 0
 
+    async def test_signal_kills_child_processes(self, tmp_path: Path) -> None:
+        """
+        signal() targets the whole process group, so a child the command
+        spawned is stopped too (not left orphaned).
+        """
+        marker = tmp_path / "child.pid"
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        # Spawn a background grandchild that records its pid, then both sleep.
+        proc = await target.run_command(
+            f"sleep 30 & echo $! > {marker.as_posix()}; wait",
+            detach=True,
+        )
+
+        for _ in range(50):  # wait for the child to record its pid
+            if marker.exists() and marker.read_text().strip():
+                break
+            await asyncio.sleep(0.1)
+        child_pid = int(marker.read_text().strip())
+        assert os.getpgid(child_pid)  # child is alive
+
+        proc.signal(signal.SIGKILL)
+        await asyncio.wait_for(proc.wait(), timeout=5)
+
+        for _ in range(50):  # child should die with the group
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            await asyncio.sleep(0.1)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+
 
 @pytest.mark.unit
 class TestDetachHelpers:
@@ -140,9 +173,15 @@ class TestDetachHelpers:
         assert a.startswith("/tmp/x/.horus_job/")
 
     def test_wrapper_records_pid_and_exit_code(self) -> None:
-        """The wrapper nohups the job and records pid/exit_code/logs."""
+        """The wrapper backgrounds the job and records pid/exit_code/logs."""
         wrapper = build_detach_command("mycmd", "/jobs/1")
         assert "nohup" in wrapper
         assert "/jobs/1/pid" in wrapper
         assert "/jobs/1/exit_code" in wrapper
         assert "/jobs/1/stdout.log" in wrapper
+
+    def test_wrapper_session_leader_uses_setsid(self) -> None:
+        """session_leader launches under setsid for group signalling."""
+        wrapper = build_detach_command("mycmd", "/jobs/1", session_leader=True)
+        assert "setsid" in wrapper
+        assert "nohup" not in wrapper

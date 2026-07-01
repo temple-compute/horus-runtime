@@ -201,7 +201,9 @@ def new_job_dir(base: str) -> str:
     return f"{base.rstrip('/')}/.horus_job/{uuid.uuid4().hex[:8]}"
 
 
-def build_detach_command(inner: str, job_dir: str) -> str:
+def build_detach_command(
+    inner: str, job_dir: str, *, session_leader: bool = False
+) -> str:
     """
     Wrap *inner* (a shell command string, with ``cd``/``export`` already
     inlined by the caller) so it runs detached from the launching channel.
@@ -209,29 +211,39 @@ def build_detach_command(inner: str, job_dir: str) -> str:
     The wrapper:
 
     - ``mkdir -p`` the marker dir,
-    - ``nohup`` the command with stdin closed and stdout/stderr redirected to
-      log files so it ignores ``SIGHUP`` when the channel/session closes,
+    - launches the command with stdin closed and stdout/stderr redirected to
+      log files so it survives the channel/session closing,
     - records the job PID to ``pid``,
     - records the exit status to ``exit_code`` once the command finishes
       (the authoritative "done" signal, observable after the channel is gone).
 
+    Args:
+        inner: The command to run (self-contained shell string).
+        job_dir: Marker directory for pid / exit_code / log files.
+        session_leader: When ``True``, launch under ``setsid`` so the job leads
+            its own session and process group, and its PID equals its PGID.
+            A signal can then reach the **whole process tree** via
+            ``kill -- -<pid>`` (so cancelling a job also stops the children it
+            spawned). ``setsid`` also drops the controlling tty, so ``SIGHUP``
+            on channel close is a non-issue. When ``False`` (e.g. macOS, which
+            has no ``setsid`` binary) the portable ``nohup`` is used instead
+            and callers must signal the group via ``os.getpgid`` at kill time.
+
     The launching shell returns immediately after backgrounding the job.
-    Works in POSIX ``sh`` (no ``disown``/``setsid`` needed), so it is
-    identical for local and remote targets.
+    Works in POSIX ``sh`` (no ``disown`` needed), so it is identical for local
+    and remote targets.
     """
     q = shlex.quote(job_dir)
-    # ponytail: best-effort kill targets the recorded pid; a command that
-    # forks its own tree may leave children. Add a process-group kill
-    # (setsid + `kill -- -pgid`) only if that actually bites.
     # Run the command in a subshell so a top-level `exit` in it can't skip the
     # exit-code write.
     body = f"( {inner} ); echo $? > {q}/exit_code"
+    launcher = "setsid" if session_leader else "nohup"
     # mkdir runs in the foreground (`;`) so the marker dir exists before the
-    # pid write; only the nohup'd job is backgrounded (`&`), and `echo $!`
-    # captures *its* pid.
+    # pid write; only the job is backgrounded (`&`), and `echo $!` captures
+    # *its* pid (which is also its PGID under `setsid`).
     return (
         f"mkdir -p {q} || exit 1; "
-        f"nohup sh -c {shlex.quote(body)} "
+        f"{launcher} sh -c {shlex.quote(body)} "
         f"> {q}/stdout.log 2> {q}/stderr.log < /dev/null & "
         f"echo $! > {q}/pid"
     )

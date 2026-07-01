@@ -228,10 +228,16 @@ class LocalTarget(BaseTarget):
         return _read("stdout.log"), _read("stderr.log")
 
     async def _send_signal(self, handle: JobHandle, sig: int) -> None:
-        """Best-effort signal to the detached job."""
-        # ponytail: signals the recorded pid only; a forked tree may survive.
+        """
+        Signal the detached job's whole process group, so children it spawned
+        die with it (the launcher used ``start_new_session``, so the job's
+        PGID is queryable via ``os.getpgid``).
+        """
         try:
-            os.kill(handle.pid, sig)
+            if os.name == "posix":
+                os.killpg(os.getpgid(handle.pid), sig)
+            else:
+                os.kill(handle.pid, sig)
         except (ProcessLookupError, PermissionError):
             pass
 
