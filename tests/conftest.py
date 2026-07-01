@@ -23,6 +23,7 @@ Test configuration for pytest.
 from collections.abc import Generator
 from pathlib import Path
 from typing import Protocol
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -136,3 +137,57 @@ def horus_context() -> Generator[HorusContext]:
     finally:
         ctx.shutdown()
         _runtime_ctx.reset(token)
+
+
+class MakeMockSubprocessType(Protocol):
+    """
+    Protocol for a factory function that creates mock subprocesses for testing.
+    """
+
+    def __call__(
+        self,
+        *,
+        returncode: int = ...,
+        stdout: bytes = ...,
+        stderr: bytes = ...,
+        stdout_lines: list[bytes] | None = ...,
+        stderr_lines: list[bytes] | None = ...,
+    ) -> AsyncMock:
+        """
+        Create an AsyncMock.
+        """
+
+
+@pytest.fixture
+def make_mock_subprocess() -> MakeMockSubprocessType:
+    """
+    Build an AsyncMock standing in for asyncio.subprocess.Process, with
+    stdout/stderr wired to behave like real StreamReaders (readline()
+    returning b"" at EOF) so LocalChannelProcess.stream() doesn't hang or
+    raise when it consumes them.
+    """
+
+    def _make(
+        *,
+        returncode: int = 0,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        stdout_lines: list[bytes] | None = None,
+        stderr_lines: list[bytes] | None = None,
+    ) -> AsyncMock:
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(stdout, stderr))
+        proc.wait = AsyncMock(return_value=returncode)
+
+        out_lines = [*(stdout_lines or []), b""]
+        err_lines = [*(stderr_lines or []), b""]
+
+        proc.stdout = AsyncMock()
+        proc.stdout.readline = AsyncMock(side_effect=out_lines)
+        proc.stderr = AsyncMock()
+        proc.stderr.readline = AsyncMock(side_effect=err_lines)
+
+        return proc
+
+    return _make

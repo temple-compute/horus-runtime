@@ -20,16 +20,23 @@ Unit tests for channel primitives: ChannelProcess ABC, and LocalTarget channel
 implementation.
 """
 
+import asyncio
 import os
 import signal
 import sys
 import time
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from pathlib import Path
 
 import pytest
 
 from horus_builtin.target.local import LocalChannelProcess, LocalTarget
-from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.channel import (
+    ChannelProcess,
+    StreamName,
+    merge_line_streams,
+)
 
 
 @pytest.mark.unit
@@ -67,8 +74,68 @@ class TestChannelProcessABC:
             def signal(self, sig: int) -> None:
                 pass
 
+            async def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
+                return
+                yield
+
         proc = _Concrete()
         assert proc.returncode == 0
+
+    def test_concrete_implementation_missing_stream_raises(self) -> None:
+        """
+        A subclass implementing every primitive except stream() is still
+        abstract and cannot be instantiated.
+        """
+
+        class _MissingStream(ChannelProcess):
+            @property
+            def returncode(self) -> int | None:
+                return 0
+
+            async def wait(self) -> int:
+                return 0
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return b"", b""
+
+            def kill(self) -> None:
+                pass
+
+            def signal(self, sig: int) -> None:
+                pass
+
+        with pytest.raises(TypeError):
+            _MissingStream()  # type: ignore[abstract]
+
+    async def test_concrete_stream_is_async_iterable(self) -> None:
+        """
+        stream() on a concrete implementation can be consumed via
+        ``async for``.
+        """
+
+        class _Concrete(ChannelProcess):
+            @property
+            def returncode(self) -> int | None:
+                return 0
+
+            async def wait(self) -> int:
+                return 0
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return b"", b""
+
+            def kill(self) -> None:
+                pass
+
+            def signal(self, sig: int) -> None:
+                pass
+
+            async def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
+                yield ("stdout", b"hello\n")
+
+        proc = _Concrete()
+        items = [item async for item in proc.stream()]
+        assert items == [("stdout", b"hello\n")]
 
 
 @pytest.mark.unit
@@ -327,3 +394,132 @@ class TestLocalTargetFileOps:
         await target.mkdir(deep)
 
         assert Path(deep).is_dir()
+
+
+@pytest.mark.unit
+class TestMergeLineStreams:
+    """
+    Tests for channel.merge_line_streams — the stdout/stderr interleaving
+    helper shared by every ChannelProcess.stream() implementation.
+    """
+
+    class _FakeReader:
+        """A minimal stand-in for anything with an async readline()."""
+
+        def __init__(self, lines: list[bytes], delay: float = 0.0) -> None:
+            self._lines = list(lines)
+            self._delay = delay
+
+        async def readline(self) -> bytes:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            if not self._lines:
+                return b""
+            return self._lines.pop(0)
+
+    async def test_yields_all_lines_from_both_streams(self) -> None:
+        """Lines from both stdout and stderr must be yielded."""
+        stdout = self._FakeReader([b"out1\n", b"out2\n"])
+        stderr = self._FakeReader([b"err1\n"])
+
+        results = [item async for item in merge_line_streams(stdout, stderr)]
+
+        assert ("stdout", b"out1\n") in results
+        assert ("stdout", b"out2\n") in results
+        assert ("stderr", b"err1\n") in results
+        assert len(results) == 3
+
+    async def test_ends_when_both_readers_hit_eof(self) -> None:
+        """
+        The generator must terminate when both readers return EOF.
+        """
+        stdout = self._FakeReader([])
+        stderr = self._FakeReader([])
+
+        results = [item async for item in merge_line_streams(stdout, stderr)]
+
+        assert results == []
+
+    async def test_preserves_within_stream_order(self) -> None:
+        """
+        Lines from the *same* stream must come out in the order produced,
+        even though stdout/stderr interleave with each other.
+        """
+        stdout = self._FakeReader([b"1\n", b"2\n", b"3\n"])
+        stderr = self._FakeReader([])
+
+        results = [
+            line async for _stream, line in merge_line_streams(stdout, stderr)
+        ]
+
+        assert results == [b"1\n", b"2\n", b"3\n"]
+
+    async def test_early_break_does_not_raise_on_cleanup(self) -> None:
+        """
+        Breaking out of consumption mid-stream must not leave the pump
+        tasks dangling or raise when the generator is closed.
+        """
+        stdout = self._FakeReader([b"a\n"], delay=0.01)
+        stderr = self._FakeReader([b"b\n", b"c\n", b"d\n"], delay=0.01)
+
+        gen = merge_line_streams(stdout, stderr)
+        async for _stream, _line in gen:
+            break
+
+        await gen.aclose()  # must not raise
+
+    async def test_aclosing_stops_iteration_cleanly(self) -> None:
+        """Using contextlib.aclosing() must stop iteration cleanly."""
+        stdout = self._FakeReader([b"a\n", b"b\n", b"c\n"], delay=0.01)
+        stderr = self._FakeReader([])
+
+        seen = []
+        async with aclosing(merge_line_streams(stdout, stderr)) as gen:
+            async for _stream, line in gen:
+                seen.append(line)
+                if len(seen) == 1:
+                    break
+
+        assert seen == [b"a\n"]
+
+    async def test_pump_exception_propagates_not_hangs(self) -> None:
+        """
+        If a reader's readline() raises, the consumer must see that
+        exception (eventually) rather than hang on queue.get() forever.
+        """
+
+        class _FailingReader:
+            async def readline(self) -> bytes:
+                raise ConnectionResetError("boom")
+
+        stdout = self._FakeReader([])
+        stderr = _FailingReader()
+
+        with pytest.raises(ConnectionResetError):
+            async for _ in merge_line_streams(stdout, stderr):
+                pass
+
+    async def test_pump_stop_async_iteration_gets_wrapped_by_pep479(
+        self,
+    ) -> None:
+        """
+        A reader that raises StopAsyncIteration is an edge case: Python's
+        generator protocol (PEP 479) forbids a bare StopAsyncIteration from
+        escaping merge_line_streams' frame, so it surfaces as RuntimeError
+        with the original exception chained as __cause__. This documents
+        that behavior rather than treating it as a bug — no real reader
+        should ever raise StopAsyncIteration from readline() in practice.
+        """
+
+        class _FailingReader:
+            async def readline(self) -> bytes:
+                raise StopAsyncIteration("boom")
+
+        stdout = self._FakeReader([])
+        stderr = _FailingReader()
+
+        with pytest.raises(RuntimeError) as exc_info:
+            async for _ in merge_line_streams(stdout, stderr):
+                pass
+
+        assert isinstance(exc_info.value.__cause__, StopAsyncIteration)

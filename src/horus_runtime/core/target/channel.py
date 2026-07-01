@@ -19,14 +19,18 @@
 Channel primitives for agentless target communication.
 """
 
+import asyncio
+import contextlib
 from abc import ABC, abstractmethod
-from typing import NamedTuple
+from collections.abc import AsyncGenerator
+from typing import Literal, NamedTuple, Protocol
+
+from horus_runtime.settings import runtime_settings
 
 
 class RemoteDirEntry(NamedTuple):
     """
-    One entry in a target directory listing, returned by
-    :meth:`~horus_runtime.core.target.base.BaseTarget.list_dir`.
+    One entry in a target directory listing.
     """
 
     name: str
@@ -42,12 +46,12 @@ class RemoteDirEntry(NamedTuple):
     """File size in bytes; ``0`` for directories."""
 
 
+StreamName = Literal["stdout", "stderr"]
+
+
 class ChannelProcess(ABC):
     """
     Abstract handle for a command running on a target channel.
-
-    Returned by :meth:`~horus_runtime.core.target.base.BaseTarget.run_command`.
-    All I/O is **bytes**; callers are responsible for decoding.
     """
 
     @property
@@ -90,3 +94,74 @@ class ChannelProcess(ABC):
         Args:
             sig: A signal number (e.g. ``signal.SIGTERM``).
         """
+
+    @abstractmethod
+    def stream(self) -> AsyncGenerator[tuple[StreamName, bytes]]:
+        """
+        Yield ``(stream_name, line)`` pairs as the process produces them.
+
+        Unlike :meth:`communicate`, this returns data live, a line is
+        yielded as soon as a newline is observed, not after the process
+        exits. Don't call both on the same process: ``stream`` drains
+        stdout/stderr as it goes, so a subsequent ``communicate`` would
+        hang waiting on streams that are already empty.
+
+        Exhausting the iterator means stdout/stderr have hit EOF; the
+        process may not be *reaped* yet, so call :meth:`wait` afterward
+        to get a reliable :attr:`returncode`.
+        """
+
+
+class _LineReader(Protocol):
+    async def readline(self) -> bytes: ...
+
+
+async def merge_line_streams(
+    stdout: _LineReader, stderr: _LineReader
+) -> AsyncGenerator[tuple[StreamName, bytes]]:
+    """
+    Merge two line-oriented streams into a single async generator.
+    """
+    queue: asyncio.Queue[tuple[StreamName, bytes] | None | Exception] = (
+        asyncio.Queue(maxsize=runtime_settings.STREAM_QUEUE_MAXSIZE)
+    )
+
+    # Pumping tasks read from the readers and put lines into the queue.  When
+    # both readers are exhausted, a sentinel value is put into the queue to
+    # signal the end of the stream.
+    async def _pump(name: StreamName, reader: _LineReader) -> None:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            await queue.put((name, line))
+
+    # Runner task waits for both pumps to finish and then puts a sentinel into
+    # the queue to signal the end of the stream.
+    async def _runner() -> None:
+        try:
+            await asyncio.gather(
+                _pump("stdout", stdout), _pump("stderr", stderr)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await queue.put(exc)
+            return
+        await queue.put(None)
+
+    # Start the runner task and yield lines from the queue until the
+    # sentinel is received.
+    pump_task = asyncio.create_task(_runner())
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
