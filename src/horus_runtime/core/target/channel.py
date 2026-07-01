@@ -27,6 +27,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from itertools import zip_longest
 from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
 
 from horus_runtime.settings import runtime_settings
@@ -172,11 +173,6 @@ async def merge_line_streams(
         pump_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await pump_task
-
-
-# ---------------------------------------------------------------------------
-# Detachable execution
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -334,10 +330,14 @@ class _PollingChannelProcess(ChannelProcess):
             out, err = await self._target._read_output(  # noqa: SLF001
                 self._handle
             )
-            for item in emit("stdout", out, final=done):
-                yield item
-            for item in emit("stderr", err, final=done):
-                yield item
+            # Read the log files in chunks, yielding lines as they appear.
+            # If the job is done, yield any remaining partial lines too.
+            stdout_items = emit("stdout", out, final=done)
+            stderr_items = emit("stderr", err, final=done)
+            for pair in zip_longest(stdout_items, stderr_items):
+                for item in pair:
+                    if item is not None:
+                        yield item
             if done:
                 return
             await asyncio.sleep(self._target.poll_interval)
