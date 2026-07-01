@@ -31,7 +31,11 @@ from horus_runtime.core.interaction.base import BaseInteraction
 from horus_runtime.core.interaction.renderer import BaseInteractionRenderer
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
+from horus_runtime.core.target.channel import (
+    ChannelProcess,
+    JobHandle,
+    RemoteDirEntry,
+)
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.middleware.auto_middleware import AutoMiddleware
@@ -134,14 +138,44 @@ class TrackingTarget(BaseTarget):
         """
         return 0.0
 
-    async def run_command(
+    async def run_command_sync(
         self,
         cmd: str,
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-        detach: bool | None = None,
     ) -> ChannelProcess:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        raise NotImplementedError
+
+    async def launch(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        job_dir: str,
+    ) -> JobHandle:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        raise NotImplementedError
+
+    async def poll(self, handle: JobHandle) -> int | None:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        raise NotImplementedError
+
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+        """
+        Stub channel method — not used in middleware tests.
+        """
+        raise NotImplementedError
+
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
         """
         Stub channel method — not used in middleware tests.
         """

@@ -33,7 +33,11 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
+from horus_runtime.core.target.channel import (
+    ChannelProcess,
+    JobHandle,
+    RemoteDirEntry,
+)
 from horus_runtime.settings import runtime_settings
 from tests.conftest import MakeTaskType
 
@@ -132,14 +136,32 @@ class _InMemoryRemoteTarget(BaseTarget):
     def access_cost(self, _: BaseArtifact) -> float | None:
         return None  # not accessible on the orchestrator fs
 
-    async def run_command(
+    async def run_command_sync(
         self,
         cmd: str,
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-        detach: bool | None = None,
     ) -> ChannelProcess:
+        raise NotImplementedError
+
+    async def launch(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        job_dir: str,
+    ) -> JobHandle:
+        raise NotImplementedError
+
+    async def poll(self, handle: JobHandle) -> int | None:
+        raise NotImplementedError
+
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+        raise NotImplementedError
+
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
         raise NotImplementedError
 
     async def put_file(
@@ -231,14 +253,32 @@ class _MaliciousRemoteTarget(BaseTarget):
     def access_cost(self, _: BaseArtifact) -> float | None:
         return None
 
-    async def run_command(
+    async def run_command_sync(
         self,
         cmd: str,
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-        detach: bool | None = None,
     ) -> ChannelProcess:
+        raise NotImplementedError
+
+    async def launch(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        job_dir: str,
+    ) -> JobHandle:
+        raise NotImplementedError
+
+    async def poll(self, handle: JobHandle) -> int | None:
+        raise NotImplementedError
+
+    async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
+        raise NotImplementedError
+
+    async def send_signal(self, handle: JobHandle, sig: int) -> None:
         raise NotImplementedError
 
     async def put_file(
