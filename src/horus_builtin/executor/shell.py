@@ -91,9 +91,13 @@ class ShellExecutor(BaseExecutor):
             async with aclosing(proc.stream()) as stream:
                 async for stream_name, line in stream:
                     if stream_name == "stdout":
-                        horus_logger.log.info(line.decode("utf-8").rstrip())
+                        horus_logger.log.info(
+                            line.decode("utf-8", errors="replace").rstrip()
+                        )
                     elif stream_name == "stderr":
-                        horus_logger.log.warning(line.decode("utf-8").rstrip())
+                        horus_logger.log.warning(
+                            line.decode("utf-8", errors="replace").rstrip()
+                        )
         except asyncio.CancelledError:
             proc.kill()
             await proc.wait()

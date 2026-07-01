@@ -299,7 +299,7 @@ class TestLocalTargetStream:
         communicate().
         """
         target = LocalTarget(working_directory=tmp_path.as_posix())
-        proc = await target.run_command("echo first; sleep 5; echo second")
+        proc = await target.run_command("echo first; sleep 0.2; echo second")
 
         gen = proc.stream()
         stream_name, line = await asyncio.wait_for(gen.__anext__(), timeout=2)
@@ -342,7 +342,7 @@ class TestLocalTargetStream:
         detecting a fatal stderr line — and the iterator ends cleanly.
         """
         target = LocalTarget(working_directory=tmp_path.as_posix())
-        proc = await target.run_command("echo bad >&2; sleep 30")
+        proc = await target.run_command("echo bad >&2; sleep 1")
 
         async with aclosing(proc.stream()) as lines:
             async for stream_name, line in lines:

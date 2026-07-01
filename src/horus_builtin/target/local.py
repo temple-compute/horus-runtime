@@ -92,8 +92,8 @@ class LocalChannelProcess(ChannelProcess):
         """
         Yield ``(stream_name, line)`` pairs as the process produces them.
         """
-        assert self._proc.stdout is not None
-        assert self._proc.stderr is not None
+        if self._proc.stdout is None or self._proc.stderr is None:
+            raise RuntimeError("stdout and stderr must be piped (use PIPE)")
         return merge_line_streams(self._proc.stdout, self._proc.stderr)
 
 

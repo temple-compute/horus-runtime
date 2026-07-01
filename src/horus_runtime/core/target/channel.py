@@ -143,6 +143,8 @@ async def merge_line_streams(
             await asyncio.gather(
                 _pump("stdout", stdout), _pump("stderr", stderr)
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             await queue.put(exc)
             return

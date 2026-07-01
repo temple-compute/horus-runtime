@@ -227,7 +227,6 @@ class TestWorkflowRun:
             make_mock_subprocess(returncode=0),
             make_mock_subprocess(returncode=0),
         ]
-        # mock_run.return_value = make_mock_subprocess(returncode=0)
 
         shared_path = tmp_path / "shared.txt"
 
