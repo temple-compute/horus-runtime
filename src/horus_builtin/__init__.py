@@ -16,6 +16,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-from horus_builtin.event.tui_subscriber import (
-    render_workflow as render_workflow,
-)
+
+# Prevent circular import issues by lazily importing render_workflow
+def __getattr__(name: str) -> object:
+    if name == "render_workflow":
+        from horus_builtin.event.tui_subscriber import (  # noqa: PLC0415
+            render_workflow,
+        )
+
+        return render_workflow
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
