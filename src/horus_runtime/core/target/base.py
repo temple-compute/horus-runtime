@@ -82,9 +82,18 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     @abstractmethod
     def location_id(self) -> str:
         """
-        Stable, URI-like identifier for the physical location this target runs
-        on (e.g. ``local://hostname``). Targets sharing a ``location_id`` share
-        a filesystem, so no artifact transfer is needed between them.
+        Stable identifier for the physical location this target runs on.
+        Two targets with the same ``location_id`` share a filesystem, so no
+        artifact transfer is needed between them.
+
+        Implementations should return a URI-like string that is:
+        - deterministic across process restarts on the same host/node
+        - unique across distinct machines or agent instances
+
+        Examples:
+            ``local://hostname``
+            ``ssh://user@gpu-box``
+            ``horus-agent://agent-42``
         """
 
     @property
