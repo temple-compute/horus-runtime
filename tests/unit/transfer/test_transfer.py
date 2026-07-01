@@ -69,6 +69,7 @@ class _UnregisteredTarget(BaseTarget):
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
+        detach: bool | None = None,
     ) -> ChannelProcess:
         """
         Not used in transfer tests.

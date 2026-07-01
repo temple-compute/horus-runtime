@@ -140,6 +140,7 @@ class TrackingTarget(BaseTarget):
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
+        detach: bool | None = None,
     ) -> ChannelProcess:
         """
         Stub channel method — not used in middleware tests.
