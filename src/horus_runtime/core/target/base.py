@@ -82,18 +82,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     @abstractmethod
     def location_id(self) -> str:
         """
-        Stable identifier for the physical location this target runs on.
-        Two targets with the same ``location_id`` share a filesystem, so no
-        artifact transfer is needed between them.
-
-        Implementations should return a URI-like string that is:
-        - deterministic across process restarts on the same host/node
-        - unique across distinct machines or agent instances
-
-        Examples:
-            ``local://hostname``
-            ``ssh://user@gpu-box``
-            ``horus-agent://agent-42``
+        Stable, URI-like identifier for the physical location this target runs
+        on (e.g. ``local://hostname``). Targets sharing a ``location_id`` share
+        a filesystem, so no artifact transfer is needed between them.
         """
 
     @property
@@ -109,17 +100,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         return self._task
 
     def bind(self, task: "BaseTask") -> None:
-        """Associate *task* with this target ahead of dispatch.
-
-        Resource-aware targets can then read ``task.resources`` during
-        (possibly lazy) provisioning. Provisioning targets (e.g. Terraform)
-        provision at transfer time, which happens before :meth:`dispatch` sets
-        the task reference, so binding first gives them access to the task's
-        declared resources in time.
-
-        Args:
-            task: The task about to be transferred to and dispatched on this
-                target.
+        """Associate *task* with this target ahead of dispatch, so resource-
+        aware targets can read ``task.resources`` while provisioning.
 
         Raises:
             TaskExecutionError: If a task is already running on this target.
@@ -225,16 +207,13 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         Return the estimated cost of reading ``artifact`` from this target,
         or ``None`` if this target cannot access it at all.
 
-        The value is dimensionless and relative, callers use it to compare
-        sources and decide whether a transfer is preferable:
+        A relative, dimensionless value used to compare sources:
 
         - ``0.0``   — zero-cost local read (same filesystem, in-memory, …)
         - ``> 0.0`` — accessible but non-free (network, agent API, …)
         - ``None``  — not accessible; transfer required before dispatch
 
-        Implementations must be synchronous and cheap (no I/O). Use
-        the artifact metadata such as ``artifact.path`` and ``artifact.kind``
-        (or the concrete artifact type) for kind-specific cost adjustments.
+        Must be synchronous and cheap (no I/O).
         """
 
     async def recover(self) -> bool:
@@ -249,12 +228,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         Absolute path where *artifact* lives on **this target's** filesystem.
 
-        Lets runtimes reference artifacts without the caller hand-building
-        remote paths: a command like ``python {script}`` resolves to the right
-        location on whichever target the task runs on. The default assumes the
-        artifact is reachable at its own path (same filesystem as the
-        orchestrator); targets that copy artifacts elsewhere (e.g. SSH)
-        override this to point at the on-host copy.
+        The default assumes the artifact is reachable at its own path (same
+        filesystem as the orchestrator); targets that copy artifacts elsewhere
+        (e.g. SSH) override this to point at the on-host copy.
         """
         return str(artifact.path)
 
@@ -287,6 +263,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         handle = await self.launch(cmd, cwd=cwd, env=env, job_dir=job_dir)
         return PollingChannelProcess(self, handle)
 
+    @abstractmethod
     async def run_command_sync(
         self,
         cmd: str,
@@ -294,14 +271,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> ChannelProcess:
-        """
-        Run *cmd* synchronously over a live channel (the pre-detach behavior).
+        """Run *cmd* synchronously over a live channel (``detach=False``)."""
 
-        Concrete targets that support detachment implement this for the
-        ``detach=False`` fast path.
-        """
-        raise NotImplementedError
-
+    @abstractmethod
     async def launch(
         self,
         cmd: str,
@@ -310,22 +282,19 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         env: dict[str, str] | None,
         job_dir: str,
     ) -> JobHandle:
-        """
-        Start *cmd* so it outlives the launching channel and return a handle.
-        """
-        raise NotImplementedError
+        """Start *cmd* detached from the launching channel; return a handle."""
 
+    @abstractmethod
     async def poll(self, handle: JobHandle) -> int | None:
         """Non-blocking status: ``None`` while running, exit code once done."""
-        raise NotImplementedError
 
+    @abstractmethod
     async def read_output(self, handle: JobHandle) -> tuple[bytes, bytes]:
         """Return the job's captured ``(stdout, stderr)`` so far."""
-        raise NotImplementedError
 
+    @abstractmethod
     async def send_signal(self, handle: JobHandle, sig: int) -> None:
         """Best-effort signal delivery to a detached job (no live channel)."""
-        raise NotImplementedError
 
     @abstractmethod
     async def put_file(
@@ -372,12 +341,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         List the immediate children of *path* on the target host
         (non-recursive).
 
-        Implementations must use a **native, non-shell** mechanism so this is
-        OS-agnostic (``pathlib`` locally, SFTP/agent API remotely) and must
-        **skip symlinks** (they cause cycles and are almost always noise in a
-        side-artifacts directory). Each :class:`.RemoteDirEntry` carries the
-        file ``size`` (``0`` for directories) so callers can enforce a size cap
-        before transferring.
+        Implementations must use a native, non-shell mechanism (``pathlib``
+        locally, SFTP/agent API remotely) and skip symlinks.
 
         Args:
             path: Directory path on the *target* host to list.

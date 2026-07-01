@@ -30,7 +30,11 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.target.channel import ChannelProcess, RemoteDirEntry
+from horus_runtime.core.target.channel import (
+    ChannelProcess,
+    JobHandle,
+    RemoteDirEntry,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -65,6 +69,39 @@ class ConcreteTestTarget(BaseTarget):
         """
         Stub channel method — not used in base-class tests.
         """
+        raise NotImplementedError
+
+    async def run_command_sync(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        """Stub channel method — not used in base-class tests."""
+        raise NotImplementedError
+
+    async def launch(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        job_dir: str,
+    ) -> JobHandle:
+        """Stub channel method — not used in base-class tests."""
+        raise NotImplementedError
+
+    async def poll(self, _handle: JobHandle) -> int | None:
+        """Stub channel method — not used in base-class tests."""
+        raise NotImplementedError
+
+    async def read_output(self, _handle: JobHandle) -> tuple[bytes, bytes]:
+        """Stub channel method — not used in base-class tests."""
+        raise NotImplementedError
+
+    async def send_signal(self, _handle: JobHandle, _sig: int) -> None:
+        """Stub channel method — not used in base-class tests."""
         raise NotImplementedError
 
     async def put_file(
