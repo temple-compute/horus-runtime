@@ -25,7 +25,7 @@ from pathlib import Path
 
 import click
 
-from horus_builtin.event.tui_subscriber import render_workflow
+from horus_builtin import render_workflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _

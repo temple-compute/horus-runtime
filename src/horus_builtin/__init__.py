@@ -15,3 +15,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+
+from horus_builtin.event.tui_subscriber import (
+    render_workflow as render_workflow,
+)
