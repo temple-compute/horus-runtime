@@ -573,6 +573,8 @@ def render_workflow(workflow: BaseWorkflow, trigger_id: str) -> None:
     YAML, e.g. ``FunctionTask`` interactions) with the TUI. The runtime must
     already be booted::
 
+        from horus_builtin import render_workflow
+
         ctx = HorusContext.boot()
         render_workflow(wf, trigger_id="first")
     """
