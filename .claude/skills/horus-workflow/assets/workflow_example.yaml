@@ -1,0 +1,59 @@
+# Example horus-runtime workflow: producer -> consumer.
+#
+# Run with:   horus run workflow_example.yaml --trigger producer
+#
+# The producer writes a file; the consumer reads it (routed via the edge) and
+# writes a summary. On a second run both tasks are skipped because their output
+# artifacts already exist (delete them or set skip_if_complete: false to re-run).
+
+name: example_pipeline
+kind: horus_workflow
+
+tasks:
+  - id: producer
+    name: Produce data
+    kind: horus_task
+    skip_if_complete: true
+    runtime:
+      kind: command
+      # $data renders to the on-target path of the "data" output artifact.
+      # Ensure the output directory exists before redirecting into it.
+      command: "mkdir -p /tmp/horus_example && echo 42 > $data"
+    executor:
+      kind: shell
+    target:
+      kind: local
+    outputs:
+      - id: data
+        kind: file
+        path: /tmp/horus_example/data.txt
+
+  - id: consumer
+    name: Summarize data
+    kind: horus_task
+    runtime:
+      kind: command
+      # ${data_in} is this task's input; $summary is its output.
+      command: "wc -l ${data_in} > $summary"
+    executor:
+      kind: shell
+    target:
+      kind: local
+    resources:            # advisory; ignored by the local target
+      cpus: 1
+    inputs:
+      - id: data_in
+        kind: file
+        path: /tmp/horus_example/data.txt
+    outputs:
+      - id: summary
+        kind: file
+        path: /tmp/horus_example/summary.txt
+
+# Edges are the DAG: producer.data feeds consumer.data_in, so producer runs first
+# and its output is transferred to the consumer's target before it runs.
+edges:
+  - source: producer
+    source_output: data
+    target: consumer
+    target_input: data_in
