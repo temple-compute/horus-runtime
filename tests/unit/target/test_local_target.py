@@ -77,6 +77,23 @@ class TestLocalTargetProperties:
         artifact = Mock(path=Path("/definitely/nonexistent/file.txt"))
         assert target.access_cost(artifact) is None
 
+    def test_resolved_working_directory_falls_back_to_cwd(self) -> None:
+        """
+        With no working_directory set, LocalTarget resolves to the process
+        CWD (the historical default) instead of raising.
+        """
+        target = LocalTarget()
+        assert target.working_directory is None
+        assert target.resolved_working_directory == Path.cwd().as_posix()
+
+    def test_resolved_working_directory_uses_explicit_value(self) -> None:
+        """
+        An explicit working_directory is returned as-is, not overridden by the
+        CWD fallback.
+        """
+        target = LocalTarget(working_directory="/explicit/dir")
+        assert target.resolved_working_directory == "/explicit/dir"
+
 
 @pytest.mark.unit
 class TestLocalTargetDispatch:

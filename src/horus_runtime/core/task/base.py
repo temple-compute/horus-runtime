@@ -169,7 +169,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
         working directory. Inputs are materialized here and outputs and
         side-products are written relative to it.
         """
-        return (Path(self.target.working_directory) / self.id).as_posix()
+        return (
+            Path(self.target.resolved_working_directory) / self.id
+        ).as_posix()
 
     @property
     def side_artifacts_dir(self) -> str:

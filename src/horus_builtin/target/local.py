@@ -117,6 +117,15 @@ class LocalTarget(BaseTarget):
         """
         return f"local://{socket.gethostname()}"
 
+    @property
+    def resolved_working_directory(self) -> str:
+        """
+        Fall back to the current working directory when none was set, so a
+        plain ``LocalTarget()`` runs tasks under the process CWD without
+        requiring an explicit path.
+        """
+        return self.working_directory or Path.cwd().as_posix()
+
     def access_cost(self, artifact: BaseArtifact) -> float | None:
         """
         Return ``0.0`` for artifacts that already exist on this machine and

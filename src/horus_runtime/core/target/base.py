@@ -24,7 +24,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
-from pydantic import Field, PrivateAttr
+from pydantic import PrivateAttr
 
 from horus_runtime.core.target.channel import (
     ChannelProcess,
@@ -33,6 +33,7 @@ from horus_runtime.core.target.channel import (
     RemoteDirEntry,
     new_job_dir,
 )
+from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
@@ -67,16 +68,36 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     Human-friendly description of this kind of target.
     """
 
-    working_directory: str = Field(
-        default_factory=lambda: Path.cwd().as_posix()
-    )
+    working_directory: str | None = None
     """
     Base directory on the target host where per-task working directories are
-    created.
+    created. Left ``None`` until resolved: the workflow fills it in for targets
+    co-located with the orchestrator (see
+    :meth:`BaseWorkflow._propagate_orchestrator_working_directory`); every
+    other target decides for itself what an unset value means via
+    :attr:`resolved_working_directory`.
     """
 
     _task: "BaseTask | None" = PrivateAttr(default=None)
     _task_future: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+
+    @property
+    def resolved_working_directory(self) -> str:
+        """
+        The base working directory as a concrete path, resolved at use time.
+
+        ``working_directory`` may be ``None``. The base contract requires it to
+        have been set (explicitly or by orchestrator propagation) and raises
+        otherwise; targets that can derive a sensible default when it is unset
+        (e.g. the local machine's current directory) override this property.
+
+        Raises:
+            WorkingDirectoryNotSetError: When ``working_directory`` is ``None``
+                and the target does not derive one.
+        """
+        if self.working_directory is None:
+            raise WorkingDirectoryNotSetError(self.kind)
+        return self.working_directory
 
     @property
     @abstractmethod
@@ -268,7 +289,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             detach = self.detach_by_default
         if not detach:
             return await self.run_command_sync(cmd, cwd=cwd, env=env)
-        job_dir = new_job_dir(cwd or self.working_directory)
+        job_dir = new_job_dir(cwd or self.resolved_working_directory)
         handle = await self.launch(cmd, cwd=cwd, env=env, job_dir=job_dir)
         return PollingChannelProcess(self, handle)
 

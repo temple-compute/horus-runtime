@@ -391,6 +391,31 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             artifact.path = transfer_art.path
 
     @final
+    def _propagate_orchestrator_working_directory(self) -> None:
+        """
+        Give every co-located task target the orchestrator target's working
+        directory as its base, so local tasks run inside the orchestrator's
+        folder (each still nested under its own ``working_dir / task.id``).
+
+        A target is co-located with the orchestrator when it shares its
+        ``location_id`` (same filesystem). A task target that already has a
+        ``working_directory`` set (not ``None``) is left untouched.
+        """
+        if self.orchestrator_target is None:
+            return
+
+        base = self.orchestrator_target.working_directory
+        if base is None:
+            return
+
+        orchestrator_loc = self.orchestrator_target.location_id
+        for task in self.tasks:
+            target = task.target
+            if target.working_directory is not None:
+                continue
+            if target.location_id == orchestrator_loc:
+                target.working_directory = base
+
     async def run(self, trigger_id: str) -> None:
         """
         Execute the workflow, managing status transitions automatically.
@@ -418,6 +443,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             _("Workflow %(workflow_name)s status → RUNNING")
             % {"workflow_name": self.name}
         )
+
+        # Co-located task targets inherit the orchestrator's working
+        # directory so all such tasks run under that common folder.
+        self._propagate_orchestrator_working_directory()
+
         try:
             # Wrap the function to pass the trigger.
             def call_run() -> Awaitable[None]:
