@@ -132,6 +132,90 @@ class TestWorkflowConstruction:
 
 
 @pytest.mark.unit
+class TestOrchestratorWorkingDirectoryPropagation:
+    """
+    Tests that local (co-located) task targets inherit the orchestrator
+    target's working directory.
+    """
+
+    def _make_task(self, task_id: str, target: LocalTarget) -> HorusTask:
+        return HorusTask(
+            id=task_id,
+            name=task_id,
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=target,
+        )
+
+    def test_local_task_inherits_orchestrator_working_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A task whose local target left ``working_directory`` at its default
+        runs under the orchestrator target's folder (nested by task id).
+        """
+        folder = tmp_path / "orchestrator_folder"
+        task = self._make_task("worker", LocalTarget())
+        wf = HorusWorkflow(
+            name="propagation",
+            tasks=[task],
+            orchestrator_target=LocalTarget(
+                working_directory=folder.as_posix()
+            ),
+        )
+
+        wf._propagate_orchestrator_working_directory()
+
+        assert task.target.working_directory == folder.as_posix()
+        assert task.working_dir == (folder / "worker").as_posix()
+
+    def test_explicit_task_working_directory_is_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A task target that set its own ``working_directory`` keeps it and is
+        not overridden by the orchestrator folder.
+        """
+        orchestrator_folder = tmp_path / "orchestrator_folder"
+        task_folder = tmp_path / "task_folder"
+        task = self._make_task(
+            "worker", LocalTarget(working_directory=task_folder.as_posix())
+        )
+        wf = HorusWorkflow(
+            name="propagation_override",
+            tasks=[task],
+            orchestrator_target=LocalTarget(
+                working_directory=orchestrator_folder.as_posix()
+            ),
+        )
+
+        wf._propagate_orchestrator_working_directory()
+
+        assert task.target.working_directory == task_folder.as_posix()
+        assert task.working_dir == (task_folder / "worker").as_posix()
+
+    def test_unset_orchestrator_folder_leaves_task_to_resolve_cwd(
+        self,
+    ) -> None:
+        """
+        When the orchestrator target has no working_directory, there is nothing
+        to propagate: the local task stays unset and resolves to the CWD via
+        ``LocalTarget.resolved_working_directory``.
+        """
+        task = self._make_task("worker", LocalTarget())
+        wf = HorusWorkflow(
+            name="propagation_noop",
+            tasks=[task],
+            orchestrator_target=LocalTarget(),
+        )
+
+        wf._propagate_orchestrator_working_directory()
+
+        assert task.target.working_directory is None
+        assert task.working_dir == (Path.cwd() / "worker").as_posix()
+
+
+@pytest.mark.unit
 class TestWorkflowRun:
     """
     Tests for the run method of the Workflow class.

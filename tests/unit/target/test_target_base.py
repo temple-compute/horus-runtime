@@ -35,6 +35,7 @@ from horus_runtime.core.target.channel import (
     JobHandle,
     RemoteDirEntry,
 )
+from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -199,3 +200,26 @@ class TestBaseTarget:
         target.bind(task)
 
         assert target._task is task
+
+    def test_working_directory_defaults_to_none(self) -> None:
+        """
+        working_directory is left unset (None) until resolved, so the
+        workflow can distinguish "not set" from an explicit value.
+        """
+        assert ConcreteTestTarget().working_directory is None
+
+    def test_resolved_working_directory_returns_set_value(self) -> None:
+        """
+        When working_directory is set, the base resolver returns it verbatim.
+        """
+        target = ConcreteTestTarget(working_directory="/some/dir")
+        assert target.resolved_working_directory == "/some/dir"
+
+    def test_resolved_working_directory_raises_when_unset(self) -> None:
+        """
+        The base contract requires working_directory to have been resolved; a
+        target that neither sets it nor overrides the resolver raises.
+        """
+        target = ConcreteTestTarget()
+        with pytest.raises(WorkingDirectoryNotSetError):
+            _ = target.resolved_working_directory
