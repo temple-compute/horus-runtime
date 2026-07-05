@@ -26,7 +26,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import BeforeValidator, PrivateAttr, model_validator
+from pydantic import BeforeValidator, Field, model_validator
 
 from horus_builtin.event.artifact_event import (
     ArtifactEvent,
@@ -100,7 +100,7 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     Absolute local filesystem path where the artifact materializes.
     """
 
-    _declared_path: Path | None = PrivateAttr(default=None)
+    declared_path: Path | None = Field(default=None, init=False, exclude=True)
     """
     The path exactly as declared (before resolution), preserved so a workflow
     can re-anchor relative artifact paths to its run directory. ``None`` until
@@ -145,11 +145,11 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         """
         Normalize artifact paths to absolute resolved paths.
 
-        The declared (pre-resolution) path is preserved on ``_declared_path``
+        The declared (pre-resolution) path is preserved on ``declared_path``
         so a workflow can re-anchor a relative path to its run directory; the
         eager CWD resolution here remains the default for standalone use.
         """
-        self._declared_path = self.path
+        self.declared_path = self.path
         self.path = self.path.resolve()
         return self
 

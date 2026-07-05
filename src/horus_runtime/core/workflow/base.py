@@ -270,7 +270,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # Anchor the run (working dirs, outputs, logs) to the workflow file's
         # own directory, so a run is self-contained regardless of the launch
         # directory.
-        workflow._base_directory = Path(path).resolve().parent
+        workflow._base_directory = Path(path).resolve().parent  # noqa: SLF001
         return workflow
 
     def to_yaml(self, path: str | Path) -> None:
@@ -453,14 +453,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self.orchestrator_target.working_directory = run_root.as_posix()
 
         produced = {
-            artifact._declared_path
+            artifact.declared_path
             for task in self.tasks
             for artifact in task.outputs
-            if artifact._declared_path is not None
+            if artifact.declared_path is not None
         }
 
         def anchor(artifact: BaseArtifact) -> None:
-            declared = artifact._declared_path
+            declared = artifact.declared_path
             if declared is None or declared.is_absolute():
                 return
             root = run_root if declared in produced else base
@@ -469,12 +469,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         for task in self.tasks:
             for artifact in (*task.inputs, *task.outputs):
                 anchor(artifact)
-            # A runtime's local source file (e.g. a python_script's ``script``)
-            # is provided relative to the workflow file, so anchor it to the
-            # base dir too. Accessed by name to avoid a core->builtin import.
-            script = getattr(task.runtime, "script", None)
-            if isinstance(script, Path) and not script.is_absolute():
-                task.runtime.script = (base / script).resolve()
+            task.runtime.anchor_local_paths(base)
         for artifact in self.artifacts:
             anchor(artifact)
 

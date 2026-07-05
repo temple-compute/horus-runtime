@@ -22,6 +22,7 @@ functionality for executing tasks, and should be ingested by the executor.
 """
 
 from abc import abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, final
 
 from horus_runtime.i18n import tr as _
@@ -57,6 +58,12 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
     """
     Description of this runtime type, used in the UI.
     """
+
+    def anchor_local_paths(self, base: Path) -> None:
+        """
+        Resolve any relative local file paths this runtime owns against `base`.
+        Called by the workflow before execution. No-op by default.
+        """
 
     @abstractmethod
     async def _setup_runtime(self, task: "BaseTask") -> T:

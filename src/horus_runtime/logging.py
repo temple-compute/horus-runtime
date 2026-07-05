@@ -175,4 +175,4 @@ class HorusLogger(BaseSettings):
 # never creates a stray ``logs/`` folder in the launch directory.
 horus_logger: "HorusLogger" = HorusLogger()
 logger.remove()
-horus_logger._install_terminal_sink()
+horus_logger._install_terminal_sink()  # noqa: SLF001

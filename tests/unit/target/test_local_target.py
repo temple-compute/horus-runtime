@@ -94,7 +94,9 @@ class TestLocalTargetProperties:
         target = LocalTarget(working_directory="/explicit/dir")
         assert target.resolved_working_directory == "/explicit/dir"
 
-    def test_resolved_working_directory_absolutizes_relative_value(self) -> None:
+    def test_resolved_working_directory_absolutizes_relative_value(
+        self,
+    ) -> None:
         """
         A relative working_directory (e.g. propagated from a relative
         orchestrator target) is resolved to an absolute path against the
