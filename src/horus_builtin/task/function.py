@@ -66,7 +66,7 @@ class FunctionTask(HorusTask):
         return self
 
     @staticmethod
-    def task(  # noqa: PLR0913
+    def task(
         wf: BaseWorkflow,
         *,
         id: str | None = None,
