@@ -90,10 +90,15 @@ class HorusLogger(BaseSettings):
 
         # Remove every existing handler, then re-add ours. The ids are stale
         # after a full remove(), so clear them before reinstalling.
+        # Re-install the file sink only when one was already active; the file
+        # sink is deferred until set_log_directory() is called, so setup()
+        # must not spontaneously create it (e.g. via set_level()).
+        had_file_sink = self._file_sink_id is not None
         logger.remove()
         self._file_sink_id = None
         self._terminal_sink_id = None
-        self._install_file_sink()
+        if had_file_sink:
+            self._install_file_sink()
         self._install_terminal_sink()
 
     def _install_file_sink(self) -> None:
