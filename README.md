@@ -3,23 +3,20 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%20%E2%80%94%203.14-blue.svg)](https://www.python.org/downloads/)
 
-horus-runtime is the command-line engine for the Horus platform, a free, multi-platform workflow manager designed for developers and scientists. It enables the creation, management, and execution of complex workflows, especially scientific computing, without any GUI dependencies.
+horus-runtime is the command-line engine for the Temple Compute platform, a workflow manager designed for High Performance Computing. It enables the creation, management, and execution of complex workflows, especially scientific computing, without any GUI dependencies.
 
-- **No GUI:** This package is the runtime/engine only. For the full graphical experience, see the main Horus project.
 - **Modular & Extensible:** Designed for integration, automation, and extension via Python.
-- **Open & Free:** Developed by the Barcelona Supercomputing Center.
+- **Open & Free:** Developed by Temple Compute.
 
 ## Features
 
 - **Workflow Execution:** Run and manage scientific workflows from the terminal.
 - **Modular Blocks:** Compose workflows from reusable, autonomous blocks.
-- **Remote Execution:** Configure SSH remotes to offload calculations.
+- **Remote Execution:** Configure targets to offload calculations.
 - **Extensible:** Build and share your own blocks and extensions using the Python API.
 - **Reproducibility:** Share and version your workflows, including all state and configuration.
 
-## Components
-
-![horus-runtime components](https://i.ibb.co/m5J0j2ZJ/531204675-95555200-e1ea-4684-9922-949cb34742e2.png)
+<img width="1600" height="1202" alt="Horus Runtime TUI" src="https://github.com/user-attachments/assets/8f6a5f77-c0fa-48bf-b82b-5683af1caec4" />
 
 ## Development
 
@@ -88,12 +85,11 @@ For detailed documentation on internationalization and SDK usage, see the [horus
 
 ## Funding & Credits
 
-- Developed by the [Barcelona Supercomputing Center](https://www.bsc.es/)
-- © BSC. All rights reserved.
+- Developed by [Temple Compute](www.templecompute.com)
 
 ## License
 
 `horus-runtime` is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 See the [LICENSE](LICENSE) file for details.
 
-For commercial licensing and support, please contact us at [christian.dominguez@templecompute.com](mailto:christian.dominguez@templecompute.com)
+For commercial licensing and support, please contact Temple Compute at [christian@templecompute.com](mailto:christian@templecompute.com)
