@@ -94,6 +94,18 @@ class TestLocalTargetProperties:
         target = LocalTarget(working_directory="/explicit/dir")
         assert target.resolved_working_directory == "/explicit/dir"
 
+    def test_resolved_working_directory_absolutizes_relative_value(self) -> None:
+        """
+        A relative working_directory (e.g. propagated from a relative
+        orchestrator target) is resolved to an absolute path against the
+        process CWD. working_dir is used both as the subprocess cwd and as an
+        in-command path prefix, so a relative value would double the path.
+        """
+        target = LocalTarget(working_directory="horus_workflow_results")
+        resolved = target.resolved_working_directory
+        assert Path(resolved).is_absolute()
+        assert resolved == (Path.cwd() / "horus_workflow_results").as_posix()
+
 
 @pytest.mark.unit
 class TestLocalTargetDispatch:

@@ -26,7 +26,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import BeforeValidator, model_validator
+from pydantic import BeforeValidator, PrivateAttr, model_validator
 
 from horus_builtin.event.artifact_event import (
     ArtifactEvent,
@@ -100,6 +100,13 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     Absolute local filesystem path where the artifact materializes.
     """
 
+    _declared_path: Path | None = PrivateAttr(default=None)
+    """
+    The path exactly as declared (before resolution), preserved so a workflow
+    can re-anchor relative artifact paths to its run directory. ``None`` until
+    :meth:`resolve_path` runs. See ``BaseWorkflow._resolve_run_paths``.
+    """
+
     kind: str
     """
     Type of the artifact, such as 'file', 'folder', 'dataset', 'model', etc.
@@ -137,7 +144,12 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     def resolve_path(self) -> Self:
         """
         Normalize artifact paths to absolute resolved paths.
+
+        The declared (pre-resolution) path is preserved on ``_declared_path``
+        so a workflow can re-anchor a relative path to its run directory; the
+        eager CWD resolution here remains the default for standalone use.
         """
+        self._declared_path = self.path
         self.path = self.path.resolve()
         return self
 

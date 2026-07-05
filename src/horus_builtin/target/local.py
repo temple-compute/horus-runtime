@@ -123,8 +123,15 @@ class LocalTarget(BaseTarget):
         Fall back to the current working directory when none was set, so a
         plain ``LocalTarget()`` runs tasks under the process CWD without
         requiring an explicit path.
+
+        The result is always absolute. ``working_dir`` is used both as the
+        subprocess ``cwd`` and as an in-command path prefix; a relative value
+        (e.g. propagated from a relative orchestrator target) would be applied
+        twice and double the path. Resolving here against the process launch
+        directory keeps the prefix harmless when chdir'd into the same folder.
         """
-        return self.working_directory or Path.cwd().as_posix()
+        wd = self.working_directory or Path.cwd().as_posix()
+        return Path(wd).resolve().as_posix()
 
     def access_cost(self, artifact: BaseArtifact) -> float | None:
         """
