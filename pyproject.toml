@@ -158,6 +158,7 @@ ignore = [
   "D205",  # 1 blank line required between summary line and description
   "D212",  # Multi-line docstring summary should start at the first line
   "D200",  # One-line docstring should fit on one line
+  "PLR0913",  # Too many arguments in function/method
 ]
 
 [tool.ruff.lint.pydocstyle]

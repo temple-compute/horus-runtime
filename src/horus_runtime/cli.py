@@ -29,6 +29,7 @@ from horus_builtin.tui import render_workflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
+from horus_runtime.logging import horus_logger
 from horus_runtime.version import __version__ as horus_version
 
 
@@ -75,12 +76,18 @@ def main(ctx: click.Context) -> None:
     is_flag=True,
     help="Force all tasks to run, ignoring completion status.",
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug logging.",
+)
 def run(
     workflow_yaml: Path,
     trigger_id: str | None,
     no_tui: bool,
     no_skip_ids: tuple[str, ...],
     no_skip_all: bool,
+    debug: bool,
 ) -> None:
     """
     Run the workflow defined in WORKFLOW_YAML.
@@ -88,6 +95,9 @@ def run(
     Boots the runtime, loads the workflow, and executes it from the trigger
     task downstream. Exits non-zero if the workflow fails.
     """
+    if debug:
+        horus_logger.set_level("DEBUG")
+
     ctx = HorusContext.boot()
     try:
         workflow = BaseWorkflow.from_yaml(workflow_yaml)
