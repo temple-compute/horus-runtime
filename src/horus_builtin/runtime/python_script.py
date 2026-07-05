@@ -66,6 +66,11 @@ class PythonScriptRuntime(CommandRuntime):
 
     command: str = ""
 
+    def anchor_local_paths(self, base: Path) -> None:
+        """Resolve ``script`` against ``base`` if it is a relative path."""
+        if not self.script.is_absolute():
+            self.script = (base / self.script).resolve()
+
     async def _setup_runtime(self, task: "BaseTask") -> str:
         remote_path = f"{task.working_dir}/{self.script.name}"
 

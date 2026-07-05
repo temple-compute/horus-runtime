@@ -38,7 +38,7 @@ from typing import ClassVar, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -152,6 +152,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     ``run()``; do not set manually.
     """
 
+    _base_directory: Path | None = PrivateAttr(default=None)
+    """
+    Directory relative paths are anchored to (the run directory and, through
+    it, artifact paths and logs). Set to the workflow YAML's folder by
+    :meth:`from_yaml`; ``None`` for programmatically-built workflows, which
+    fall back to the process CWD. Runtime-only state, not serialized.
+    """
+
     @model_validator(mode="after")
     def check_unique_task_ids(self) -> Self:
         """
@@ -258,7 +266,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             A fully constructed :class:`BaseWorkflow` instance.
         """
         with Path(path).open("r", encoding="utf-8") as fh:
-            return cls.model_validate(yaml.safe_load(fh))
+            workflow = cls.model_validate(yaml.safe_load(fh))
+        # Anchor the run (working dirs, outputs, logs) to the workflow file's
+        # own directory, so a run is self-contained regardless of the launch
+        # directory.
+        workflow._base_directory = Path(path).resolve().parent  # noqa: SLF001
+        return workflow
 
     def to_yaml(self, path: str | Path) -> None:
         """
@@ -390,6 +403,78 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             )
             artifact.path = transfer_art.path
 
+    @property
+    def _effective_base(self) -> Path:
+        return self._base_directory or Path.cwd()
+
+    @property
+    def run_directory(self) -> Path:
+        """
+        The single root directory for this run's generated files: per-task
+        working directories, declared output artifacts, and logs all live
+        under it, so a run is self-contained.
+
+        Resolved as ``base_directory / orchestrator working_directory`` (the
+        base directory alone when no orchestrator working directory is set).
+        The base directory is the workflow YAML's folder when loaded via
+        :meth:`from_yaml`, otherwise the process CWD. An absolute orchestrator
+        working directory is used as-is.
+        """
+        base = self._effective_base
+        wd = (
+            self.orchestrator_target.working_directory
+            if self.orchestrator_target is not None
+            else None
+        )
+        root = Path(wd) if wd else Path(".")
+        return (base / root).resolve()
+
+    @final
+    def _resolve_run_paths(self) -> Path:
+        """
+        Anchor this run's relative paths to the single :attr:`run_directory`.
+
+        - Point the orchestrator target (and, by propagation, co-located task
+          targets) at the absolute run directory, so per-task working dirs
+          nest under it.
+        - Make declared artifact paths absolute: a path produced by some task
+          (a task output, or an input fed by an upstream output) resolves
+          under the run directory; a path never produced (an external input)
+          resolves under the base directory. Paths declared absolute are left
+          untouched.
+
+        Only relative declared paths are rewritten, so calling this twice is
+        safe. Returns the resolved run root so callers can use it directly.
+        """
+        base = self._effective_base
+        run_root = self.run_directory
+
+        if self.orchestrator_target is not None:
+            self.orchestrator_target.working_directory = run_root.as_posix()
+
+        produced = {
+            artifact.declared_path
+            for task in self.tasks
+            for artifact in task.outputs
+            if artifact.declared_path is not None
+        }
+
+        def anchor(artifact: BaseArtifact) -> None:
+            declared = artifact.declared_path
+            if declared is None or declared.is_absolute():
+                return
+            root = run_root if declared in produced else base
+            artifact.path = (root / declared).resolve()
+
+        for task in self.tasks:
+            for artifact in (*task.inputs, *task.outputs):
+                anchor(artifact)
+            task.runtime.anchor_local_paths(base)
+        for artifact in self.artifacts:
+            anchor(artifact)
+
+        return run_root
+
     @final
     def _propagate_orchestrator_working_directory(self) -> None:
         """
@@ -437,6 +522,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             raise OneWorkflowAtATimeError(ctx.workflow)
 
         ctx.workflow = self
+
+        # Anchor working dirs, artifact paths, and logs to a single
+        # self-contained run directory before anything reads them, including
+        # the RUNNING log below (so it lands in the file sink too).
+        run_root = self._resolve_run_paths()
+        horus_logger.set_log_directory(run_root / "logs")
 
         self.status = WorkflowStatus.RUNNING
         horus_logger.log.debug(

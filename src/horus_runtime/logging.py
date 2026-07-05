@@ -68,6 +68,11 @@ class HorusLogger(BaseSettings):
     #: sink. ``None`` until :meth:`setup` runs.
     _terminal_sink_id: int | None = PrivateAttr(default=None)
 
+    #: Loguru handler id of the file sink, tracked so its directory can be
+    #: re-pointed (see :meth:`set_log_directory`) without disturbing the
+    #: terminal sink. ``None`` until a file sink is installed.
+    _file_sink_id: int | None = PrivateAttr(default=None)
+
     @property
     def log(self) -> "Logger":
         """
@@ -77,17 +82,34 @@ class HorusLogger(BaseSettings):
 
     def setup(self, level: LoggerLevel | None = None) -> None:
         """
-        Set up the loguru logger with the current settings.
+        Set up the loguru logger with the current settings, replacing any
+        existing sinks with a fresh file sink and terminal sink.
         """
         # Load the configuration from environment variables or defaults
         self.level = level or self.level
 
-        # Ensure the log directory exists
-        self.log_directory.mkdir(parents=True, exist_ok=True)
-
-        # Remove the default logger and add a new one with our configuration
+        # Remove every existing handler, then re-add ours. The ids are stale
+        # after a full remove(), so clear them before reinstalling.
+        # Re-install the file sink only when one was already active; the file
+        # sink is deferred until set_log_directory() is called, so setup()
+        # must not spontaneously create it (e.g. via set_level()).
+        had_file_sink = self._file_sink_id is not None
         logger.remove()
-        logger.add(
+        self._file_sink_id = None
+        self._terminal_sink_id = None
+        if had_file_sink:
+            self._install_file_sink()
+        self._install_terminal_sink()
+
+    def _install_file_sink(self) -> None:
+        """
+        (Re)install the file sink at :attr:`log_directory`, replacing a
+        previously installed one without touching the terminal sink.
+        """
+        self.log_directory.mkdir(parents=True, exist_ok=True)
+        if self._file_sink_id is not None:
+            logger.remove(self._file_sink_id)
+        self._file_sink_id = logger.add(
             sink=f"{self.log_directory}/{self.filename_template}",
             format=self.format,
             level=self.level,
@@ -97,12 +119,27 @@ class HorusLogger(BaseSettings):
             enqueue=True,
         )
 
-        # Add terminal logging as well, tracking its id so it can be swapped.
+    def _install_terminal_sink(self) -> None:
+        """
+        (Re)install the stdout terminal sink, replacing a previously installed
+        one. Tracked by id so the live TUI can swap it for a panel.
+        """
+        if self._terminal_sink_id is not None:
+            logger.remove(self._terminal_sink_id)
         self._terminal_sink_id = logger.add(
             sink=sys.stdout,
             format=self.format,
             level=self.level,
         )
+
+    def set_log_directory(self, path: "Path") -> None:
+        """
+        Point the file logs at *path* and re-register the file sink, leaving
+        the terminal sink intact. Used to move logs under a run's directory
+        once it is known (the import-time default installs no file sink).
+        """
+        self.log_directory = Path(path)
+        self._install_file_sink()
 
     def redirect_terminal(self, sink: "Callable[[Message], None]") -> None:
         """
@@ -132,6 +169,10 @@ class HorusLogger(BaseSettings):
         self.setup(level=level)  # Re-setup to apply the new level
 
 
-# Instantiate a global logger ready to be used.
+# Instantiate a global logger ready to be used. Only the terminal sink is
+# installed at import time; the file sink is created when a run points it at
+# its directory (see HorusLogger.set_log_directory), so importing the runtime
+# never creates a stray ``logs/`` folder in the launch directory.
 horus_logger: "HorusLogger" = HorusLogger()
-horus_logger.setup()
+logger.remove()
+horus_logger._install_terminal_sink()  # noqa: SLF001
