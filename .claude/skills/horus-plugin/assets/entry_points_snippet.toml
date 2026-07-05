@@ -1,0 +1,48 @@
+# Paste into your plugin package's pyproject.toml.
+#
+# The KEY (left of "=") is a free label; the VALUE is the dotted path to the
+# MODULE that defines your plugin class — NOT the class itself. Importing the
+# module is what registers the class (AutoRegistry.__init_subclass__ runs at
+# class-definition time). Your package only needs to depend on "horus-runtime".
+#
+# Use the group that matches the base class you subclassed. Pick the one(s) you
+# need and delete the rest.
+
+[project.entry-points."horus.artifact"]
+my_artifact = "my_pkg.artifacts.my_artifact"
+
+[project.entry-points."horus.runtime"]
+my_runtime = "my_pkg.runtimes.my_runtime"
+
+[project.entry-points."horus.executor"]
+my_executor = "my_pkg.executors.my_executor"
+
+[project.entry-points."horus.task"]
+my_task = "my_pkg.tasks.my_task"
+
+[project.entry-points."horus.workflow"]
+my_workflow = "my_pkg.workflows.my_workflow"
+
+[project.entry-points."horus.target"]
+my_target = "my_pkg.targets.my_target"
+
+[project.entry-points."horus.transfer"]
+my_transfer = "my_pkg.transfers.my_transfer"
+
+[project.entry-points."horus.interaction"]
+my_interaction = "my_pkg.interactions.my_interaction"
+
+[project.entry-points."horus.interaction_transport"]
+my_transport = "my_pkg.interactions.my_transport"
+
+[project.entry-points."horus.interaction_renderer"]
+my_renderer = "my_pkg.interactions.my_renderer"
+
+[project.entry-points."horus.subscriber"]
+my_subscriber = "my_pkg.events.my_subscriber"
+
+[project.entry-points."horus.middleware.task"]
+my_task_mw = "my_pkg.middleware.my_task_mw"
+
+[project.entry-points."horus.middleware.workflow"]
+my_workflow_mw = "my_pkg.middleware.my_workflow_mw"
