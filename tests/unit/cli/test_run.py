@@ -96,3 +96,110 @@ class TestRunCommand:
             main, ["run", str(tmp_path / "nope.yaml"), "--no-tui"]
         )
         assert result.exit_code != 0
+
+
+def _write_skippable_workflow(tmp_path: Path) -> tuple[Path, Path]:
+    """
+    Write a one-task workflow whose task appends a line to a marker file and
+    produces an output artifact, so a second run is skipped unless forced.
+
+    Returns the workflow path and the marker path.
+    """
+    marker = tmp_path / "marker.txt"
+    output = tmp_path / "output.txt"
+    body = textwrap.dedent(f"""\
+        name: cli_skip_wf
+        kind: horus_workflow
+        tasks:
+          - id: t1
+            name: Task One
+            kind: horus_task
+            runtime:
+              kind: command
+              command: "echo run >> {marker} && touch {output}"
+            executor:
+              kind: shell
+            outputs:
+              - id: out
+                kind: file
+                path: {output}
+        """)
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text(body)
+    return wf, marker
+
+
+def _run_count(marker: Path) -> int:
+    """Number of times the skippable task actually executed."""
+    if not marker.exists():
+        return 0
+    return len(marker.read_text().splitlines())
+
+
+@pytest.mark.unit
+class TestNoSkipOptions:
+    """Tests for ``horus run --no-skip`` and ``--no-skip-all``."""
+
+    def test_completed_task_is_skipped_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Without force flags, a second run skips the completed task."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        runner = CliRunner()
+        for _ in range(2):
+            result = runner.invoke(main, ["run", str(wf), "--no-tui"])
+            assert result.exit_code == 0, result.output
+        assert _run_count(marker) == 1
+
+    def test_no_skip_all_reruns_completed_tasks(self, tmp_path: Path) -> None:
+        """--no-skip-all forces a completed task to run again."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(main, ["run", str(wf), "--no-tui"])
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(
+            main, ["run", str(wf), "--no-tui", "--no-skip-all"]
+        )
+        assert result.exit_code == 0, result.output
+        assert _run_count(marker) == 2
+
+    def test_no_skip_single_task(self, tmp_path: Path) -> None:
+        """--no-skip TASK_ID forces the named completed task to run again."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(main, ["run", str(wf), "--no-tui"])
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(
+            main, ["run", str(wf), "--no-tui", "--no-skip", "t1"]
+        )
+        assert result.exit_code == 0, result.output
+        assert _run_count(marker) == 2
+
+    def test_no_skip_unknown_id_errors(self, tmp_path: Path) -> None:
+        """An unknown --no-skip task id fails fast, naming the bad id."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        result = CliRunner().invoke(
+            main, ["run", str(wf), "--no-tui", "--no-skip", "nope"]
+        )
+        assert result.exit_code != 0
+        assert "nope" in result.output
+        assert "t1" in result.output  # valid ids are listed
+        assert _run_count(marker) == 0  # nothing ran
+
+    def test_no_skip_requires_value(self, tmp_path: Path) -> None:
+        """Bare --no-skip (no task id) is a usage error, not force-all."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        result = CliRunner().invoke(
+            main, ["run", str(wf), "--no-tui", "--no-skip"]
+        )
+        assert result.exit_code == 2
+        assert _run_count(marker) == 0
+
+    def test_no_skip_all_takes_no_value(self, tmp_path: Path) -> None:
+        """--no-skip-all is a flag: the workflow positional still parses."""
+        wf, marker = _write_skippable_workflow(tmp_path)
+        result = CliRunner().invoke(
+            main, ["run", "--no-skip-all", str(wf), "--no-tui"]
+        )
+        assert result.exit_code == 0, result.output
+        assert _run_count(marker) == 1

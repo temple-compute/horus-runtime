@@ -60,7 +60,28 @@ def main(ctx: click.Context) -> None:
     is_flag=True,
     help="Disable the live TUI; stream log output only.",
 )
-def run(workflow_yaml: Path, trigger_id: str | None, no_tui: bool) -> None:
+@click.option(
+    "--no-skip",
+    "no_skip_ids",
+    multiple=True,
+    metavar="TASK_ID",
+    help=(
+        "Force the given task to run even if already complete. "
+        "Repeat for each task ID."
+    ),
+)
+@click.option(
+    "--no-skip-all",
+    is_flag=True,
+    help="Force all tasks to run, ignoring completion status.",
+)
+def run(
+    workflow_yaml: Path,
+    trigger_id: str | None,
+    no_tui: bool,
+    no_skip_ids: tuple[str, ...],
+    no_skip_all: bool,
+) -> None:
     """
     Run the workflow defined in WORKFLOW_YAML.
 
@@ -73,6 +94,25 @@ def run(workflow_yaml: Path, trigger_id: str | None, no_tui: bool) -> None:
         if not workflow.tasks:
             raise click.ClickException(_("Workflow has no tasks to run."))
         trigger = trigger_id or workflow.tasks[0].id
+
+        if no_skip_ids:
+            known_ids = {task.id for task in workflow.tasks}
+            unknown_ids = sorted(set(no_skip_ids) - known_ids)
+            if unknown_ids:
+                raise click.ClickException(
+                    _(
+                        "Unknown task id(s) for --no-skip: %(unknown)s. "
+                        "Valid task ids: %(valid)s"
+                    )
+                    % {
+                        "unknown": ", ".join(unknown_ids),
+                        "valid": ", ".join(sorted(known_ids)),
+                    }
+                )
+        force_ids = set(no_skip_ids)
+        for task in workflow.tasks:
+            if no_skip_all or task.id in force_ids:
+                task.skip_if_complete = False
 
         if no_tui:
             asyncio.run(workflow.run(trigger_id=trigger))
