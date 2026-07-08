@@ -23,6 +23,7 @@ Local target: executes tasks in the current process, running commands via
 import asyncio
 import os
 import shlex
+import shutil
 import signal
 import socket
 from collections.abc import AsyncGenerator
@@ -298,6 +299,24 @@ class LocalTarget(BaseTarget):
             path: Directory to create (mapped to a local ``Path``).
         """
         Path(path).mkdir(parents=True, exist_ok=True)
+
+    async def path_exists(self, path: str) -> bool:
+        """
+        Whether *path* exists on the local filesystem (file or directory).
+        """
+        return Path(path).exists()
+
+    async def remove(self, path: str) -> None:
+        """
+        Remove *path* from the local filesystem, recursively for directories.
+
+        Idempotent: a missing path is not an error.
+        """
+        p = Path(path)
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        elif p.exists() or p.is_symlink():
+            p.unlink()
 
     async def list_dir(self, path: str) -> list[RemoteDirEntry]:
         """

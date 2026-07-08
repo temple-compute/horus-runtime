@@ -215,7 +215,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``FAILED``    — set on any other exception (re-raised after)
         """
         ctx = HorusContext.get_context()
-        if self.skip_if_complete and self.is_complete():
+        if self.skip_if_complete and await self.is_complete():
             ctx.bus.emit(
                 HorusTaskEvent(
                     message=_("Skipping task %(task_name)s. Already complete.")
@@ -280,7 +280,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         """
 
     @abstractmethod
-    def is_complete(self) -> bool:
+    async def is_complete(self) -> bool:
         """
         Determine whether the task is complete by checking the existence and
         integrity of its output artifacts. This method should be implemented by
@@ -289,7 +289,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         """
 
     @final
-    def reset(self) -> None:
+    async def reset(self) -> None:
         """
         Reset the task. This allows the task to be re-run from scratch.
 
@@ -300,10 +300,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
         horus_logger.log.debug(
             _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
         )
-        self._reset()
+        await self._reset()
 
     @abstractmethod
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         """
         Subclass-specific reset logic. Override this in subclasses when
         additional state must be cleared on reset. Do not set ``self.status``

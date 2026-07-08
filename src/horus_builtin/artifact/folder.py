@@ -20,10 +20,8 @@ Implementation of the FolderArtifact class, which represents a local
 folder/directory artifact in the Horus runtime.
 """
 
-import hashlib
-import os
+import shlex
 import shutil
-import tempfile
 from pathlib import Path
 from typing import ClassVar
 
@@ -42,39 +40,6 @@ class FolderArtifact(BaseArtifact[Path]):
     kind_description: ClassVar[str] = (
         "A directory artifact containing multiple files."
     )
-
-    def exists(self) -> bool:
-        """
-        Check if the folder specified by the path exists and is a directory.
-        """
-        return self.path.is_dir()
-
-    @property
-    def hash(self) -> str | None:
-        """
-        Computes the hash of the folder and its contents by recursively hashing
-        all files in the folder. The hash is computed by combining the relative
-        paths and contents of all files in the folder, ensuring that changes to
-        any file or the addition/removal of files will result in a different
-        hash.
-        """
-        if not self.exists():
-            return None
-
-        sha256 = hashlib.sha256()
-
-        # 1. Get all files and sort them by relative path for determinism
-        # We use rglob("*") to get everything, but only hash files
-        paths = sorted([p for p in self.path.rglob("*") if p.is_file()])
-
-        for path in paths:
-            relative_path = path.relative_to(self.path).as_posix()
-            sha256.update(relative_path.encode("utf-8"))
-
-            # Hash the file contents
-            sha256.update(self.hash_file(path))
-
-        return sha256.hexdigest()
 
     def read(self) -> Path:
         """
@@ -103,56 +68,27 @@ class FolderArtifact(BaseArtifact[Path]):
         shutil.copytree(source_path, self.path)
         self._emit_event(ArtifactEventsEnum.WRITE)
 
-    def package(self) -> Path:
+    def pack_command(self, src: str, pkg: str) -> str | None:
         """
-        Archive the folder into a zip file and return the archive path.
+        Archive the *contents* of the folder at *src* into the gzipped tarball
+        *pkg*.
+
+        Uses ``tar -C <src> .`` so the archive holds the directory's contents
+        rooted at ``.`` (not the directory name itself); the matching
+        :meth:`unpack_command` then extracts straight into the destination
+        directory without nesting.
         """
-        if not self.exists():
-            raise FileNotFoundError(self.path)
+        return f"tar czf {shlex.quote(pkg)} -C {shlex.quote(src)} ."
 
-        # Create a temporary file to be used as the archive path.
-        # shutil.make_archive requires a base name without extension,
-        # so we create a temp file and then remove it after archiving.
-        fd, arch_p = tempfile.mkstemp()
-        os.close(fd)
-        archive_path = Path(arch_p)
+    def unpack_command(self, pkg: str, dest: str) -> str | None:
+        """
+        Extract the gzipped tarball *pkg* into the directory *dest*.
 
-        shutil.make_archive(
-            base_name=str(archive_path),
-            format="zip",
-            root_dir=self.path,
+        The destination is recreated fresh so a re-materialized folder never
+        mixes with stale contents.
+        """
+        q_dest = shlex.quote(dest)
+        return (
+            f"rm -rf {q_dest} && mkdir -p {q_dest} && "
+            f"tar xzf {shlex.quote(pkg)} -C {q_dest}"
         )
-
-        # shutil.make_archive adds .zip, so remove the temp
-        # file and use the generated archive
-        archive_file = archive_path.with_suffix(".zip")
-        if archive_path.exists():
-            archive_path.unlink()
-
-        self._emit_event(ArtifactEventsEnum.PACKAGE)
-        return archive_file
-
-    def unpackage(self, package_path: Path) -> None:
-        """
-        Extract a packaged folder archive into the canonical directory path.
-        """
-        package_path = Path(package_path).resolve()
-
-        if self.path.exists():
-            shutil.rmtree(self.path)
-
-        self.path.mkdir(parents=True, exist_ok=True)
-        shutil.unpack_archive(
-            filename=str(package_path),
-            extract_dir=str(self.path),
-        )
-        self._emit_event(ArtifactEventsEnum.UNPACKAGE)
-
-    def delete(self) -> None:
-        """
-        Deletes the artifact from its location by deleting the folder at the
-        specified path.
-        """
-        if self.exists():
-            shutil.rmtree(self.path)
-            self._emit_event(ArtifactEventsEnum.DELETE)
