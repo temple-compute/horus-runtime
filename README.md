@@ -18,6 +18,10 @@ horus-runtime is the command-line engine for the Temple Compute platform, a work
 
 <img width="1600" height="1202" alt="Horus Runtime TUI" src="https://github.com/user-attachments/assets/8f6a5f77-c0fa-48bf-b82b-5683af1caec4" />
 
+## Workflows Library
+
+Check out the [Pantheon](https://github.com/temple-compute/pantheon/) repository for a curated library of production-ready workflows, from drug discovery (Boltz-2 virtual screening, AutoDock Vina docking) to molecular dynamics setup with BioExcel Building Blocks (GROMACS, AMBER). Contributions are welcomed.
+
 ## Development
 
 ### Requirements
