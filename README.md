@@ -22,6 +22,36 @@ horus-runtime is the command-line engine for the Temple Compute platform, a work
 
 Check out the [Pantheon](https://github.com/temple-compute/pantheon/) repository for a curated library of production-ready workflows, from drug discovery (Boltz-2 virtual screening, AutoDock Vina docking) to molecular dynamics setup with BioExcel Building Blocks (GROMACS, AMBER). Contributions are welcomed.
 
+## How to Run horus-runtime
+
+horus-runtime is the command-line engine for the Horus platform, a free, multi-platform workflow manager for scientific computing. It runs and manages workflows entirely from the terminal, with no GUI dependency.
+
+Full documentation: [docs.templecompute.com](https://docs.templecompute.com)
+
+### Installation
+
+Using `uv` (recommended):
+
+```bash
+uv add horus-runtime
+```
+
+Or with plain `pip`:
+
+```bash
+pip install horus-runtime
+```
+
+Some workflows (e.g. BioExcel-based ones) also require a conda-family tool (`micromamba`, `mamba`, or `conda`) on your `PATH` to build simulation environments.
+
+### Quick Start
+
+```bash
+horus run workflow.yaml
+```
+
+This executes the pipeline defined in `workflow.yaml`, routing each stage to the configured compute target (local, SSH remote, or HPC cluster).
+
 ## Development
 
 ### Requirements
