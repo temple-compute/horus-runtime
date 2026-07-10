@@ -24,17 +24,21 @@ as each one finishes: as soon as a task completes, its dependents that are
 now ready are dispatched too, without waiting for unrelated in-flight tasks.
 
 Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap.
-Failure handling is still fail-fast (the first failure cancels everything
-else in flight and re-raises), matching the previous serial runner. Resource
-placement and DAG mutation are left to later PRs; the dependency/scope
-recomputation happening on every loop iteration (rather than once up front)
-is the hook that lets a future DAG-mutation PR plug in without touching this
-loop.
+Failure handling supports two policies via ``workflow.failure_policy`` (see
+:attr:`BaseWorkflow.failure_policy`): ``"fail_fast"`` (the default) cancels
+everything else in flight and re-raises, matching the previous serial
+runner; ``"continue"`` lets unrelated branches keep running, blocking only
+the failed task's descendants, and reports every failure at the end via
+:exc:`WorkflowExecutionError`. Resource placement and DAG mutation are left
+to later PRs; the dependency/scope recomputation happening on every loop
+iteration (rather than once up front) is the hook that lets a future
+DAG-mutation PR plug in without touching this loop.
 """
 
 import asyncio
 from typing import TYPE_CHECKING
 
+from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.workflow.dag import (
     UnknownTaskError,
     ancestors,
@@ -42,8 +46,10 @@ from horus_builtin.workflow.dag import (
     descendants,
     topological_sort,
 )
+from horus_runtime.context import HorusContext
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow, _EdgeSource
+from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
@@ -159,23 +165,28 @@ def _collect_completions(
     done: set[asyncio.Task[None]],
     running: dict[asyncio.Task[None], str],
     completed: set[str],
-) -> BaseException | None:
+) -> list[tuple[str, BaseException]]:
     """
     Pop every finished task out of *running*, adding successes to
-    *completed*, and return the first exception encountered (if any) in
-    deterministic (task id) order.
+    *completed*, and return every ``(task_id, exception)`` failure
+    encountered, in deterministic (task id) order.
+
+    Under ``fail_fast`` only the first entry is ever used (the caller cancels
+    and re-raises as soon as the list is non-empty), but ``continue`` needs
+    every failure from the batch: several ready tasks can finish in the same
+    ``asyncio.wait`` and more than one can fail at once.
     """
-    failure: BaseException | None = None
+    failures: list[tuple[str, BaseException]] = []
     for fut in sorted(done, key=lambda f: running[f]):
         task_id = running.pop(fut)
         if fut.cancelled():
             continue
         exc = fut.exception()
         if exc is not None:
-            failure = failure or exc
+            failures.append((task_id, exc))
         else:
             completed.add(task_id)
-    return failure
+    return failures
 
 
 async def _cancel_running(running: dict[asyncio.Task[None], str]) -> None:
@@ -196,15 +207,30 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     ``BaseTask.is_complete``, applied inside ``BaseTask.run``). Every task
     whose dependencies are already satisfied is dispatched immediately and
     concurrently with any other ready task, bounded by
-    ``workflow.max_concurrency`` when set. The first task to fail cancels
-    every other task still in flight and re-raises, so ``BaseWorkflow.run``
-    can mark the workflow ``FAILED`` — the same fail-fast contract the
-    previous serial loop provided.
+    ``workflow.max_concurrency`` when set.
+
+    ``workflow.failure_policy`` controls what happens once a task fails:
+
+    - ``"fail_fast"`` (the default): the first task to fail cancels every
+      other task still in flight and re-raises immediately, so
+      ``BaseWorkflow.run`` can mark the workflow ``FAILED`` — the same
+      fail-fast contract the previous serial loop provided.
+    - ``"continue"``: a failed task does not cancel anything. Its
+      descendants are added to a ``blocked`` set and never dispatched (a
+      failed or blocked dependency never enters ``completed``, so a
+      dependent's ``deps[task_id] <= completed`` check never passes for it
+      either — the ``blocked`` set just makes that explicit and avoids
+      mistaking the resulting deadlock for a genuine cycle). Every other
+      branch keeps running to completion. Once nothing more can run, if any
+      task failed, :exc:`WorkflowExecutionError` is raised naming every
+      failed task, so the workflow still ends ``FAILED``.
 
     Raises:
         UnknownTaskError: If trigger_id is not a task in the workflow.
         CyclicDependencyError: If the tasks in scope cannot all be
             scheduled (a cycle keeps the remainder permanently blocked).
+        WorkflowExecutionError: Under the ``"continue"`` policy, if any task
+            failed during the run.
     """
     tasks_by_id = {task.id: task for task in workflow.tasks}
     if trigger_id not in tasks_by_id:
@@ -238,6 +264,12 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     dispatched: set[str] = set()
     running: dict[asyncio.Task[None], str] = {}
 
+    # `continue`-policy bookkeeping. Both stay empty for `fail_fast`, which
+    # always raises out of the loop on the first failure instead of
+    # populating them.
+    blocked: set[str] = set()
+    failed: dict[str, BaseException] = {}
+
     while True:
         # Recomputed every iteration (instead of once up front) so a future
         # DAG-mutation PR can grow `workflow.tasks`/`workflow.edges` mid-run
@@ -246,19 +278,33 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 
         # Deterministic order when several tasks become ready at once,
-        # matching topological_sort's tie-breaking.
+        # matching topological_sort's tie-breaking. `blocked` tasks are
+        # excluded explicitly for clarity: a blocked task's dependency never
+        # entered `completed` either, so `deps[task_id] <= completed` alone
+        # would already keep it (and everything downstream of it) out of
+        # `ready`.
         ready = sorted(
             task_id
             for task_id in scope
-            if task_id not in dispatched and deps[task_id] <= completed
+            if task_id not in dispatched
+            and task_id not in blocked
+            and deps[task_id] <= completed
         )
 
-        if not ready and not running and (scope - completed):
-            # Nothing is ready and nothing is in flight, yet the scope isn't
-            # fully satisfied: the remaining tasks are stuck on each other.
+        # Tasks left neither completed, blocked, nor failed, with nothing
+        # ready or in flight to get them there, are stuck on each other
+        # rather than on an (already accounted for) upstream failure.
+        stuck = scope - completed - blocked - failed.keys()
+        if not ready and not running and stuck:
             # Reuse topological_sort's cycle detection for a consistent
             # error instead of silently stopping short.
             topological_sort(scope, deps)
+
+        if not ready and not running:
+            # Nothing left that can ever become ready: either everything in
+            # scope completed, or (continue policy) the rest is permanently
+            # blocked behind a failure. Report any failures below the loop.
+            break
 
         if ready:
             source_map_cache = workflow.cached_source_map(source_map_cache)
@@ -271,14 +317,42 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 )
                 running[wrapper] = task_id
 
-        if not running:
-            break
-
         done, _pending = await asyncio.wait(
             running, return_when=asyncio.FIRST_COMPLETED
         )
 
-        failure = _collect_completions(done, running, completed)
-        if failure is not None:
+        failures = _collect_completions(done, running, completed)
+        if failures and workflow.failure_policy == "fail_fast":
             await _cancel_running(running)
-            raise failure
+            raise failures[0][1]
+
+        for task_id, exc in failures:
+            # `continue` policy: record the failure and block its
+            # descendants (inclusive of task_id itself) instead of aborting.
+            # Unrelated branches already in `running`, or that become ready
+            # on a later iteration, are left alone.
+            failed[task_id] = exc
+            newly_blocked = descendants(task_id, deps) - blocked
+            blocked |= newly_blocked
+            for blocked_id in sorted(newly_blocked - {task_id}):
+                blocked_task = tasks_by_id[blocked_id]
+                message = _(
+                    "Task %(task_name)s blocked: upstream task "
+                    "%(failed_task_name)s failed."
+                ) % {
+                    "task_name": blocked_task.name,
+                    "failed_task_name": tasks_by_id[task_id].name,
+                }
+                horus_logger.log.debug(message)
+                HorusContext.get_context().bus.emit(
+                    HorusTaskEvent(
+                        task_id=blocked_id,
+                        task_name=blocked_task.name,
+                        message=message,
+                    )
+                )
+
+    if failed:
+        raise WorkflowExecutionError(sorted(failed)) from next(
+            iter(failed.values())
+        )

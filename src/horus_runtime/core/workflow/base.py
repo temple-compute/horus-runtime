@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import ClassVar, NamedTuple, Self, final
+from typing import ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
@@ -159,6 +159,23 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     dispatched immediately. Set this to cap resource usage (e.g. a shared
     machine with limited CPUs) when the DAG's natural parallelism would
     otherwise over-subscribe it.
+    """
+
+    failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
+    """
+    How the scheduler reacts to a task failure.
+
+    - ``"fail_fast"`` (the default): the first task to fail cancels every
+      other task still in flight and the run stops immediately, matching the
+      runtime's historical behavior.
+    - ``"continue"``: a failed task does not abort the run. Its descendants
+      are never dispatched (they permanently lack a satisfied dependency),
+      but every other branch of the DAG keeps running to completion. Once
+      nothing more can run, the workflow still ends ``FAILED`` if any task
+      failed, naming every failed task.
+
+    Either way a task failure always results in a ``FAILED`` workflow; the
+    policy only controls how much of the DAG gets to run first.
     """
 
     _base_directory: Path | None = PrivateAttr(default=None)
