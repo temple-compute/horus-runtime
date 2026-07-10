@@ -216,7 +216,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         - target an existing task and one of its declared input ids;
         - source either an existing task's declared output id, or a root
           artifact id via the ``artifact-<rootId>`` convention;
-        - be the only edge feeding its ``(target, target_input)``.
+        - be the only ``transfer=True`` edge feeding its
+          ``(target, target_input)``. Ordering-only (``transfer=False``)
+          edges are exempt: any number of them may feed the same input,
+          alongside at most one ``transfer=True`` edge, since they never
+          contribute a transfer source (see :meth:`_build_source_map`).
         """
         task_inputs = {t.id: {a.id for a in t.inputs} for t in self.tasks}
         task_outputs = {t.id: {a.id for a in t.outputs} for t in self.tasks}
@@ -232,11 +236,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     "target input", edge.target_input
                 )
 
-            # At most one edge may feed a given consumer input.
-            key = (edge.target, edge.target_input)
-            if key in seen_targets:
-                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
-            seen_targets.add(key)
+            # At most one transfer edge may feed a given consumer input.
+            # Ordering-only edges (transfer=False) are exempt.
+            if edge.transfer:
+                key = (edge.target, edge.target_input)
+                if key in seen_targets:
+                    raise DuplicateEdgeTargetError(
+                        edge.target, edge.target_input
+                    )
+                seen_targets.add(key)
 
             # Source must resolve to a task output or a root artifact.
             if edge.source in task_outputs:
@@ -294,6 +302,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         :class:`_EdgeSource`. Edges are validated at construction
         (see :meth:`check_edges_resolve`), so every entry resolves to a real
         producer output or root artifact.
+
+        Only ``transfer=True`` edges contribute an entry: ordering-only
+        (``transfer=False``) edges affect DAG ordering (see
+        :func:`horus_builtin.workflow.dag.build_dependencies`) but never
+        supply a transfer source.
         """
         targets_by_task = {t.id: t.target for t in self.tasks}
         outputs_by_task = {
@@ -303,6 +316,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         source_map: dict[tuple[str, str], _EdgeSource] = {}
         for edge in self.edges:
+            if not edge.transfer:
+                continue
             key = (edge.target, edge.target_input)
             producer_target = targets_by_task.get(edge.source)
             if producer_target is not None:
