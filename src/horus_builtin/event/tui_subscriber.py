@@ -73,7 +73,7 @@ _STATUS_STYLE: dict[TaskStatus, str] = {
     TaskStatus.COMPLETED: "bold green",
     TaskStatus.FAILED: "bold red",
     TaskStatus.CANCELED: "magenta",
-    TaskStatus.SKIPPED: "dim",
+    TaskStatus.SKIPPED: "blue",
 }
 
 # Glyph per task status (RUNNING uses an animated spinner instead).
