@@ -25,6 +25,7 @@ from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
@@ -62,9 +63,11 @@ class HorusTask(BaseTask):
 
         self.runs += 1
 
+        store = ArtifactStore(self.target)
+
         # Gather inputs
         for artifact in self.inputs:
-            if not artifact.exists():
+            if not await store.exists(artifact):
                 raise ArtifactDoesNotExistError(
                     _("Input artifact '%(input_id)s' does not exist")
                     % {"input_id": artifact.id}
@@ -73,7 +76,7 @@ class HorusTask(BaseTask):
         # Execute the command using the executor
         await self.executor.execute(self)
 
-    def is_complete(self) -> bool:
+    async def is_complete(self) -> bool:
         """
         A HorusTask is considered complete if all of its output artifacts
         exist.
@@ -83,13 +86,14 @@ class HorusTask(BaseTask):
         if not self.outputs:
             return False
 
+        store = ArtifactStore(self.target)
         for artifact in self.outputs:
-            if not artifact.exists():
+            if not await store.exists(artifact):
                 return False
 
         return True
 
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         """
         Reset the task by deleting all output artifacts. This allows the task
         to be re-run from scratch.
@@ -105,7 +109,8 @@ class HorusTask(BaseTask):
             )
         )
 
+        store = ArtifactStore(self.target)
         for artifact in self.outputs:
-            artifact.delete()
+            await store.delete(artifact)
 
         self.runs = 0

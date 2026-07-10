@@ -20,8 +20,6 @@ Defines the Artifact base class, which represents a local file-backed
 artifact in the Horus runtime.
 """
 
-import hashlib
-import shutil
 from abc import abstractmethod
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Self
@@ -117,29 +115,6 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     registry.
     """
 
-    def exists(self) -> bool:
-        """
-        Checks if the artifact exists at the specified path.
-        """
-        return self.path.is_file()
-
-    @property
-    def hash(self) -> str | None:
-        """
-        Computes the hash of the file based on its contents. Returns None if
-        the file does not exist.
-        """
-        return self.hash_file(self.path).hex() if self.exists() else None
-
-    def delete(self) -> None:
-        """
-        Deletes the artifact from its location by deleting the file at the
-        specified path.
-        """
-        if self.exists():
-            self.path.unlink()
-            self._emit_event(ArtifactEventsEnum.DELETE)
-
     @model_validator(mode="after")
     def resolve_path(self) -> Self:
         """
@@ -175,27 +150,40 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         Write the native artifact representation to its canonical path.
         """
 
-    def package(self) -> Path:
+    def pack_command(self, src: str, pkg: str) -> str | None:
         """
-        Return the single-file package that transports should move.
-        """
-        if not self.exists():
-            raise FileNotFoundError(self.path)
+        Return a portable shell command that produces the single-file package
+        *pkg* from the artifact materialized at *src*, or ``None`` when the
+        artifact is already a single file (identity packaging).
 
-        self._emit_event(ArtifactEventsEnum.PACKAGE)
-        return self.path
-
-    def unpackage(self, package_path: Path) -> None:
+        The command is executed by
+        :class:`~horus_runtime.core.artifact.store.ArtifactStore` on the target
+        where the artifact lives, so it must be POSIX-portable and reference
+        only *src* and *pkg*. Both are target-side paths.
         """
-        Materialize a packaged artifact file at the canonical path.
-        """
-        package_path = package_path.resolve()
-        if package_path == self.path:
-            return
+        del src, pkg
+        return None
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(package_path, self.path)
-        self._emit_event(ArtifactEventsEnum.UNPACKAGE)
+    def unpack_command(self, pkg: str, dest: str) -> str | None:
+        """
+        Return a portable shell command that materializes the artifact at
+        *dest* from the single-file package *pkg*, or ``None`` when the
+        artifact is a single file (identity: the store moves *pkg* into place).
+
+        Executed by the :class:`.ArtifactStore` on the destination target; must
+        be POSIX-portable and reference only *pkg* and *dest*.
+        """
+        del pkg, dest
+        return None
+
+    def emit_event(self, event_name: ArtifactEventsEnum) -> None:
+        """
+        Emit the standard artifact event. Public entry point used by
+        :class:`~horus_runtime.core.artifact.store.ArtifactStore` after it
+        performs a filesystem operation (delete, package, unpackage) on behalf
+        of the artifact.
+        """
+        self._emit_event(event_name)
 
     def _emit_event(self, event_name: ArtifactEventsEnum) -> None:
         """
@@ -209,16 +197,3 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
                 event_name=event_name,
             )
         )
-
-    @staticmethod
-    def hash_file(path: Path) -> bytes:
-        """
-        Computes the hash of the file contents.
-        """
-        buffer = 65536
-        sha256 = hashlib.sha256()
-        with open(path, "rb") as f:
-            while chunk := f.read(buffer):
-                sha256.update(chunk)
-
-        return sha256.digest()

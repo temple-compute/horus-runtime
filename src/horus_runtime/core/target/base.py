@@ -20,6 +20,7 @@ The Horus target indicates where a task should be dispatched and executed.
 """
 
 import asyncio
+import shlex
 from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
@@ -381,3 +382,23 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             One :class:`.RemoteDirEntry` per top-level child, or an empty list
             if *path* does not exist or is not a directory.
         """
+
+    async def path_exists(self, path: str) -> bool:
+        """
+        Whether *path* exists on the target host (file or directory).
+
+        The default probes over a shell channel; targets that can answer
+        natively (local filesystem, SFTP, agent API) should override this.
+        """
+        out = await self.run_command_sync(f"test -e {shlex.quote(path)}")
+        return await out.wait() == 0
+
+    async def remove(self, path: str) -> None:
+        """
+        Remove *path* (file or directory, recursively) on the target host.
+
+        Idempotent: removing a missing path is not an error. The default runs
+        over a shell channel; targets that can answer natively should override.
+        """
+        out = await self.run_command_sync(f"rm -rf {shlex.quote(path)}")
+        await out.wait()

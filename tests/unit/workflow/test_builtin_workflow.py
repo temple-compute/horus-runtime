@@ -35,6 +35,7 @@ from horus_builtin.workflow.dag import UnknownTaskError
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -286,7 +287,12 @@ class TestWorkflowRun:
         wf = HorusWorkflow.from_yaml(wf_file)
 
         with (
-            patch.object(FileArtifact, "exists", return_value=True),
+            patch.object(
+                ArtifactStore,
+                "exists",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
             patch.object(HorusTask, "_run") as mock_run,
         ):
             await wf.run(trigger_id="test_task_id")
@@ -348,7 +354,9 @@ class TestWorkflowRun:
             ],
         )
 
-        with patch.object(FileArtifact, "exists", return_value=True):
+        with patch.object(
+            ArtifactStore, "exists", new_callable=AsyncMock, return_value=True
+        ):
             await wf.run(trigger_id="producer")
 
         # Two tasks, two calls

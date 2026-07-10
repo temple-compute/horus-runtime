@@ -328,6 +328,6 @@ class TestHorusTaskExecution:
         assert task.runs == 1
 
         # Reset the task
-        task.reset()
+        await task.reset()
 
         assert task.runs == 0

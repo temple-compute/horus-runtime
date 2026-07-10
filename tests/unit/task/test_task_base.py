@@ -52,13 +52,13 @@ class ConcreteTestTask(BaseTask):
         Test implementation of run method.
         """
 
-    def is_complete(self) -> bool:
+    async def is_complete(self) -> bool:
         """
         Always return True for testing purposes.
         """
         return True
 
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         """
         Do nothing for testing purposes.
         """
@@ -169,10 +169,10 @@ class TestBaseTaskValidation:
                 # for the autoregistry to work.
                 """
 
-                def is_complete(self) -> bool:
+                async def is_complete(self) -> bool:
                     return True
 
-                def _reset(self) -> None:
+                async def _reset(self) -> None:
                     pass
 
                 async def _run(self) -> None:
@@ -304,7 +304,7 @@ class TestBaseTaskReset:
     Tests for the reset / _reset contract on BaseTask.
     """
 
-    def test_reset_sets_status_to_idle(
+    async def test_reset_sets_status_to_idle(
         self,
     ) -> None:
         """
@@ -313,11 +313,11 @@ class TestBaseTaskReset:
         task = _make_concrete_task()
         task.status = TaskStatus.COMPLETED
 
-        task.reset()
+        await task.reset()
 
         assert task.status == TaskStatus.IDLE
 
-    def test_default_reset_is_noop(
+    async def test_default_reset_is_noop(
         self,
     ) -> None:
         """
@@ -327,6 +327,6 @@ class TestBaseTaskReset:
         task = _make_concrete_task()
 
         # Should not raise
-        task.reset()
+        await task.reset()
 
         assert task.status == TaskStatus.IDLE

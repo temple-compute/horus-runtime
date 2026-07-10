@@ -284,7 +284,7 @@ class TestFunctionTaskExecution:
         await task.run()
         assert task.runs == 1
 
-        task.reset()
+        await task.reset()
         assert task.runs == 0
 
     async def test_run_awaits_async_function(self) -> None:

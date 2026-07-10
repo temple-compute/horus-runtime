@@ -53,7 +53,7 @@ class ConcreteWorkflow(BaseWorkflow):
         """
         del trigger_id
 
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         """
         Reset the workflow to its initial state.
         """

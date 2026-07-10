@@ -25,6 +25,7 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.middleware.task_log_file import TaskLogFileMiddleware
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddlewareContext
@@ -32,15 +33,15 @@ from horus_runtime.middleware.task import TaskMiddlewareContext
 
 class _ConcreteTask(BaseTask):
     kind: str = "test_log_task"
-    target: LocalTarget = LocalTarget()
+    target: BaseTarget = LocalTarget()
 
-    async def _run(self) -> None:  # pragma: no cover - not exercised here
+    async def _run(self) -> None:
         pass
 
-    def is_complete(self) -> bool:
+    async def is_complete(self) -> bool:
         return False
 
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         pass
 
 

@@ -46,8 +46,8 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
     OrchestratorTargetNotSetError,
-    TransferStrategyNotFoundError,
 )
+from horus_runtime.core.transfer.generic import GenericTransfer
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
@@ -349,8 +349,6 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Raises:
             OrchestratorTargetNotSetError: When a root artifact cannot be
                 accessed by the destination and no orchestrator_target is set.
-            TransferStrategyNotFoundError: When no registered strategy handles
-                the resolved source → destination target pair.
         """
         if source_map is None:
             source_map = self._build_source_map()
@@ -374,14 +372,17 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             src_artifact = source.artifact if source is not None else None
             transfer_art = (src_artifact or artifact).model_copy()
 
-            # Look up the registered strategy for this (source, dest) pair.
+            # Look up the registered strategy for this (source, dest) pair,
+            # falling back to the target-agnostic GenericTransfer when no
+            # location-specific strategy is registered.
             strategy_cls = BaseTransferStrategy.get_from_registry(
                 source_target, task.target
             )
-            if strategy_cls is None:
-                raise TransferStrategyNotFoundError(
-                    source_target.kind, task.target.kind
-                )
+            strategy = (
+                strategy_cls()
+                if strategy_cls is not None
+                else GenericTransfer()
+            )
 
             horus_logger.log.debug(
                 _(
@@ -392,15 +393,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     "id": transfer_art.id,
                     "src": source_target.kind,
                     "dst": task.target.kind,
-                    "strategy": strategy_cls.__name__,
+                    "strategy": type(strategy).__name__,
                 }
             )
 
             # Perform the transfer, then point the consumer input at the
             # materialized location so its body templating resolves correctly.
-            await strategy_cls().transfer(
-                transfer_art, source_target, task.target
-            )
+            await strategy.transfer(transfer_art, source_target, task.target)
             artifact.path = transfer_art.path
 
     @property
@@ -580,7 +579,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
 
     @final
-    def reset(self) -> None:
+    async def reset(self) -> None:
         """
         Reset the workflow by deleting all output artifacts of all tasks in the
         workflow. This allows the workflow to be re-run from scratch.
@@ -590,10 +589,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             _("Resetting workflow %(workflow_name)s.")
             % {"workflow_name": self.name}
         )
-        self._reset()
+        await self._reset()
 
     @abstractmethod
-    def _reset(self) -> None:
+    async def _reset(self) -> None:
         """
         Subclass-specific reset logic. Override this in subclasses when
         additional state must be cleared on reset. Do not set ``self.status``
