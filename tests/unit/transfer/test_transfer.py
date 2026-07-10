@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.transfer.local_noop import LocalNoOpTransfer
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -214,3 +215,65 @@ class TestBaseTransferStrategy:
         destination = _UnregisteredTarget()
         result = BaseTransferStrategy.get_from_registry(source, destination)
         assert result is None
+
+
+class _OtherUnregisteredTarget(_UnregisteredTarget):
+    """A second target reporting a distinct ``location_id``."""
+
+    kind: str = "_test_other_target"
+    add_to_registry = False
+
+    @property
+    def location_id(self) -> str:
+        return "test://other"
+
+
+class _ExplodingTransfer(BaseTransferStrategy):
+    """A strategy whose ``_transfer`` must never run for same locations."""
+
+    add_to_registry = False
+
+    async def _transfer(
+        self,
+        artifact: BaseArtifact,
+        source: BaseTarget,
+        destination: BaseTarget,
+    ) -> None:
+        """Fail loudly if ever reached."""
+        del artifact, source, destination
+        raise AssertionError("_transfer ran for a same-filesystem pair")
+
+
+@pytest.mark.unit
+class TestSameFilesystemShortCircuit:
+    """
+    The same-filesystem shortcut lives in ``transfer()``, so it applies to
+    every strategy uniformly and no strategy has to implement it.
+    """
+
+    async def test_same_location_skips_strategy_and_repoints(self) -> None:
+        """
+        Equal ``location_id``: ``_transfer`` is never called and the artifact
+        is repointed at its destination ``path_on_target``.
+        """
+        source = _UnregisteredTarget()
+        destination = _UnregisteredTarget()
+        assert source.location_id == destination.location_id
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        await _ExplodingTransfer().transfer(artifact, source, destination)
+
+        assert artifact.path == Path(destination.path_on_target(artifact))
+
+    async def test_distinct_location_runs_strategy(self) -> None:
+        """
+        Distinct ``location_id``: the shortcut does not fire, so the strategy's
+        ``_transfer`` actually runs.
+        """
+        source = _UnregisteredTarget()
+        destination = _OtherUnregisteredTarget()
+        assert source.location_id != destination.location_id
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        with pytest.raises(AssertionError, match="same-filesystem"):
+            await _ExplodingTransfer().transfer(artifact, source, destination)

@@ -28,6 +28,7 @@ values such as ``"local.local"``.
 """
 
 from abc import abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_runtime.middleware.transfer import (
@@ -71,7 +72,18 @@ class BaseTransferStrategy[
     ) -> None:
         """
         Transfer *artifact* from *source* target to *destination* target.
+
+        When both targets share a filesystem (equal ``location_id``) there is
+        nothing to move: the artifact is already reachable on the destination,
+        so it is repointed at its on-target path and no strategy runs. This
+        same-filesystem shortcut lives here, at the single entry point every
+        transfer goes through, so no individual strategy has to re-implement
+        it.
         """
+        if source.location_id == destination.location_id:
+            artifact.path = Path(destination.path_on_target(artifact))
+            return
+
         await TransferMiddleware.call_with_middleware(
             TransferMiddlewareContext(
                 transfer_strategy=self,

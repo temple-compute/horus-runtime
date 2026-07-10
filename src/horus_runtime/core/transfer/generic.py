@@ -54,17 +54,11 @@ class GenericTransfer(BaseTransferStrategy):
         """
         Transfer *artifact* from *source* to *destination*.
 
-        Short-circuits when both targets share a filesystem (same
-        ``location_id``); otherwise packages on the source, streams the single
-        package file through the orchestrator, and unpackages on the
-        destination.
+        Packages on the source, streams the single package file through the
+        orchestrator, and unpackages on the destination. The same-filesystem
+        case (equal ``location_id``) is handled upstream by
+        :meth:`BaseTransferStrategy.transfer` and never reaches here.
         """
-        # Same filesystem: nothing to move, just point the artifact at where
-        # the destination expects to find it.
-        if source.location_id == destination.location_id:
-            artifact.path = Path(destination.path_on_target(artifact))
-            return
-
         src_store = ArtifactStore(source)
         dst_store = ArtifactStore(destination)
 
