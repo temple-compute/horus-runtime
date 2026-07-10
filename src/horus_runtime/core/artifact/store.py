@@ -21,58 +21,19 @@ Mediator between artifacts and the filesystem where they physically live.
 An artifact's existence and lifecycle depend on *where* it materializes, which
 is owned by the target. The :class:`ArtifactStore` binds an artifact to a
 target and performs those operations through the target's artifact-agnostic
-filesystem primitives, so neither
-:class:`~horus_runtime.core.artifact.base.BaseArtifact` nor
-:class:`~horus_runtime.core.target.base.BaseTarget` has to carry the
-cross-cutting logic.
+filesystem primitives.
 """
 
 import shlex
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
-    from horus_runtime.core.target.channel import ChannelProcess
-
-
-@runtime_checkable
-class TargetFilesystem(Protocol):
-    """
-    The minimal filesystem surface an :class:`ArtifactStore` needs from a
-    target. :class:`~horus_runtime.core.target.base.BaseTarget` satisfies this
-    structurally.
-    """
-
-    @property
-    def resolved_working_directory(self) -> str:
-        """Base directory on the target for per-run generated files."""
-        ...
-
-    def path_on_target(self, artifact: "BaseArtifact") -> str:
-        """Absolute path where *artifact* lives on the target's filesystem."""
-        ...
-
-    async def path_exists(self, path: str) -> bool:
-        """Whether *path* exists on the target's filesystem."""
-        ...
-
-    async def remove(self, path: str) -> None:
-        """Remove *path* (file or directory) on the target's filesystem."""
-        ...
-
-    async def run_command_sync(
-        self,
-        cmd: str,
-        *,
-        cwd: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> "ChannelProcess":
-        """Run *cmd* synchronously on the target over a live channel."""
-        ...
 
 
 class ArtifactStore:
@@ -81,7 +42,7 @@ class ArtifactStore:
     target.
     """
 
-    def __init__(self, target: TargetFilesystem) -> None:
+    def __init__(self, target: BaseTarget) -> None:
         self.target = target
 
     async def exists(self, artifact: "BaseArtifact") -> bool:

@@ -29,7 +29,9 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.artifact.store import ArtifactStore, TargetFilesystem
+from horus_runtime.core.artifact.store import (
+    ArtifactStore,
+)
 from horus_runtime.core.transfer.generic import GenericTransfer
 
 
@@ -57,12 +59,8 @@ class _FarLocalTarget(LocalTarget):
 @pytest.mark.unit
 class TestLocalTargetFilesystemPrimitives:
     """
-    LocalTarget must satisfy the TargetFilesystem protocol natively.
+    LocalTarget must satisfy everything needed for the ArtifactStore.
     """
-
-    def test_local_target_satisfies_protocol(self) -> None:
-        """LocalTarget structurally implements TargetFilesystem."""
-        assert isinstance(LocalTarget(), TargetFilesystem)
 
     async def test_path_exists_for_file_and_dir(self) -> None:
         """path_exists is True for files and directories, False otherwise."""
