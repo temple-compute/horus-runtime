@@ -23,11 +23,10 @@ HorusWorkflow implementation for Horus built-in workflows.
 from typing import ClassVar
 
 from horus_builtin.target.local import LocalTarget
-from horus_builtin.workflow.dag import execution_plan
+from horus_builtin.workflow.scheduler import run_schedule
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
-from horus_runtime.logging import horus_logger
 
 
 class HorusWorkflow(BaseWorkflow):
@@ -55,47 +54,16 @@ class HorusWorkflow(BaseWorkflow):
 
     async def _run(self, trigger_id: str) -> None:
         """
-        A task is skipped when all of
-        its output artifacts exist (see :meth:`is_complete`).
+        Dispatch tasks via the concurrent ready-set scheduler.
+
+        A task is skipped when all of its output artifacts exist (see
+        :meth:`is_complete`). Every task whose dependencies are satisfied
+        runs as soon as it is ready, concurrently with any other ready task
+        (bounded by :attr:`max_concurrency` when set); see
+        :func:`horus_builtin.workflow.scheduler.run_schedule` for the
+        scheduling loop itself.
         """
-        tasks = {task.id: task for task in self.tasks}
-
-        # No edges means no dependencies: every task runs independently and the
-        # plan is limited to the trigger's own (singleton) scope. Flag it so a
-        # workflow that forgot to wire its edges is diagnosable.
-        if len(self.tasks) > 1 and not self.edges:
-            horus_logger.log.debug(
-                _(
-                    "Workflow %(name)s has multiple tasks but no edges; "
-                    "tasks run independently with no ordering."
-                )
-                % {"name": self.name}
-            )
-
-        plan = execution_plan(
-            self.tasks, trigger_id=trigger_id, edges=self.edges
-        )
-
-        # The edge source map depends only on workflow structure, so build it
-        # once and reuse it for every task instead of rebuilding per task.
-        source_map = self._build_source_map()
-
-        for task_id in plan:
-            task = tasks[task_id]
-
-            # Associate the task with its target before any transfer so
-            # resource-aware targets (which may provision lazily at transfer
-            # time, before dispatch) can read task.resources.
-            task.target.bind(task)
-
-            # Transfer input artifacts to the task's target as needed.
-            await self.transfer_artifacts(task, source_map)
-
-            # Execute the task on its target
-            await task.target.dispatch(task)
-
-            # Wait for the task to complete and check for failure
-            await task.target.wait()
+        await run_schedule(self, trigger_id)
 
     async def _reset(self) -> None:
         """

@@ -152,12 +152,32 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     ``run()``; do not set manually.
     """
 
+    max_concurrency: int | None = None
+    """
+    Upper bound on the number of tasks the scheduler dispatches at once.
+    ``None`` (the default) means unbounded: every task that becomes ready is
+    dispatched immediately. Set this to cap resource usage (e.g. a shared
+    machine with limited CPUs) when the DAG's natural parallelism would
+    otherwise over-subscribe it.
+    """
+
     _base_directory: Path | None = PrivateAttr(default=None)
     """
     Directory relative paths are anchored to (the run directory and, through
     it, artifact paths and logs). Set to the workflow YAML's folder by
     :meth:`from_yaml`; ``None`` for programmatically-built workflows, which
     fall back to the process CWD. Runtime-only state, not serialized.
+    """
+
+    _revision: int = PrivateAttr(default=0)
+    """
+    Monotonically increasing counter for the workflow's DAG structure
+    (tasks/edges/artifacts). Nothing bumps it yet: today the DAG is fixed for
+    the lifetime of a run, so it is built once and stays at ``0``. It exists
+    so a future dynamic-DAG feature (fan-out/map/loops) can increment it when
+    mutating the graph mid-run, and the scheduler's cached source map (see
+    :meth:`cached_source_map`) picks up the change without any changes to the
+    scheduler itself.
     """
 
     @model_validator(mode="after")
@@ -317,6 +337,23 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     None, roots_by_id.get(edge.source_output)
                 )
         return source_map
+
+    def cached_source_map(
+        self,
+        cached: tuple[int, dict[tuple[str, str], _EdgeSource]] | None,
+    ) -> tuple[int, dict[tuple[str, str], _EdgeSource]]:
+        """
+        Return ``(self._revision, source_map)``, rebuilding the source map
+        only when ``_revision`` has advanced past *cached*.
+
+        Intended for callers (namely the scheduler) that need the source map
+        across several iterations of a run: pass back the tuple you got last
+        time and only a genuinely stale cache triggers a rebuild via
+        :meth:`_build_source_map`. Passing ``None`` always rebuilds.
+        """
+        if cached is not None and cached[0] == self._revision:
+            return cached
+        return self._revision, self._build_source_map()
 
     async def transfer_artifacts(
         self,
