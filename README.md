@@ -3,20 +3,51 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%20%E2%80%94%203.14-blue.svg)](https://www.python.org/downloads/)
 
-horus-runtime is the command-line engine for the Temple Compute platform, a workflow manager designed for High Performance Computing. It enables the creation, management, and execution of complex workflows, especially scientific computing, without any GUI dependencies.
+horus-runtime is the command-line engine for the Temple Compute platform, a workflow manager designed for High Performance Computing. It enables the creation, management, and execution of complex workflows, especially scientific computing.
 
 - **Modular & Extensible:** Designed for integration, automation, and extension via Python.
-- **Open & Free:** Developed by Temple Compute.
 
 ## Features
 
 - **Workflow Execution:** Run and manage scientific workflows from the terminal.
 - **Modular Blocks:** Compose workflows from reusable, autonomous blocks.
 - **Remote Execution:** Configure targets to offload calculations.
-- **Extensible:** Build and share your own blocks and extensions using the Python API.
+- **Extensible:** Build and share your own blocks and extensions using the horus-runtime library.
 - **Reproducibility:** Share and version your workflows, including all state and configuration.
 
 <img width="1600" height="1202" alt="Horus Runtime TUI" src="https://github.com/user-attachments/assets/8f6a5f77-c0fa-48bf-b82b-5683af1caec4" />
+
+## Workflows Library
+
+Check out the [Pantheon](https://github.com/temple-compute/pantheon/) repository for a curated library of production-ready workflows, from drug discovery (Boltz-2 virtual screening, AutoDock Vina docking) to molecular dynamics setup with BioExcel Building Blocks (GROMACS, AMBER). Contributions are welcomed.
+
+## How to Run horus-runtime
+
+You can find full documentation on the SDK and the command line interface at: [docs.templecompute.com](https://docs.templecompute.com)
+
+### Installation
+
+Using `uv` (recommended):
+
+```bash
+uv add horus-runtime
+```
+
+Or with plain `pip`:
+
+```bash
+pip install horus-runtime
+```
+
+Some workflows (e.g. BioExcel-based ones) also require a conda-family tool (`micromamba`, `mamba`, or `conda`) on your `PATH` to build simulation environments.
+
+### Quick Start
+
+```bash
+horus run workflow.yaml
+```
+
+This executes the pipeline defined in `workflow.yaml`, routing each stage to the configured compute target (local, SSH remote, or HPC cluster).
 
 ## Development
 
