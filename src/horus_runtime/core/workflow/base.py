@@ -46,6 +46,11 @@ from horus_builtin.workflow.dag import (
     topological_sort,
     would_create_cycle,
 )
+from horus_builtin.workflow.loop import (
+    LoopController,
+    loop_task,
+    lower_loop_entry,
+)
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -248,6 +253,67 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             gather=gather,
             over=over,
             range=range,
+            index_input=index_input,
+            name=name,
+            target=target,
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lower_loop_tasks(cls, data: object) -> object:
+        """
+        Lower any task carrying a ``loop:`` block into a ``loop_controller``
+        task, before normal per-task ``kind``-discriminated parsing runs.
+
+        See :func:`horus_builtin.workflow.loop.lower_loop_entry`. A no-op
+        for workflows with no ``loop:`` tasks, including already-lowered,
+        round-tripped ones (``to_yaml`` dumps a ``LoopController`` in its
+        native ``kind: loop_controller`` form, not back into ``loop:``
+        block syntax) and direct Python construction with real task
+        objects.
+        """
+        if not isinstance(data, dict):
+            return data
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return data
+        if not any(isinstance(t, dict) and "loop" in t for t in tasks):
+            return data
+
+        new_tasks: list[object] = [
+            lower_loop_entry(entry)
+            if isinstance(entry, dict) and "loop" in entry
+            else entry
+            for entry in tasks
+        ]
+
+        return {**data, "tasks": new_tasks}
+
+    def loop(
+        self,
+        *,
+        id: str,
+        body: BaseTask,
+        until: str,
+        max_iterations: int,
+        index_input: str | None = None,
+        name: str | None = None,
+        target: BaseTarget | None = None,
+    ) -> LoopController:
+        """
+        Append a declarative conditional-repeat loop task to this workflow.
+
+        Thin delegate to :func:`horus_builtin.workflow.loop.loop_task`; see
+        its docstring for the full parameter reference. Equivalent to
+        authoring a ``loop:`` block in YAML (see
+        :func:`horus_builtin.workflow.loop.lower_loop_entry`).
+        """
+        return loop_task(
+            self,
+            id=id,
+            body=body,
+            until=until,
+            max_iterations=max_iterations,
             index_input=index_input,
             name=name,
             target=target,
