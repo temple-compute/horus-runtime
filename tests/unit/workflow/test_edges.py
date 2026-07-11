@@ -34,7 +34,11 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
-from horus_builtin.workflow.dag import CyclicDependencyError, execution_plan
+from horus_builtin.workflow.dag import (
+    CyclicDependencyError,
+    build_dependencies,
+    execution_plan,
+)
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
@@ -68,7 +72,12 @@ def _task(
 
 
 def _edge(
-    source: str, source_output: str, target: str, target_input: str
+    source: str,
+    source_output: str,
+    target: str,
+    target_input: str,
+    *,
+    transfer: bool = True,
 ) -> WorkflowEdge:
     """Build a WorkflowEdge from the four endpoint ids."""
     return WorkflowEdge(
@@ -76,6 +85,7 @@ def _edge(
         source_output=source_output,
         target=target,
         target_input=target_input,
+        transfer=transfer,
     )
 
 
@@ -435,5 +445,140 @@ class TestEdgeValidation:
                 edges=[
                     _edge("p1", "o1", "c", "in"),
                     _edge("p2", "o2", "c", "in"),
+                ],
+            )
+
+
+@pytest.mark.unit
+class TestOrderingOnlyEdges:
+    """
+    ``transfer=False`` edges express dependency ordering without feeding a
+    transfer source, so several may (eventually, for many-to-one fan-in) all
+    order-gate the same consumer input.
+    """
+
+    def test_ordering_only_edge_resolves_and_orders(
+        self, tmp_path: Path
+    ) -> None:
+        """A transfer=False edge still creates a DAG dependency."""
+        producer = _task(
+            task_id="producer",
+            inputs=[],
+            outputs=[FileArtifact(id="out", path=tmp_path / "p.txt")],
+        )
+        consumer = _task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        edges = [_edge("producer", "out", "consumer", "in", transfer=False)]
+        wf = HorusWorkflow(
+            name="ordering_only", tasks=[producer, consumer], edges=edges
+        )
+        assert wf.edges[0].transfer is False
+
+        plan = execution_plan(
+            [consumer, producer], trigger_id="producer", edges=edges
+        )
+        assert plan == ["producer", "consumer"]
+
+    def test_two_ordering_only_edges_into_same_input_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Two transfer=False edges may feed one input (no
+        DuplicateEdgeTargetError), and neither contributes a transfer source.
+        """
+        p1 = _task(
+            task_id="p1",
+            inputs=[],
+            outputs=[FileArtifact(id="o1", path=tmp_path / "1.txt")],
+        )
+        p2 = _task(
+            task_id="p2",
+            inputs=[],
+            outputs=[FileArtifact(id="o2", path=tmp_path / "2.txt")],
+        )
+        c = _task(
+            task_id="c",
+            inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        edges = [
+            _edge("p1", "o1", "c", "in", transfer=False),
+            _edge("p2", "o2", "c", "in", transfer=False),
+        ]
+        wf = HorusWorkflow(name="fan_in", tasks=[p1, p2, c], edges=edges)
+
+        # Ordering still holds for both producers.
+        deps = build_dependencies(wf.tasks, wf.edges)
+        assert deps["c"] == {"p1", "p2"}
+
+        # No transfer source is registered for the fed input.
+        source_map = wf._build_source_map()
+        assert ("c", "in") not in source_map
+
+    def test_transfer_and_ordering_only_edge_coexist(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        One transfer=True edge plus one transfer=False edge into the same
+        input is allowed; the source map resolves only the transfer edge.
+        """
+        p1 = _task(
+            task_id="p1",
+            inputs=[],
+            outputs=[FileArtifact(id="o1", path=tmp_path / "1.txt")],
+        )
+        p2 = _task(
+            task_id="p2",
+            inputs=[],
+            outputs=[FileArtifact(id="o2", path=tmp_path / "2.txt")],
+        )
+        c = _task(
+            task_id="c",
+            inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        edges = [
+            _edge("p1", "o1", "c", "in", transfer=True),
+            _edge("p2", "o2", "c", "in", transfer=False),
+        ]
+        wf = HorusWorkflow(name="mixed", tasks=[p1, p2, c], edges=edges)
+
+        deps = build_dependencies(wf.tasks, wf.edges)
+        assert deps["c"] == {"p1", "p2"}
+
+        source_map = wf._build_source_map()
+        source = source_map[("c", "in")]
+        assert source.artifact is not None
+        assert source.artifact.id == "o1"
+
+    def test_two_transfer_edges_into_same_input_still_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """Two transfer=True edges into one input are still rejected."""
+        p1 = _task(
+            task_id="p1",
+            inputs=[],
+            outputs=[FileArtifact(id="o1", path=tmp_path / "1.txt")],
+        )
+        p2 = _task(
+            task_id="p2",
+            inputs=[],
+            outputs=[FileArtifact(id="o2", path=tmp_path / "2.txt")],
+        )
+        c = _task(
+            task_id="c",
+            inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        with pytest.raises(DuplicateEdgeTargetError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[p1, p2, c],
+                edges=[
+                    _edge("p1", "o1", "c", "in", transfer=True),
+                    _edge("p2", "o2", "c", "in", transfer=True),
                 ],
             )
