@@ -24,7 +24,7 @@ executing tasks, and should be ingested by the executor.
 from abc import abstractmethod
 from asyncio import CancelledError
 from pathlib import Path
-from typing import ClassVar, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from pydantic import Field, model_validator
 
@@ -42,6 +42,9 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import AutoRegistry
+
+if TYPE_CHECKING:
+    from horus_runtime.core.workflow.base import BaseWorkflow
 
 
 class BaseTask(AutoRegistry, entry_point="task"):
@@ -172,6 +175,25 @@ class BaseTask(AutoRegistry, entry_point="task"):
         return (
             Path(self.target.resolved_working_directory) / self.id
         ).as_posix()
+
+    @property
+    def workflow(self) -> "BaseWorkflow | None":
+        """
+        The live workflow this task belongs to, when running inside one.
+
+        Convenience accessor for the current :class:`HorusContext`'s
+        workflow (set by :meth:`BaseWorkflow.run` for the duration of a run),
+        so a running task's body can reach the DAG-mutation API without
+        importing ``HorusContext`` itself, e.g.::
+
+            def my_step(task: BaseTask) -> None:
+                assert task.workflow is not None
+                task.workflow.add_task(...)
+                task.workflow.add_edge(...)
+
+        ``None`` outside of a workflow run.
+        """
+        return HorusContext.get_context().workflow
 
     @property
     def side_artifacts_dir(self) -> str:

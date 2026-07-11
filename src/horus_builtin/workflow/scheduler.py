@@ -206,8 +206,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         CyclicDependencyError: If the tasks in scope cannot all be
             scheduled (a cycle keeps the remainder permanently blocked).
     """
-    tasks_by_id = {task.id: task for task in workflow.tasks}
-    if trigger_id not in tasks_by_id:
+    if trigger_id not in {task.id for task in workflow.tasks}:
         raise UnknownTaskError(
             _("Trigger task '%(trigger_id)s' not found.")
             % {"trigger_id": trigger_id}
@@ -239,9 +238,13 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     running: dict[asyncio.Task[None], str] = {}
 
     while True:
-        # Recomputed every iteration (instead of once up front) so a future
-        # DAG-mutation PR can grow `workflow.tasks`/`workflow.edges` mid-run
-        # without any change to this loop.
+        # Recomputed every iteration (instead of once up front) so the
+        # runtime DAG-mutation API (BaseWorkflow.add_task/add_edge/expand)
+        # can grow `workflow.tasks`/`workflow.edges` mid-run without any
+        # further change to this loop: `tasks_by_id` must be rebuilt here
+        # too, otherwise a task added after the loop started would compute
+        # as "ready" below but be missing from a stale lookup.
+        tasks_by_id = {task.id: task for task in workflow.tasks}
         deps = build_dependencies(workflow.tasks, workflow.edges)
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 

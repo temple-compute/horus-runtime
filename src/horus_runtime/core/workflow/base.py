@@ -40,6 +40,12 @@ from uuid import UUID, uuid4
 import yaml
 from pydantic import Field, PrivateAttr, model_validator
 
+from horus_builtin.workflow.dag import (
+    CyclicDependencyError,
+    build_dependencies,
+    topological_sort,
+    would_create_cycle,
+)
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
@@ -180,17 +186,43 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     scheduler itself.
     """
 
+    @staticmethod
+    def _assert_unique_task_ids(tasks: list[BaseTask]) -> None:
+        """
+        Raise :exc:`TaskIdsAreNotUniqueError` if any two tasks in *tasks*
+        share an id. Shared by the construction-time validator
+        (:meth:`check_unique_task_ids`) and the incremental mutators
+        (:meth:`add_task`, :meth:`expand`) so both paths enforce the same
+        rule.
+        """
+        seen_ids: set[str] = set()
+        for task in tasks:
+            if task.id in seen_ids:
+                raise TaskIdsAreNotUniqueError(task.id)
+            seen_ids.add(task.id)
+
+    @staticmethod
+    def _assert_unique_artifact_ids(artifacts: list[BaseArtifact]) -> None:
+        """
+        Raise :exc:`ArtifactIdsAreNotUniqueError` if any two artifacts in
+        *artifacts* share an id. Shared by the construction-time validator
+        (:meth:`check_unique_artifact_ids`) and the incremental mutators
+        (:meth:`add_artifact`, :meth:`add_task`, :meth:`expand`) so both
+        paths enforce the same rule.
+        """
+        seen_ids: set[str] = set()
+        for artifact in artifacts:
+            if artifact.id in seen_ids:
+                raise ArtifactIdsAreNotUniqueError(artifact.id)
+            seen_ids.add(artifact.id)
+
     @model_validator(mode="after")
     def check_unique_task_ids(self) -> Self:
         """
         Validates that all tasks have unique ids. This is required for correct
         dependency resolution and execution.
         """
-        seen_ids = set()
-        for task in self.tasks:
-            if task.id in seen_ids:
-                raise TaskIdsAreNotUniqueError(task.id)
-            seen_ids.add(task.id)
+        self._assert_unique_task_ids(self.tasks)
         return self
 
     @model_validator(mode="after")
@@ -202,27 +234,55 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         on ``(task id, output id)`` and task ids are unique, so the same
         reusable task can be placed more than once.
         """
-
-        def _check_unique_artifact_ids(artifacts: list[BaseArtifact]) -> None:
-            """
-            Helper function to check for unique artifact ids within a list of
-            artifacts. Raises an error if duplicates are found.
-            """
-            seen_ids: set[str] = set()
-            for artifact in artifacts:
-                if artifact.id in seen_ids:
-                    raise ArtifactIdsAreNotUniqueError(artifact.id)
-                seen_ids.add(artifact.id)
-
         # Root artifacts must have unique ids across the workflow.
-        _check_unique_artifact_ids(self.artifacts)
+        self._assert_unique_artifact_ids(self.artifacts)
 
         # Output and input artifacts must have unique ids within each task.
         for task in self.tasks:
-            _check_unique_artifact_ids(task.outputs)
-            _check_unique_artifact_ids(task.inputs)
+            self._assert_unique_artifact_ids(task.outputs)
+            self._assert_unique_artifact_ids(task.inputs)
 
         return self
+
+    @staticmethod
+    def _assert_edge_target_resolves(
+        edge: WorkflowEdge,
+        task_inputs: dict[str, set[str]],
+    ) -> None:
+        """
+        Raise :exc:`UnknownEdgeEndpointError` unless *edge* targets a real
+        task and one of its declared input ids. Shared by
+        :meth:`check_edges_resolve`, :meth:`add_edge`, and :meth:`expand`.
+        """
+        if edge.target not in task_inputs:
+            raise UnknownEdgeEndpointError("target task", edge.target)
+        if edge.target_input not in task_inputs[edge.target]:
+            raise UnknownEdgeEndpointError("target input", edge.target_input)
+
+    @staticmethod
+    def _assert_edge_source_resolves(
+        edge: WorkflowEdge,
+        task_outputs: dict[str, set[str]],
+        root_ids: set[str],
+    ) -> None:
+        """
+        Raise :exc:`UnknownEdgeEndpointError` unless *edge* sources a real
+        task output, or a root artifact via the ``artifact-<rootId>``
+        convention. Shared by :meth:`check_edges_resolve`, :meth:`add_edge`,
+        and :meth:`expand`.
+        """
+        if edge.source in task_outputs:
+            if edge.source_output not in task_outputs[edge.source]:
+                raise UnknownEdgeEndpointError(
+                    "source output", edge.source_output
+                )
+        elif edge.source.startswith("artifact-"):
+            if edge.source_output not in root_ids:
+                raise UnknownEdgeEndpointError(
+                    "root artifact", edge.source_output
+                )
+        else:
+            raise UnknownEdgeEndpointError("source task", edge.source)
 
     @model_validator(mode="after")
     def check_edges_resolve(self) -> Self:
@@ -244,13 +304,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         seen_targets: set[tuple[str, str]] = set()
         for edge in self.edges:
-            # Target must resolve to a real task input.
-            if edge.target not in task_inputs:
-                raise UnknownEdgeEndpointError("target task", edge.target)
-            if edge.target_input not in task_inputs[edge.target]:
-                raise UnknownEdgeEndpointError(
-                    "target input", edge.target_input
-                )
+            self._assert_edge_target_resolves(edge, task_inputs)
 
             # At most one edge may feed a given consumer input.
             key = (edge.target, edge.target_input)
@@ -258,21 +312,213 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 raise DuplicateEdgeTargetError(edge.target, edge.target_input)
             seen_targets.add(key)
 
-            # Source must resolve to a task output or a root artifact.
-            if edge.source in task_outputs:
-                if edge.source_output not in task_outputs[edge.source]:
-                    raise UnknownEdgeEndpointError(
-                        "source output", edge.source_output
-                    )
-            elif edge.source.startswith("artifact-"):
-                if edge.source_output not in root_ids:
-                    raise UnknownEdgeEndpointError(
-                        "root artifact", edge.source_output
-                    )
-            else:
-                raise UnknownEdgeEndpointError("source task", edge.source)
+            self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
         return self
+
+    # -- Runtime DAG mutation -------------------------------------------
+    #
+    # The validators above run once, at construction. The methods below let
+    # code — typically a task's own body, reached via ``BaseTask.workflow``
+    # — grow the live DAG mid-run: add a task, wire an edge, register a root
+    # artifact, or commit a whole batch of these atomically. Each performs
+    # the same checks the constructor's validators would, but incrementally
+    # (against the current graph, not by re-validating the whole model), and
+    # bumps ``_revision`` so the scheduler's cached source map (see
+    # :meth:`cached_source_map`) picks up the change. The scheduler itself
+    # already recomputes dependencies/scope from ``self.tasks``/``self.edges``
+    # every loop iteration, so a mutation applied while a task is running
+    # takes effect on the next iteration with no further plumbing.
+
+    def add_artifact(self, artifact: BaseArtifact) -> None:
+        """
+        Add a standalone root artifact to the live workflow.
+
+        Incremental version of the root-artifact-id check in
+        :meth:`check_unique_artifact_ids`: *artifact*'s id must not collide
+        with an existing root artifact id. On success, appends the artifact
+        and bumps :attr:`_revision`.
+
+        Raises:
+            ArtifactIdsAreNotUniqueError: If ``artifact.id`` collides with an
+                existing root artifact id.
+        """
+        self._assert_unique_artifact_ids([*self.artifacts, artifact])
+        self.artifacts.append(artifact)
+        self._revision += 1
+
+    def add_task(self, task: BaseTask) -> None:
+        """
+        Add a task to the live workflow.
+
+        Incremental version of :meth:`check_unique_task_ids` and
+        :meth:`check_unique_artifact_ids`: *task*'s id must not collide with
+        an existing task id, and its own inputs/outputs must each be unique
+        among themselves. The task is then anchored exactly like a
+        construction-time task (see :meth:`_anchor_task`: absolute artifact
+        paths, local runtime paths, inherited working directory), appended,
+        and :attr:`_revision` is bumped.
+
+        Safe to call from inside a running task, e.g.::
+
+            def my_step(task: BaseTask) -> None:
+                assert task.workflow is not None
+                task.workflow.add_task(new_task)
+
+        The scheduler recomputes scope and dependencies from
+        ``self.tasks``/``self.edges`` every loop iteration, so the new task
+        is picked up automatically once an edge (see :meth:`add_edge`) makes
+        it reachable from the running trigger.
+
+        Raises:
+            TaskIdsAreNotUniqueError: If ``task.id`` collides with an
+                existing task id.
+            ArtifactIdsAreNotUniqueError: If two of the task's own inputs, or
+                two of its own outputs, share an id.
+        """
+        self._assert_unique_task_ids([*self.tasks, task])
+        self._assert_unique_artifact_ids(task.outputs)
+        self._assert_unique_artifact_ids(task.inputs)
+
+        self.tasks.append(task)
+        self._anchor_task(task)
+        self._revision += 1
+
+    def add_edge(self, edge: WorkflowEdge) -> None:
+        """
+        Add one edge to the live workflow's DAG.
+
+        Incremental version of :meth:`check_edges_resolve` for a single
+        edge: both endpoints must resolve against the current
+        tasks/artifacts, no other edge may already feed the same
+        ``(target, target_input)``, and the edge must not close a cycle
+        (:func:`~horus_builtin.workflow.dag.would_create_cycle`). On
+        success, appends the edge and bumps :attr:`_revision`.
+
+        Raises:
+            UnknownEdgeEndpointError: If the target task/input, or the
+                source task/output/root-artifact, does not exist.
+            DuplicateEdgeTargetError: If another edge already feeds
+                ``(edge.target, edge.target_input)``.
+            CyclicDependencyError: If appending the edge would create a
+                cycle.
+        """
+        task_inputs = {t.id: {a.id for a in t.inputs} for t in self.tasks}
+        task_outputs = {t.id: {a.id for a in t.outputs} for t in self.tasks}
+        root_ids = {a.id for a in self.artifacts}
+
+        self._assert_edge_target_resolves(edge, task_inputs)
+        if any(
+            e.target == edge.target and e.target_input == edge.target_input
+            for e in self.edges
+        ):
+            raise DuplicateEdgeTargetError(edge.target, edge.target_input)
+        self._assert_edge_source_resolves(edge, task_outputs, root_ids)
+
+        if would_create_cycle(self.edges, edge, self.tasks):
+            raise CyclicDependencyError(
+                _(
+                    "Adding edge from '%(source)s.%(source_output)s' to "
+                    "'%(target)s.%(target_input)s' would create a cycle."
+                )
+                % {
+                    "source": edge.source,
+                    "source_output": edge.source_output,
+                    "target": edge.target,
+                    "target_input": edge.target_input,
+                }
+            )
+
+        self.edges.append(edge)
+        self._revision += 1
+
+    def expand(
+        self,
+        *,
+        tasks: list[BaseTask] | None = None,
+        edges: list[WorkflowEdge] | None = None,
+        artifacts: list[BaseArtifact] | None = None,
+    ) -> None:
+        """
+        Atomically add a batch of tasks, root artifacts, and edges to the
+        live workflow.
+
+        Unlike calling :meth:`add_task`/:meth:`add_edge`/:meth:`add_artifact`
+        one at a time, the whole batch is validated against the *combined*
+        (current + new) graph before anything is committed, so edges within
+        the batch may reference tasks/artifacts also being added in the same
+        batch (e.g. a fan-out expander adding N mapped tasks plus the edges
+        wiring them to an existing join task). If any check fails, nothing
+        is appended — the workflow is left exactly as it was.
+
+        Validates, in order: task id uniqueness (existing + new), per-task
+        input/output id uniqueness for each new task, root artifact id
+        uniqueness (existing + new), every new edge resolving against the
+        combined tasks/artifacts with no duplicate ``(target, target_input)``
+        (existing or within the batch), and no cycle anywhere in the
+        resulting graph.
+
+        On success, every new task is anchored exactly like
+        :meth:`add_task` anchors a single task, everything is appended, and
+        :attr:`_revision` is bumped once for the whole batch.
+
+        Raises:
+            TaskIdsAreNotUniqueError: If a new task's id collides with an
+                existing task id or another new task.
+            ArtifactIdsAreNotUniqueError: If a new task's own inputs/outputs
+                collide, or a new root artifact's id collides with an
+                existing or another new root artifact.
+            UnknownEdgeEndpointError: If a new edge's target or source does
+                not resolve against the combined graph.
+            DuplicateEdgeTargetError: If a new edge duplicates the
+                ``(target, target_input)`` of an existing or another new
+                edge.
+            CyclicDependencyError: If the resulting graph contains a cycle.
+        """
+        new_tasks = tasks or []
+        new_edges = edges or []
+        new_artifacts = artifacts or []
+
+        combined_tasks = [*self.tasks, *new_tasks]
+        combined_artifacts = [*self.artifacts, *new_artifacts]
+
+        self._assert_unique_task_ids(combined_tasks)
+        for task in new_tasks:
+            self._assert_unique_artifact_ids(task.outputs)
+            self._assert_unique_artifact_ids(task.inputs)
+        self._assert_unique_artifact_ids(combined_artifacts)
+
+        task_inputs = {t.id: {a.id for a in t.inputs} for t in combined_tasks}
+        task_outputs = {
+            t.id: {a.id for a in t.outputs} for t in combined_tasks
+        }
+        root_ids = {a.id for a in combined_artifacts}
+
+        seen_targets = {(e.target, e.target_input) for e in self.edges}
+        for edge in new_edges:
+            self._assert_edge_target_resolves(edge, task_inputs)
+
+            key = (edge.target, edge.target_input)
+            if key in seen_targets:
+                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
+            seen_targets.add(key)
+
+            self._assert_edge_source_resolves(edge, task_outputs, root_ids)
+
+        # A single edge-by-edge would_create_cycle check would miss a cycle
+        # formed only by two-or-more new edges together, so validate the
+        # whole resulting graph at once: topological_sort raises
+        # CyclicDependencyError itself if any cycle exists anywhere in it.
+        combined_edges = [*self.edges, *new_edges]
+        dependencies = build_dependencies(combined_tasks, combined_edges)
+        topological_sort(set(dependencies.keys()), dependencies)
+
+        self.tasks.extend(new_tasks)
+        self.artifacts.extend(new_artifacts)
+        self.edges.extend(new_edges)
+        for task in new_tasks:
+            self._anchor_task(task)
+        self._revision += 1
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> Self:
@@ -465,19 +711,98 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         root = Path(wd) if wd else Path(".")
         return (base / root).resolve()
 
+    def _produced_declared_paths(self) -> set[Path]:
+        """
+        Declared paths produced by some task's output, used to decide whether
+        a declared artifact path anchors under the run root (produced) or the
+        base directory (external, never produced by this workflow).
+        """
+        return {
+            artifact.declared_path
+            for task in self.tasks
+            for artifact in task.outputs
+            if artifact.declared_path is not None
+        }
+
+    @staticmethod
+    def _anchor_artifact(
+        artifact: BaseArtifact,
+        *,
+        base: Path,
+        run_root: Path,
+        produced: set[Path],
+    ) -> None:
+        """
+        Make *artifact*'s declared path absolute, rooted at *run_root* when
+        it is produced by some task, or *base* otherwise. A path declared
+        absolute is left untouched. Only relative declared paths are
+        rewritten, so calling this more than once for the same artifact is
+        safe.
+        """
+        declared = artifact.declared_path
+        if declared is None or declared.is_absolute():
+            return
+        root = run_root if declared in produced else base
+        artifact.path = (root / declared).resolve()
+
+    def _anchor_task(self, task: BaseTask) -> None:
+        """
+        Anchor one task's declared artifact paths, local runtime paths, and
+        working directory to this workflow's run layout.
+
+        This is the single code path both construction-time tasks (via
+        :meth:`_resolve_run_paths` and
+        :meth:`_propagate_orchestrator_working_directory`, each called once
+        from :meth:`run`) and runtime-added tasks (via :meth:`add_task` /
+        :meth:`expand`) go through, so a task added mid-run is anchored
+        identically to one declared up front:
+
+        - Declared input/output artifact paths become absolute, rooted under
+          :attr:`run_directory` for paths some task produces, or the base
+          directory for external paths (see :meth:`_anchor_artifact`).
+        - ``task.runtime.anchor_local_paths(base)`` resolves any relative
+          local files the runtime owns (e.g. a script path).
+        - A co-located task target (same ``location_id`` as the orchestrator
+          target) that has not set its own ``working_directory`` inherits the
+          orchestrator target's working directory, mirroring what
+          :meth:`_propagate_orchestrator_working_directory` used to do
+          inline.
+
+        Every step here only rewrites still-relative/unset state, so calling
+        this more than once for the same task is safe.
+        """
+        base = self._effective_base
+        run_root = self.run_directory
+        produced = self._produced_declared_paths()
+
+        for artifact in (*task.inputs, *task.outputs):
+            self._anchor_artifact(
+                artifact, base=base, run_root=run_root, produced=produced
+            )
+        task.runtime.anchor_local_paths(base)
+
+        if self.orchestrator_target is not None:
+            orchestrator_wd = self.orchestrator_target.working_directory
+            if orchestrator_wd is not None:
+                target = task.target
+                if (
+                    target.working_directory is None
+                    and target.location_id
+                    == self.orchestrator_target.location_id
+                ):
+                    target.working_directory = orchestrator_wd
+
     @final
     def _resolve_run_paths(self) -> Path:
         """
         Anchor this run's relative paths to the single :attr:`run_directory`.
 
-        - Point the orchestrator target (and, by propagation, co-located task
-          targets) at the absolute run directory, so per-task working dirs
-          nest under it.
-        - Make declared artifact paths absolute: a path produced by some task
-          (a task output, or an input fed by an upstream output) resolves
-          under the run directory; a path never produced (an external input)
-          resolves under the base directory. Paths declared absolute are left
-          untouched.
+        - Point the orchestrator target at the absolute run directory, so
+          per-task working dirs nest under it.
+        - Anchor every task (see :meth:`_anchor_task`): declared artifact
+          paths, local runtime paths, and co-located working-directory
+          inheritance.
+        - Anchor standalone root artifacts the same way as task artifacts.
 
         Only relative declared paths are rewritten, so calling this twice is
         safe. Returns the resolved run root so callers can use it directly.
@@ -488,26 +813,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self.orchestrator_target is not None:
             self.orchestrator_target.working_directory = run_root.as_posix()
 
-        produced = {
-            artifact.declared_path
-            for task in self.tasks
-            for artifact in task.outputs
-            if artifact.declared_path is not None
-        }
-
-        def anchor(artifact: BaseArtifact) -> None:
-            declared = artifact.declared_path
-            if declared is None or declared.is_absolute():
-                return
-            root = run_root if declared in produced else base
-            artifact.path = (root / declared).resolve()
-
         for task in self.tasks:
-            for artifact in (*task.inputs, *task.outputs):
-                anchor(artifact)
-            task.runtime.anchor_local_paths(base)
+            self._anchor_task(task)
+
+        produced = self._produced_declared_paths()
         for artifact in self.artifacts:
-            anchor(artifact)
+            self._anchor_artifact(
+                artifact, base=base, run_root=run_root, produced=produced
+            )
 
         return run_root
 
@@ -520,22 +833,17 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         A target is co-located with the orchestrator when it shares its
         ``location_id`` (same filesystem). A task target that already has a
-        ``working_directory`` set (not ``None``) is left untouched.
+        ``working_directory`` set (not ``None``) is left untouched. Delegates
+        to :meth:`_anchor_task` per task (see its docstring); when called
+        after :meth:`_resolve_run_paths` (as :meth:`run` does) this is a
+        no-op, since every task was already anchored.
         """
         if self.orchestrator_target is None:
             return
-
-        base = self.orchestrator_target.working_directory
-        if base is None:
+        if self.orchestrator_target.working_directory is None:
             return
-
-        orchestrator_loc = self.orchestrator_target.location_id
         for task in self.tasks:
-            target = task.target
-            if target.working_directory is not None:
-                continue
-            if target.location_id == orchestrator_loc:
-                target.working_directory = base
+            self._anchor_task(task)
 
     async def run(self, trigger_id: str) -> None:
         """
