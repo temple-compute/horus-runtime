@@ -34,6 +34,12 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.placement import (
+    InsufficientCapacityError,
+    ResourceCapacity,
+)
+from horus_runtime.core.resources import ResourceRequest
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -48,6 +54,8 @@ def _task(
     inputs: list[FileArtifact] | None = None,
     outputs: list[FileArtifact] | None = None,
     task_cls: type[HorusTask] = HorusTask,
+    target: BaseTarget | None = None,
+    resources: ResourceRequest | None = None,
 ) -> HorusTask:
     """Build a minimal task of *task_cls*, defaulting to a plain HorusTask."""
     return task_cls(
@@ -57,7 +65,8 @@ def _task(
         outputs=cast(list[BaseArtifact], outputs or []),
         runtime=CommandRuntime(command=f"echo {task_id}"),
         executor=ShellExecutor(),
-        target=LocalTarget(working_directory=tmp_path.as_posix()),
+        target=target or LocalTarget(working_directory=tmp_path.as_posix()),
+        resources=resources,
     )
 
 
@@ -571,3 +580,164 @@ class TestFailurePolicy:
         assert a.runs == 1
         assert b.runs == 1
         assert wf.status == WorkflowStatus.COMPLETED
+
+
+@pytest.mark.unit
+class TestResourcePlacement:
+    """
+    Tests for opt-in, resource/target-aware placement (``workflow.capacity``
+    plus a task's ``resources``), layered on top of the concurrent
+    ready-set scheduler and its ``TargetPool``.
+    """
+
+    async def test_gpu_capacity_caps_concurrency_and_all_tasks_complete(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A location with ``gpus=2`` capacity and four sibling tasks each
+        requesting ``gpus=1`` never runs more than two of them at once, yet
+        all four eventually complete.
+        """
+        del horus_context
+        current = {"n": 0}
+        max_seen = {"n": 0}
+
+        class GpuTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                current["n"] += 1
+                max_seen["n"] = max(max_seen["n"], current["n"])
+                await asyncio.sleep(0.02)
+                current["n"] -= 1
+
+        location_id = LocalTarget(
+            working_directory=tmp_path.as_posix()
+        ).location_id
+
+        root = _task(
+            "root",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "root.out")],
+        )
+        children = [
+            _task(
+                child_id,
+                tmp_path=tmp_path,
+                task_cls=GpuTask,
+                inputs=[FileArtifact(id="in", path=tmp_path / "root.out")],
+                resources=ResourceRequest(gpus=1),
+            )
+            for child_id in ("g1", "g2", "g3", "g4")
+        ]
+
+        wf = HorusWorkflow(
+            name="gpu_fanout",
+            tasks=[root, *children],
+            edges=[
+                _edge("root", "root_out", child.id, "in") for child in children
+            ],
+            capacity={location_id: ResourceCapacity(gpus=2)},
+        )
+
+        with patch.object(
+            HorusWorkflow, "transfer_artifacts", new=AsyncMock()
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert max_seen["n"] == 2
+        assert all(child.runs == 1 for child in children)
+        assert wf.status == WorkflowStatus.COMPLETED
+
+    async def test_tasks_without_resources_are_unaffected_by_capacity(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Declaring a location's capacity doesn't gate a task that itself
+        declares no ``resources``: it runs exactly as it would with no
+        placement configured at all, so several such siblings still overlap.
+        """
+        del horus_context
+        started: set[str] = set()
+        all_started = asyncio.Event()
+
+        class BarrierTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                started.add(self.id)
+                if len(started) == 3:
+                    all_started.set()
+                await asyncio.wait_for(all_started.wait(), timeout=5)
+
+        location_id = LocalTarget(
+            working_directory=tmp_path.as_posix()
+        ).location_id
+
+        root = _task(
+            "root",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "root.out")],
+        )
+        children = [
+            _task(
+                child_id,
+                tmp_path=tmp_path,
+                task_cls=BarrierTask,
+                inputs=[FileArtifact(id="in", path=tmp_path / "root.out")],
+            )
+            for child_id in ("c1", "c2", "c3")
+        ]
+
+        wf = HorusWorkflow(
+            name="unresourced_fanout",
+            tasks=[root, *children],
+            edges=[
+                _edge("root", "root_out", child.id, "in") for child in children
+            ],
+            # A single-GPU location would deadlock a GPU-requesting fan-out
+            # of three, but these children request nothing, so it never
+            # applies to them.
+            capacity={location_id: ResourceCapacity(gpus=1)},
+        )
+
+        with patch.object(
+            HorusWorkflow, "transfer_artifacts", new=AsyncMock()
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert started == {"c1", "c2", "c3"}
+
+    async def test_request_exceeding_total_capacity_raises_not_hangs(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A task requesting more of a dimension than a location's total
+        declared capacity fails fast with a clear error instead of blocking
+        the run forever.
+        """
+        del horus_context
+        location_id = LocalTarget(
+            working_directory=tmp_path.as_posix()
+        ).location_id
+
+        greedy = _task(
+            "greedy",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            resources=ResourceRequest(gpus=5),
+        )
+
+        wf = HorusWorkflow(
+            name="impossible_request",
+            tasks=[greedy],
+            capacity={location_id: ResourceCapacity(gpus=2)},
+        )
+
+        with (
+            patch.object(HorusWorkflow, "transfer_artifacts", new=AsyncMock()),
+            pytest.raises(InsufficientCapacityError, match="gpus"),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="greedy"), timeout=5)

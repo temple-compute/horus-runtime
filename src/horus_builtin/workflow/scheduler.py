@@ -23,16 +23,20 @@ scheduler that dispatches every currently-ready task concurrently and reacts
 as each one finishes: as soon as a task completes, its dependents that are
 now ready are dispatched too, without waiting for unrelated in-flight tasks.
 
-Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap.
-Failure handling supports two policies via ``workflow.failure_policy`` (see
+Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap,
+plus optional resource-aware placement. Failure handling supports two
+policies via ``workflow.failure_policy`` (see
 :attr:`BaseWorkflow.failure_policy`): ``"fail_fast"`` (the default) cancels
 everything else in flight and re-raises, matching the previous serial
 runner; ``"continue"`` lets unrelated branches keep running, blocking only
 the failed task's descendants, and reports every failure at the end via
-:exc:`WorkflowExecutionError`. Resource placement and DAG mutation are left
-to later PRs; the dependency/scope recomputation happening on every loop
-iteration (rather than once up front) is the hook that lets a future
-DAG-mutation PR plug in without touching this loop.
+:exc:`WorkflowExecutionError`. Placement (see
+:class:`~horus_runtime.core.placement.PlacementManager`) gates dispatch of a
+ready task against declared, finite per-location capacity when
+``workflow.capacity`` is set; it is a no-op otherwise. DAG mutation is left
+to a later PR; the dependency/scope recomputation happening on every loop
+iteration (rather than once up front) is the hook that lets it plug in
+without touching this loop.
 """
 
 import asyncio
@@ -47,6 +51,7 @@ from horus_builtin.workflow.dag import (
     topological_sort,
 )
 from horus_runtime.context import HorusContext
+from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow, _EdgeSource
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
@@ -130,35 +135,49 @@ async def _execute_ready_task(
     task: "BaseTask",
     source_map: dict[tuple[str, str], _EdgeSource],
     pool: TargetPool,
+    placement: PlacementManager,
 ) -> None:
     """
-    Run one ready task to completion: acquire a target, bind, transfer
-    inputs, dispatch, and wait — mirroring the per-task body of the previous
-    serial loop, but on whichever target the pool hands back (the task's own
-    declared target in the common case, or an idle clone under contention).
+    Run one ready task to completion: reserve placement, acquire a target,
+    bind, transfer inputs, dispatch, and wait — mirroring the per-task body
+    of the previous serial loop, but on whichever target the pool hands back
+    (the task's own declared target in the common case, or an idle clone
+    under contention).
+
+    ``placement.acquire`` waits until the task's declared target's location
+    has room for ``task.resources`` (immediately, when the task or location
+    isn't resource-gated at all — see :class:`PlacementManager`), so a
+    resource-constrained fan-out can genuinely hold this coroutine here
+    without ever occupying a pool slot.
     """
     declared_target = task.target
-    target = await pool.acquire(declared_target)
-    # `transfer_artifacts` and `dispatch` both operate off `task.target`, so
-    # point it at the target we actually acquired for the duration of the
-    # run and restore it afterwards, leaving the task's declared target
-    # untouched for any subsequent run of the same workflow instance.
-    task.target = target
+    location_id = declared_target.location_id
+    await placement.acquire(task.name, location_id, task.resources)
     try:
-        # Associate the task with its target before any transfer so
-        # resource-aware targets (which may provision lazily at transfer
-        # time, before dispatch) can read task.resources.
-        target.bind(task)
+        target = await pool.acquire(declared_target)
+        # `transfer_artifacts` and `dispatch` both operate off `task.target`,
+        # so point it at the target we actually acquired for the duration of
+        # the run and restore it afterwards, leaving the task's declared
+        # target untouched for any subsequent run of the same workflow
+        # instance.
+        task.target = target
+        try:
+            # Associate the task with its target before any transfer so
+            # resource-aware targets (which may provision lazily at transfer
+            # time, before dispatch) can read task.resources.
+            target.bind(task)
 
-        # Transfer input artifacts to the task's target as needed.
-        await workflow.transfer_artifacts(task, source_map)
+            # Transfer input artifacts to the task's target as needed.
+            await workflow.transfer_artifacts(task, source_map)
 
-        # Execute the task on its target and wait for it to finish.
-        await target.dispatch(task)
-        await target.wait()
+            # Execute the task on its target and wait for it to finish.
+            await target.dispatch(task)
+            await target.wait()
+        finally:
+            task.target = declared_target
+            pool.release(declared_target, target)
     finally:
-        task.target = declared_target
-        pool.release(declared_target, target)
+        await placement.release(location_id, task.resources)
 
 
 def _collect_completions(
@@ -252,6 +271,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         )
 
     pool = TargetPool(workflow.max_concurrency)
+    placement = PlacementManager(workflow.capacity)
 
     # The source map depends only on workflow structure. It is rebuilt only
     # when the workflow's revision advances (nothing bumps it yet, so this
@@ -313,7 +333,9 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 task = tasks_by_id[task_id]
                 dispatched.add(task_id)
                 wrapper = asyncio.create_task(
-                    _execute_ready_task(workflow, task, source_map, pool)
+                    _execute_ready_task(
+                        workflow, task, source_map, pool, placement
+                    )
                 )
                 running[wrapper] = task_id
 
