@@ -46,6 +46,7 @@ from horus_builtin.workflow.dag import (
     topological_sort,
     would_create_cycle,
 )
+from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
@@ -185,6 +186,72 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     :meth:`cached_source_map`) picks up the change without any changes to the
     scheduler itself.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lower_map_tasks(cls, data: object) -> object:
+        """
+        Lower any task carrying a ``map:`` block into a ``map_expander``
+        task plus its construction-time wiring edge, before normal
+        per-task ``kind``-discriminated parsing runs.
+
+        See :func:`horus_builtin.workflow.map.lower_map_entry`. A no-op for
+        workflows with no ``map:`` tasks, including already-lowered,
+        round-tripped ones (``to_yaml`` dumps a ``MapExpander`` in its
+        native ``kind: map_expander`` form, not back into ``map:`` block
+        syntax) and direct Python construction with real task objects.
+        """
+        if not isinstance(data, dict):
+            return data
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return data
+        if not any(isinstance(t, dict) and "map" in t for t in tasks):
+            return data
+
+        new_tasks: list[object] = []
+        new_edges: list[object] = list(data.get("edges") or [])
+        for entry in tasks:
+            if isinstance(entry, dict) and "map" in entry:
+                expander, edges = lower_map_entry(entry)
+                new_tasks.append(expander)
+                new_edges.extend(edges)
+            else:
+                new_tasks.append(entry)
+
+        return {**data, "tasks": new_tasks, "edges": new_edges}
+
+    def map(
+        self,
+        *,
+        id: str,
+        template: BaseTask,
+        gather: tuple[str, str],
+        over: tuple[str, str, str] | None = None,
+        range: int | None = None,
+        index_input: str | None = None,
+        name: str | None = None,
+        target: BaseTarget | None = None,
+    ) -> MapExpander:
+        """
+        Append a declarative map (fan-out/fan-in) task to this workflow.
+
+        Thin delegate to :func:`horus_builtin.workflow.map.map_task`; see
+        its docstring for the full parameter reference. Equivalent to
+        authoring a ``map:`` block in YAML (see
+        :func:`horus_builtin.workflow.map.lower_map_entry`).
+        """
+        return map_task(
+            self,
+            id=id,
+            template=template,
+            gather=gather,
+            over=over,
+            range=range,
+            index_input=index_input,
+            name=name,
+            target=target,
+        )
 
     @staticmethod
     def _assert_unique_task_ids(tasks: list[BaseTask]) -> None:
@@ -502,14 +569,24 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         }
         root_ids = {a.id for a in combined_artifacts}
 
-        seen_targets = {(e.target, e.target_input) for e in self.edges}
+        # Only transfer=True edges participate in the "at most one edge per
+        # (target, target_input)" rule; ordering-only edges are exempt (see
+        # check_edges_resolve), which is what lets a fan-in expander wire
+        # many clone -> gather edges onto the same gather input in one
+        # batch.
+        seen_targets = {
+            (e.target, e.target_input) for e in self.edges if e.transfer
+        }
         for edge in new_edges:
             self._assert_edge_target_resolves(edge, task_inputs)
 
-            key = (edge.target, edge.target_input)
-            if key in seen_targets:
-                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
-            seen_targets.add(key)
+            if edge.transfer:
+                key = (edge.target, edge.target_input)
+                if key in seen_targets:
+                    raise DuplicateEdgeTargetError(
+                        edge.target, edge.target_input
+                    )
+                seen_targets.add(key)
 
             self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
@@ -551,6 +628,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
         Save the workflow to a YAML file.
 
+        Dumps in ``mode="json"``: PyYAML's ``safe_dump`` cannot represent
+        arbitrary Python objects (e.g. the ``pathlib.Path`` every artifact
+        carries), so fields are coerced to YAML-safe primitives (paths and
+        similar become plain strings) exactly as ``from_yaml`` expects them
+        back on load.
+
         Args:
             path: Path to the YAML file.
 
@@ -558,7 +641,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             None
         """
         with Path(path).open("w", encoding="utf-8") as fh:
-            yaml.safe_dump(self.model_dump(), fh)
+            yaml.safe_dump(self.model_dump(mode="json"), fh)
 
     def _build_source_map(self) -> dict[tuple[str, str], _EdgeSource]:
         """
