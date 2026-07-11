@@ -647,7 +647,7 @@ class TestResourcePlacement:
             await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
 
         assert max_seen["n"] == 2
-        assert all(child.runs == 1 for child in children)
+        assert all(child.status == TaskStatus.COMPLETED for child in children)
         assert wf.status == WorkflowStatus.COMPLETED
 
     async def test_tasks_without_resources_are_unaffected_by_capacity(

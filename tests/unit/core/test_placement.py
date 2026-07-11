@@ -36,6 +36,7 @@ class TestResourceCapacity:
     """Tests for the ``ResourceCapacity`` pydantic model."""
 
     def test_defaults_are_unconstrained(self) -> None:
+        """Every dimension defaults to None, meaning ungated."""
         cap = ResourceCapacity()
         assert cap.cpus is None
         assert cap.gpus is None
@@ -43,6 +44,7 @@ class TestResourceCapacity:
         assert cap.vram_gb is None
 
     def test_extra_fields_are_forbidden(self) -> None:
+        """Unknown fields raise rather than being silently dropped."""
         with pytest.raises(Exception, match="bogus"):
             ResourceCapacity(bogus=1)  # type: ignore[call-arg]
 
@@ -55,16 +57,16 @@ class TestPlacementManagerNoOp:
     """
 
     async def test_no_capacity_map_never_gates(self) -> None:
+        """With no capacity map, even a huge request is admitted at once."""
         manager = PlacementManager(None)
         await asyncio.wait_for(
-            manager.acquire(
-                "t", "loc", ResourceRequest(gpus=1000)
-            ),
+            manager.acquire("t", "loc", ResourceRequest(gpus=1000)),
             timeout=1,
         )
         # No error, no hang: an undeclared location is unconstrained.
 
     async def test_task_with_no_resources_never_gates(self) -> None:
+        """Tasks with resources=None never block, even on a capped location."""
         manager = PlacementManager({"loc": ResourceCapacity(gpus=1)})
         # Two immediate acquisitions with resources=None never block each
         # other, even though the location only declares one GPU.
@@ -79,11 +81,10 @@ class TestPlacementManagerNoOp:
     async def test_location_absent_from_capacity_map_is_unconstrained(
         self,
     ) -> None:
+        """A location with no capacity entry gates nothing."""
         manager = PlacementManager({"declared-loc": ResourceCapacity(gpus=1)})
         await asyncio.wait_for(
-            manager.acquire(
-                "t", "other-loc", ResourceRequest(gpus=1000)
-            ),
+            manager.acquire("t", "other-loc", ResourceRequest(gpus=1000)),
             timeout=1,
         )
 
@@ -105,15 +106,14 @@ class TestPlacementManagerGating:
     async def test_acquire_release_round_trip_restores_capacity(
         self,
     ) -> None:
+        """A blocked acquire only proceeds once a release frees capacity."""
         manager = PlacementManager({"loc": ResourceCapacity(gpus=1)})
         resources = ResourceRequest(gpus=1)
 
         await manager.acquire("a", "loc", resources)
         # A second, concurrent acquire would now block: prove it does by
         # racing it against a release and checking it only unblocks after.
-        second = asyncio.ensure_future(
-            manager.acquire("b", "loc", resources)
-        )
+        second = asyncio.ensure_future(manager.acquire("b", "loc", resources))
         await asyncio.sleep(0.01)
         assert not second.done()
 
@@ -123,12 +123,11 @@ class TestPlacementManagerGating:
     async def test_requesting_more_than_total_raises_immediately(
         self,
     ) -> None:
+        """An impossible request fails fast rather than blocking forever."""
         manager = PlacementManager({"loc": ResourceCapacity(gpus=2)})
         with pytest.raises(InsufficientCapacityError) as exc_info:
             await asyncio.wait_for(
-                manager.acquire(
-                    "greedy", "loc", ResourceRequest(gpus=5)
-                ),
+                manager.acquire("greedy", "loc", ResourceRequest(gpus=5)),
                 timeout=1,
             )
         assert exc_info.value.dimension == "gpus"
@@ -144,15 +143,14 @@ class TestPlacementManagerGating:
         """
         manager = PlacementManager({"loc": ResourceCapacity(gpus=2)})
         await asyncio.wait_for(
-            manager.acquire(
-                "t", "loc", ResourceRequest(cpus=999, gpus=1)
-            ),
+            manager.acquire("t", "loc", ResourceRequest(cpus=999, gpus=1)),
             timeout=1,
         )
 
     async def test_two_gpu_capacity_admits_two_but_not_three_concurrently(
         self,
     ) -> None:
+        """A gpus=2 location never has more than two acquirers at once."""
         manager = PlacementManager({"loc": ResourceCapacity(gpus=2)})
         resources = ResourceRequest(gpus=1)
         current = 0
