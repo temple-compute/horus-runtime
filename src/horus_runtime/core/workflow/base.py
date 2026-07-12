@@ -172,12 +172,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     _revision: int = PrivateAttr(default=0)
     """
     Monotonically increasing counter for the workflow's DAG structure
-    (tasks/edges/artifacts). Nothing bumps it yet: today the DAG is fixed for
-    the lifetime of a run, so it is built once and stays at ``0``. It exists
-    so a future dynamic-DAG feature (fan-out/map/loops) can increment it when
-    mutating the graph mid-run, and the scheduler's cached source map (see
-    :meth:`cached_source_map`) picks up the change without any changes to the
-    scheduler itself.
+    (tasks/edges/artifacts).
     """
 
     @model_validator(mode="after")

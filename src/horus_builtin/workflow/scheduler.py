@@ -22,14 +22,6 @@ Replaces a serial "run the topological order one task at a time" loop with a
 scheduler that dispatches every currently-ready task concurrently and reacts
 as each one finishes: as soon as a task completes, its dependents that are
 now ready are dispatched too, without waiting for unrelated in-flight tasks.
-
-Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap.
-Failure handling is still fail-fast (the first failure cancels everything
-else in flight and re-raises), matching the previous serial runner. Resource
-placement and DAG mutation are left to later PRs; the dependency/scope
-recomputation happening on every loop iteration (rather than once up front)
-is the hook that lets a future DAG-mutation PR plug in without touching this
-loop.
 """
 
 import asyncio
@@ -127,7 +119,7 @@ async def _execute_ready_task(
 ) -> None:
     """
     Run one ready task to completion: acquire a target, bind, transfer
-    inputs, dispatch, and wait — mirroring the per-task body of the previous
+    inputs, dispatch, and wait, mirroring the per-task body of the previous
     serial loop, but on whichever target the pool hands back (the task's own
     declared target in the common case, or an idle clone under contention).
     """
@@ -239,9 +231,8 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     running: dict[asyncio.Task[None], str] = {}
 
     while True:
-        # Recomputed every iteration (instead of once up front) so a future
-        # DAG-mutation PR can grow `workflow.tasks`/`workflow.edges` mid-run
-        # without any change to this loop.
+        # Recomputed every iteration (instead of once up front) so a
+        # DAG-mutation can grow `workflow.tasks`/`workflow.edges` mid-run.
         deps = build_dependencies(workflow.tasks, workflow.edges)
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 
