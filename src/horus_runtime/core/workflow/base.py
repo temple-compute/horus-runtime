@@ -46,6 +46,11 @@ from horus_builtin.workflow.dag import (
     topological_sort,
     would_create_cycle,
 )
+from horus_builtin.workflow.loop import (
+    LoopController,
+    loop_task,
+    lower_loop_entry,
+)
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -286,6 +291,67 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             target=target,
         )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _lower_loop_tasks(cls, data: object) -> object:
+        """
+        Lower any task carrying a ``loop:`` block into a ``loop_controller``
+        task, before normal per-task ``kind``-discriminated parsing runs.
+
+        See :func:`horus_builtin.workflow.loop.lower_loop_entry`. A no-op
+        for workflows with no ``loop:`` tasks, including already-lowered,
+        round-tripped ones (``to_yaml`` dumps a ``LoopController`` in its
+        native ``kind: loop_controller`` form, not back into ``loop:``
+        block syntax) and direct Python construction with real task
+        objects.
+        """
+        if not isinstance(data, dict):
+            return data
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return data
+        if not any(isinstance(t, dict) and "loop" in t for t in tasks):
+            return data
+
+        new_tasks: list[object] = [
+            lower_loop_entry(entry)
+            if isinstance(entry, dict) and "loop" in entry
+            else entry
+            for entry in tasks
+        ]
+
+        return {**data, "tasks": new_tasks}
+
+    def loop(
+        self,
+        *,
+        id: str,
+        body: BaseTask,
+        until: str,
+        max_iterations: int,
+        index_input: str | None = None,
+        name: str | None = None,
+        target: BaseTarget | None = None,
+    ) -> LoopController:
+        """
+        Append a declarative conditional-repeat loop task to this workflow.
+
+        Thin delegate to :func:`horus_builtin.workflow.loop.loop_task`; see
+        its docstring for the full parameter reference. Equivalent to
+        authoring a ``loop:`` block in YAML (see
+        :func:`horus_builtin.workflow.loop.lower_loop_entry`).
+        """
+        return loop_task(
+            self,
+            id=id,
+            body=body,
+            until=until,
+            max_iterations=max_iterations,
+            index_input=index_input,
+            name=name,
+            target=target,
+        )
+
     @staticmethod
     def _assert_unique_task_ids(tasks: list[BaseTask]) -> None:
         """
@@ -423,6 +489,20 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
         return self
+
+    # -- Runtime DAG mutation -------------------------------------------
+    #
+    # The validators above run once, at construction. The methods below let
+    # code — typically a task's own body, reached via ``BaseTask.workflow``
+    # — grow the live DAG mid-run: add a task, wire an edge, register a root
+    # artifact, or commit a whole batch of these atomically. Each performs
+    # the same checks the constructor's validators would, but incrementally
+    # (against the current graph, not by re-validating the whole model), and
+    # bumps ``_revision`` so the scheduler's cached source map (see
+    # :meth:`cached_source_map`) picks up the change. The scheduler itself
+    # already recomputes dependencies/scope from ``self.tasks``/``self.edges``
+    # every loop iteration, so a mutation applied while a task is running
+    # takes effect on the next iteration with no further plumbing.
 
     def add_artifact(self, artifact: BaseArtifact) -> None:
         """
@@ -646,6 +726,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def to_yaml(self, path: str | Path) -> None:
         """
         Save the workflow to a YAML file.
+
+        Dumps in ``mode="json"``: PyYAML's ``safe_dump`` cannot represent
+        arbitrary Python objects (e.g. the ``pathlib.Path`` every artifact
+        carries), so fields are coerced to YAML-safe primitives (paths and
+        similar become plain strings) exactly as ``from_yaml`` expects them
+        back on load.
 
         Args:
             path: Path to the YAML file.
