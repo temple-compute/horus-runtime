@@ -332,6 +332,52 @@ class TestPartialCompletion:
         assert statuses["score[2]"] == TaskStatus.COMPLETED
         assert wf.status.value == "completed"
 
+    async def test_forced_expander_reruns_completed_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Forcing a re-run on the expander (as the CLI's ``--no-skip-all`` /
+        ``--no-skip`` does by flipping the static task's
+        ``skip_if_complete``) must propagate to the clones it materializes
+        at runtime, so an already-complete clone re-runs instead of being
+        skipped.
+        """
+        del horus_context
+        # Pre-create clone 1's deterministic output, as in the skip test.
+        gathered_1 = tmp_path / "score.gathered" / "1"
+        gathered_1.mkdir(parents=True)
+        (gathered_1 / "out.txt").write_text("already done")
+
+        split = _split_task(tmp_path, ["a", "b", "c"])
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=_template_task(),
+            over=("split", "batches", "batch"),
+            gather=("gather", "results"),
+        )
+
+        # Mimic the CLI's --no-skip-all: force the expander to re-run. The
+        # clones do not exist yet, so this must reach them when they are built.
+        expander = next(t for t in wf.tasks if t.id == "score")
+        expander.skip_if_complete = False
+
+        await wf.run(trigger_id="split")
+
+        statuses = {t.id: t.status for t in wf.tasks}
+        assert statuses["score[0]"] == TaskStatus.COMPLETED
+        # Without the fix this clone is SKIPPED despite the forced re-run.
+        assert statuses["score[1]"] == TaskStatus.COMPLETED
+        assert statuses["score[2]"] == TaskStatus.COMPLETED
+        assert wf.status.value == "completed"
+
 
 @pytest.mark.unit
 class TestFanInOrdering:
