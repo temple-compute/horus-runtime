@@ -67,6 +67,7 @@ def running_task(task_id: str) -> Iterator[None]:
     finally:
         _current_task_id.reset(token)
 
+
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
 
 
