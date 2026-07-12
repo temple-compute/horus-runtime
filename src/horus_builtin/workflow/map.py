@@ -558,6 +558,14 @@ class MapExpander(HorusTask):
         data.setdefault("kind", "horus_task")
         data["id"] = clone_id
         data["name"] = clone_id
+        # Propagate a forced re-run (e.g. CLI ``--no-skip-all``/``--no-skip``,
+        # which flips the expander's own ``skip_if_complete``) onto each clone.
+        # Clones are materialized here at runtime, after the CLI has already
+        # mutated the static task list, so without this they would inherit the
+        # template's default ``skip_if_complete=True`` and be skipped when
+        # already complete despite the flag.
+        if not self.skip_if_complete:
+            data["skip_if_complete"] = False
         clone = BaseTask.model_validate(data)
         clone.target = clone.target.model_copy(deep=True)
         return clone
