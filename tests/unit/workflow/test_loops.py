@@ -290,7 +290,7 @@ class TestLoopErrors:
         """
         del horus_context
         wf = HorusWorkflow(name="wf")
-        wf.orchestrator_target = None  # type: ignore[assignment]
+        wf.orchestrator_target = None
         wf.loop(
             id="loop",
             body=_body_task(_ALWAYS_BODY),
