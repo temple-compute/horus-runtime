@@ -114,6 +114,27 @@ def descendants(
     return visited
 
 
+def would_create_cycle(
+    edges: list["WorkflowEdge"],
+    new_edge: "WorkflowEdge",
+    tasks: list["BaseTask"],
+) -> bool:
+    """
+    Returns True if appending *new_edge* to *edges* would create a cycle
+    among *tasks*.
+
+    Adding ``source -> target`` closes a loop exactly when ``target`` can
+    already (transitively) reach back to ``source`` once the edge is in
+    place, i.e. ``source`` is a descendant of ``target`` in the dependency
+    graph built from ``edges + [new_edge]``. Used by
+    :meth:`~horus_runtime.core.workflow.base.BaseWorkflow.add_edge` to reject
+    a single edge that would break the DAG invariant before it is appended to
+    the live workflow.
+    """
+    dependencies = build_dependencies(tasks, [*edges, new_edge])
+    return new_edge.source in descendants(new_edge.target, dependencies)
+
+
 def topological_sort(
     task_ids: set[str],
     dependencies: dict[str, set[str]],

@@ -22,21 +22,6 @@ Replaces a serial "run the topological order one task at a time" loop with a
 scheduler that dispatches every currently-ready task concurrently and reacts
 as each one finishes: as soon as a task completes, its dependents that are
 now ready are dispatched too, without waiting for unrelated in-flight tasks.
-
-Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap,
-plus optional resource-aware placement. Failure handling supports two
-policies via ``workflow.failure_policy`` (see
-:attr:`BaseWorkflow.failure_policy`): ``"fail_fast"`` (the default) cancels
-everything else in flight and re-raises, matching the previous serial
-runner; ``"continue"`` lets unrelated branches keep running, blocking only
-the failed task's descendants, and reports every failure at the end via
-:exc:`WorkflowExecutionError`. Placement (see
-:class:`~horus_runtime.core.placement.PlacementManager`) gates dispatch of a
-ready task against declared, finite per-location capacity when
-``workflow.capacity`` is set; it is a no-op otherwise. DAG mutation is left
-to a later PR; the dependency/scope recomputation happening on every loop
-iteration (rather than once up front) is the hook that lets it plug in
-without touching this loop.
 """
 
 import asyncio
@@ -251,8 +236,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         WorkflowExecutionError: Under the ``"continue"`` policy, if any task
             failed during the run.
     """
-    tasks_by_id = {task.id: task for task in workflow.tasks}
-    if trigger_id not in tasks_by_id:
+    if trigger_id not in {task.id for task in workflow.tasks}:
         raise UnknownTaskError(
             _("Trigger task '%(trigger_id)s' not found.")
             % {"trigger_id": trigger_id}
@@ -291,9 +275,10 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     failed: dict[str, BaseException] = {}
 
     while True:
-        # Recomputed every iteration (instead of once up front) so a future
-        # DAG-mutation PR can grow `workflow.tasks`/`workflow.edges` mid-run
-        # without any change to this loop.
+        # Recomputed every iteration (instead of once up front) so a task
+        # that grows `workflow.tasks`/`workflow.edges` mid-run is picked up on
+        # the next pass with no change to this loop.
+        tasks_by_id = {task.id: task for task in workflow.tasks}
         deps = build_dependencies(workflow.tasks, workflow.edges)
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 
