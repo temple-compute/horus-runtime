@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import ClassVar, NamedTuple, Self, final
+from typing import ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
@@ -54,6 +54,7 @@ from horus_builtin.workflow.loop import (
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
@@ -171,6 +172,38 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     dispatched immediately. Set this to cap resource usage (e.g. a shared
     machine with limited CPUs) when the DAG's natural parallelism would
     otherwise over-subscribe it.
+    """
+
+    capacity: dict[str, ResourceCapacity] | None = None
+    """
+    Optional, opt-in compute capacity declared per ``location_id`` (see
+    :attr:`~horus_runtime.core.target.base.BaseTarget.location_id`). When
+    set, the scheduler gates dispatch of any ready task that declares
+    ``resources`` so concurrent tasks sharing a location never request more
+    of a dimension than is available there (e.g. at most 2 GPU-requesting
+    tasks running at once on a location capped at ``gpus=2``).
+
+    ``None`` (the default) or an empty map means no capacity is declared
+    anywhere: every task dispatches exactly as it did before this field
+    existed, governed only by ``max_concurrency``. A location absent from
+    the map, or a task with ``resources=None``, is likewise never gated.
+    """
+
+    failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
+    """
+    How the scheduler reacts to a task failure.
+
+    - ``"fail_fast"`` (the default): the first task to fail cancels every
+      other task still in flight and the run stops immediately, matching the
+      runtime's historical behavior.
+    - ``"continue"``: a failed task does not abort the run. Its descendants
+      are never dispatched (they permanently lack a satisfied dependency),
+      but every other branch of the DAG keeps running to completion. Once
+      nothing more can run, the workflow still ends ``FAILED`` if any task
+      failed, naming every failed task.
+
+    Either way a task failure always results in a ``FAILED`` workflow; the
+    policy only controls how much of the DAG gets to run first.
     """
 
     _base_directory: Path | None = PrivateAttr(default=None)

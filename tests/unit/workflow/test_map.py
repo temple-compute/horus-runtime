@@ -718,7 +718,7 @@ class TestMapExpanderErrors:
         del horus_context
         gather = _gather_task(tmp_path)
         wf = HorusWorkflow(name="wf", tasks=[gather])
-        wf.orchestrator_target = None  # type: ignore[assignment]
+        wf.orchestrator_target = None
         wf.map(
             id="rmap",
             template=_range_template_task(),
