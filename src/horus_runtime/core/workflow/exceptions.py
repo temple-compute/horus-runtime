@@ -110,3 +110,24 @@ class DuplicateEdgeTargetError(WorkflowError):
             )
             % {"input": target_input, "target": target}
         )
+
+
+class WorkflowExecutionError(WorkflowError):
+    """
+    Raised by the scheduler when a run finishes under the ``"continue"``
+    failure policy (see :attr:`BaseWorkflow.failure_policy`) with one or more
+    failed tasks.
+
+    Under ``"fail_fast"`` the triggering task's own exception propagates
+    directly, so this error never applies there. Under ``"continue"`` the
+    scheduler lets unrelated branches run to completion before reporting the
+    failure, so this error is raised afterwards, naming every task that
+    failed, to still transition the workflow to ``FAILED``.
+    """
+
+    def __init__(self, failed_task_ids: list[str]):
+        self.failed_task_ids = failed_task_ids
+        super().__init__(
+            _("Workflow finished with failed task(s): %(tasks)s.")
+            % {"tasks": ", ".join(failed_task_ids)}
+        )
