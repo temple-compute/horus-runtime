@@ -41,3 +41,16 @@ class WorkflowEdge(BaseModel):
 
     target_input: str
     """Input artifact id on the consumer task."""
+
+    transfer: bool = True
+    """
+    Whether this edge also carries data: when ``True`` (the default) the
+    source's output is transferred to the target input, as every existing
+    edge has always done. When ``False`` the edge is ordering-only: it still
+    makes ``target`` depend on ``source`` in the DAG, but contributes no
+    transfer source for ``target_input`` and is exempt from the "at most one
+    edge per (target, target_input)" rule, so several ordering-only edges (or
+    one ordering-only edge alongside a single ``transfer=True`` edge) may all
+    feed the same input. This is what lets many producers order-gate one
+    consumer whose actual data input is, say, a folder populated out of band.
+    """
