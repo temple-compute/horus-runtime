@@ -221,8 +221,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         WorkflowExecutionError: Under the ``"continue"`` policy, if any task
             failed during the run.
     """
-    tasks_by_id = {task.id: task for task in workflow.tasks}
-    if trigger_id not in tasks_by_id:
+    if trigger_id not in {task.id for task in workflow.tasks}:
         raise UnknownTaskError(
             _("Trigger task '%(trigger_id)s' not found.")
             % {"trigger_id": trigger_id}
@@ -260,9 +259,10 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     failed: dict[str, BaseException] = {}
 
     while True:
-        # Recomputed every iteration (instead of once up front) so a future
-        # DAG-mutation PR can grow `workflow.tasks`/`workflow.edges` mid-run
-        # without any change to this loop.
+        # Recomputed every iteration (instead of once up front) so a task
+        # that grows `workflow.tasks`/`workflow.edges` mid-run is picked up on
+        # the next pass with no change to this loop.
+        tasks_by_id = {task.id: task for task in workflow.tasks}
         deps = build_dependencies(workflow.tasks, workflow.edges)
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 
