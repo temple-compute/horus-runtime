@@ -207,10 +207,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def _assert_unique_task_ids(tasks: list[BaseTask]) -> None:
         """
         Raise :exc:`TaskIdsAreNotUniqueError` if any two tasks in *tasks*
-        share an id. Shared by the construction-time validator
-        (:meth:`check_unique_task_ids`) and the incremental mutators
-        (:meth:`add_task`, :meth:`expand`) so both paths enforce the same
-        rule.
+        share an id.
         """
         seen_ids: set[str] = set()
         for task in tasks:
@@ -222,10 +219,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def _assert_unique_artifact_ids(artifacts: list[BaseArtifact]) -> None:
         """
         Raise :exc:`ArtifactIdsAreNotUniqueError` if any two artifacts in
-        *artifacts* share an id. Shared by the construction-time validator
-        (:meth:`check_unique_artifact_ids`) and the incremental mutators
-        (:meth:`add_artifact`, :meth:`add_task`, :meth:`expand`) so both
-        paths enforce the same rule.
+        *artifacts* share an id.
         """
         seen_ids: set[str] = set()
         for artifact in artifacts:
@@ -268,8 +262,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     ) -> None:
         """
         Raise :exc:`UnknownEdgeEndpointError` unless *edge* targets a real
-        task and one of its declared input ids. Shared by
-        :meth:`check_edges_resolve`, :meth:`add_edge`, and :meth:`expand`.
+        task and one of its declared input ids.
         """
         if edge.target not in task_inputs:
             raise UnknownEdgeEndpointError("target task", edge.target)
@@ -285,8 +278,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
         Raise :exc:`UnknownEdgeEndpointError` unless *edge* sources a real
         task output, or a root artifact via the ``artifact-<rootId>``
-        convention. Shared by :meth:`check_edges_resolve`, :meth:`add_edge`,
-        and :meth:`expand`.
+        convention.
         """
         if edge.source in task_outputs:
             if edge.source_output not in task_outputs[edge.source]:
@@ -340,20 +332,6 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
         return self
-
-    # -- Runtime DAG mutation -------------------------------------------
-    #
-    # The validators above run once, at construction. The methods below let
-    # code — typically a task's own body, reached via ``BaseTask.workflow``
-    # — grow the live DAG mid-run: add a task, wire an edge, register a root
-    # artifact, or commit a whole batch of these atomically. Each performs
-    # the same checks the constructor's validators would, but incrementally
-    # (against the current graph, not by re-validating the whole model), and
-    # bumps ``_revision`` so the scheduler's cached source map (see
-    # :meth:`cached_source_map`) picks up the change. The scheduler itself
-    # already recomputes dependencies/scope from ``self.tasks``/``self.edges``
-    # every loop iteration, so a mutation applied while a task is running
-    # takes effect on the next iteration with no further plumbing.
 
     def add_artifact(self, artifact: BaseArtifact) -> None:
         """

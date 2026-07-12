@@ -180,18 +180,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
     def workflow(self) -> "BaseWorkflow | None":
         """
         The live workflow this task belongs to, when running inside one.
-
-        Convenience accessor for the current :class:`HorusContext`'s
-        workflow (set by :meth:`BaseWorkflow.run` for the duration of a run),
-        so a running task's body can reach the DAG-mutation API without
-        importing ``HorusContext`` itself, e.g.::
-
-            def my_step(task: BaseTask) -> None:
-                assert task.workflow is not None
-                task.workflow.add_task(...)
-                task.workflow.add_edge(...)
-
-        ``None`` outside of a workflow run.
         """
         return HorusContext.get_context().workflow
 
