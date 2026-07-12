@@ -22,17 +22,6 @@ Replaces a serial "run the topological order one task at a time" loop with a
 scheduler that dispatches every currently-ready task concurrently and reacts
 as each one finishes: as soon as a task completes, its dependents that are
 now ready are dispatched too, without waiting for unrelated in-flight tasks.
-
-Scope is intentionally narrow: concurrency plus a ``max_concurrency`` cap.
-Failure handling supports two policies via ``workflow.failure_policy`` (see
-:attr:`BaseWorkflow.failure_policy`): ``"fail_fast"`` (the default) cancels
-everything else in flight and re-raises, matching the previous serial
-runner; ``"continue"`` lets unrelated branches keep running, blocking only
-the failed task's descendants, and reports every failure at the end via
-:exc:`WorkflowExecutionError`. Resource placement and DAG mutation are left
-to later PRs; the dependency/scope recomputation happening on every loop
-iteration (rather than once up front) is the hook that lets a future
-DAG-mutation PR plug in without touching this loop.
 """
 
 import asyncio
@@ -133,7 +122,7 @@ async def _execute_ready_task(
 ) -> None:
     """
     Run one ready task to completion: acquire a target, bind, transfer
-    inputs, dispatch, and wait — mirroring the per-task body of the previous
+    inputs, dispatch, and wait, mirroring the per-task body of the previous
     serial loop, but on whichever target the pool hands back (the task's own
     declared target in the common case, or an idle clone under contention).
     """
