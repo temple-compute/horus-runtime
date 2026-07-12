@@ -48,6 +48,7 @@ from horus_builtin.workflow.dag import (
 )
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
@@ -165,6 +166,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     dispatched immediately. Set this to cap resource usage (e.g. a shared
     machine with limited CPUs) when the DAG's natural parallelism would
     otherwise over-subscribe it.
+    """
+
+    capacity: dict[str, ResourceCapacity] | None = None
+    """
+    Optional, opt-in compute capacity declared per ``location_id`` (see
+    :attr:`~horus_runtime.core.target.base.BaseTarget.location_id`). When
+    set, the scheduler gates dispatch of any ready task that declares
+    ``resources`` so concurrent tasks sharing a location never request more
+    of a dimension than is available there (e.g. at most 2 GPU-requesting
+    tasks running at once on a location capped at ``gpus=2``).
+
+    ``None`` (the default) or an empty map means no capacity is declared
+    anywhere: every task dispatches exactly as it did before this field
+    existed, governed only by ``max_concurrency``. A location absent from
+    the map, or a task with ``resources=None``, is likewise never gated.
     """
 
     failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
