@@ -424,20 +424,6 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         return self
 
-    # -- Runtime DAG mutation -------------------------------------------
-    #
-    # The validators above run once, at construction. The methods below let
-    # code — typically a task's own body, reached via ``BaseTask.workflow``
-    # — grow the live DAG mid-run: add a task, wire an edge, register a root
-    # artifact, or commit a whole batch of these atomically. Each performs
-    # the same checks the constructor's validators would, but incrementally
-    # (against the current graph, not by re-validating the whole model), and
-    # bumps ``_revision`` so the scheduler's cached source map (see
-    # :meth:`cached_source_map`) picks up the change. The scheduler itself
-    # already recomputes dependencies/scope from ``self.tasks``/``self.edges``
-    # every loop iteration, so a mutation applied while a task is running
-    # takes effect on the next iteration with no further plumbing.
-
     def add_artifact(self, artifact: BaseArtifact) -> None:
         """
         Add a standalone root artifact to the live workflow.
@@ -660,12 +646,6 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def to_yaml(self, path: str | Path) -> None:
         """
         Save the workflow to a YAML file.
-
-        Dumps in ``mode="json"``: PyYAML's ``safe_dump`` cannot represent
-        arbitrary Python objects (e.g. the ``pathlib.Path`` every artifact
-        carries), so fields are coerced to YAML-safe primitives (paths and
-        similar become plain strings) exactly as ``from_yaml`` expects them
-        back on load.
 
         Args:
             path: Path to the YAML file.
