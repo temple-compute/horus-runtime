@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import ClassVar, NamedTuple, Self, final
+from typing import ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
@@ -161,6 +161,23 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     otherwise over-subscribe it.
     """
 
+    failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
+    """
+    How the scheduler reacts to a task failure.
+
+    - ``"fail_fast"`` (the default): the first task to fail cancels every
+      other task still in flight and the run stops immediately, matching the
+      runtime's historical behavior.
+    - ``"continue"``: a failed task does not abort the run. Its descendants
+      are never dispatched (they permanently lack a satisfied dependency),
+      but every other branch of the DAG keeps running to completion. Once
+      nothing more can run, the workflow still ends ``FAILED`` if any task
+      failed, naming every failed task.
+
+    Either way a task failure always results in a ``FAILED`` workflow; the
+    policy only controls how much of the DAG gets to run first.
+    """
+
     _base_directory: Path | None = PrivateAttr(default=None)
     """
     Directory relative paths are anchored to (the run directory and, through
@@ -172,7 +189,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     _revision: int = PrivateAttr(default=0)
     """
     Monotonically increasing counter for the workflow's DAG structure
-    (tasks/edges/artifacts).
+    (tasks/edges/artifacts). Nothing bumps it yet: today the DAG is fixed for
+    the lifetime of a run, so it is built once and stays at ``0``. It exists
+    so a future dynamic-DAG feature (fan-out/map/loops) can increment it when
+    mutating the graph mid-run, and the scheduler's cached source map (see
+    :meth:`cached_source_map`) picks up the change without any changes to the
+    scheduler itself.
     """
 
     @model_validator(mode="after")

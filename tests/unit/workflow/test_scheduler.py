@@ -37,6 +37,8 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
+from horus_runtime.core.workflow.status import WorkflowStatus
 
 
 def _task(
@@ -442,3 +444,130 @@ class TestConcurrentReadySet:
         # once each finishes running.
         assert task_a.target is shared_target
         assert task_b.target is shared_target
+
+
+@pytest.mark.unit
+class TestFailurePolicy:
+    """
+    Tests for ``workflow.failure_policy``: ``"fail_fast"`` (the default,
+    covered by ``TestConcurrentReadySet.``
+    ``test_failure_cancels_concurrent_sibling_and_stops_downstream``) versus
+    ``"continue"``.
+    """
+
+    def test_default_failure_policy_is_fail_fast(self) -> None:
+        """
+        A workflow that doesn't set ``failure_policy`` gets the historical
+        fail-fast behavior.
+        """
+        wf = HorusWorkflow(name="default_policy", tasks=[])
+        assert wf.failure_policy == "fail_fast"
+
+    async def test_continue_policy_blocks_only_failed_branch(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``failure_policy="continue"``, a failed task's descendants are
+        never dispatched, but an unrelated sibling branch fed by the same
+        root still runs to completion. The workflow still ends FAILED, via a
+        ``WorkflowExecutionError`` naming the failed task.
+        """
+        del horus_context
+
+        class FailingTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                raise TaskExecutionError("boom")
+
+        root = _task(
+            "root",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "root.out")],
+        )
+        b = _task(
+            "b",
+            tmp_path=tmp_path,
+            task_cls=FailingTask,
+            inputs=[FileArtifact(id="b_in", path=tmp_path / "root.out")],
+            outputs=[FileArtifact(id="b_out", path=tmp_path / "b.out")],
+        )
+        b_child = _task(
+            "b_child",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            inputs=[FileArtifact(id="child_in", path=tmp_path / "b.out")],
+        )
+        c = _task(
+            "c",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            inputs=[FileArtifact(id="c_in", path=tmp_path / "root.out")],
+        )
+
+        wf = HorusWorkflow(
+            name="continue_policy",
+            tasks=[root, b, b_child, c],
+            edges=[
+                _edge("root", "root_out", "b", "b_in"),
+                _edge("root", "root_out", "c", "c_in"),
+                _edge("b", "b_out", "b_child", "child_in"),
+            ],
+            failure_policy="continue",
+        )
+
+        with (
+            patch.object(HorusWorkflow, "transfer_artifacts", new=AsyncMock()),
+            pytest.raises(WorkflowExecutionError, match="b") as exc_info,
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert exc_info.value.failed_task_ids == ["b"]
+        assert c.runs == 1
+        assert c.status == TaskStatus.COMPLETED
+        assert b.status == TaskStatus.FAILED
+        # b_child is blocked behind b's failure: it never even reaches
+        # RUNNING, let alone executes.
+        assert b_child.runs == 0
+        assert b_child.status == TaskStatus.IDLE
+        assert wf.status == WorkflowStatus.FAILED
+
+    async def test_continue_policy_with_no_failures_completes_normally(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        ``failure_policy="continue"`` behaves exactly like the default when
+        nothing fails: every task runs to completion, the workflow ends
+        COMPLETED, and no ``WorkflowExecutionError`` is raised.
+        """
+        del horus_context
+
+        a = _task(
+            "a",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            outputs=[FileArtifact(id="a_out", path=tmp_path / "a.out")],
+        )
+        b = _task(
+            "b",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            inputs=[FileArtifact(id="b_in", path=tmp_path / "a.out")],
+        )
+
+        wf = HorusWorkflow(
+            name="continue_no_failures",
+            tasks=[a, b],
+            edges=[_edge("a", "a_out", "b", "b_in")],
+            failure_policy="continue",
+        )
+
+        with patch.object(
+            HorusWorkflow, "transfer_artifacts", new=AsyncMock()
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert a.runs == 1
+        assert b.runs == 1
+        assert wf.status == WorkflowStatus.COMPLETED
