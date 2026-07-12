@@ -202,6 +202,24 @@ async def _cancel_running(running: dict[asyncio.Task[None], str]) -> None:
     running.clear()
 
 
+def _dependencies_with_implicit(
+    workflow: BaseWorkflow,
+) -> dict[str, set[str]]:
+    """
+    Edge-derived dependency map for *workflow*, augmented with its runtime-only
+    implicit deps (a task added mid-run gated behind its creator; see
+    ``BaseWorkflow.add_task``/``expand``). Recomputed every scheduler loop so a
+    mid-run mutation is reflected immediately, and merged before scope is
+    derived so a newly added, edge-less task enters scope as a descendant of
+    its in-scope creator.
+    """
+    deps = build_dependencies(workflow.tasks, workflow.edges)
+    for task_id, creators in workflow.implicit_task_dependencies.items():
+        if task_id in deps:
+            deps[task_id] |= creators & deps.keys()
+    return deps
+
+
 async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     """
     Execute *workflow* from *trigger_id* with a concurrent ready-set
@@ -282,7 +300,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         # too, otherwise a task added after the loop started would compute
         # as "ready" below but be missing from a stale lookup.
         tasks_by_id = {task.id: task for task in workflow.tasks}
-        deps = build_dependencies(workflow.tasks, workflow.edges)
+        deps = _dependencies_with_implicit(workflow)
         scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
 
         # Deterministic order when several tasks become ready at once,

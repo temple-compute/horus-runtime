@@ -21,6 +21,7 @@ folder/directory artifact in the Horus runtime.
 """
 
 import json
+from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
@@ -55,7 +56,11 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T]):
     def write(self, value: T) -> None:
         """
         Serialize and write the JSON artifact contents.
+
+        Parent directories are created as needed so a task can write an output
+        into a not-yet-existing results/ folder without a manual ``mkdir``.
         """
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w") as f:
             json.dump(value, f)
         self._emit_event(ArtifactEventsEnum.WRITE)

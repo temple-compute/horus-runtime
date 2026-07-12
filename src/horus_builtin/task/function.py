@@ -74,6 +74,7 @@ class FunctionTask(HorusTask):
         inputs: list[BaseArtifact] | None = None,
         outputs: list[BaseArtifact] | None = None,
         target: BaseTarget | None = None,
+        skip_if_complete: bool = True,
     ) -> Callable[[Callable[..., Any]], "FunctionTask"]:
         """
         Decorator factory for registering a Python function as a Horus task
@@ -92,6 +93,7 @@ class FunctionTask(HorusTask):
                 inputs=inputs or [],
                 outputs=outputs or [],
                 target=target or LocalTarget(),
+                skip_if_complete=skip_if_complete,
             )
 
             wf.tasks.append(t)
