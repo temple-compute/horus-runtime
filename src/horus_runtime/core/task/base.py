@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, ClassVar, Self, final
 from pydantic import Field, model_validator
 
 from horus_builtin.event.task_event import HorusTaskEvent
-from horus_runtime.context import HorusContext
+from horus_runtime.context import HorusContext, running_task
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
@@ -237,50 +237,57 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``FAILED``    — set on any other exception (re-raised after)
         """
         ctx = HorusContext.get_context()
-        if self.skip_if_complete and await self.is_complete():
-            ctx.bus.emit(
-                HorusTaskEvent(
-                    message=_("Skipping task %(task_name)s. Already complete.")
-                    % {"task_name": self.name},
-                    task_id=self.id,
-                    task_name=self.name,
+        # Publish this task as the "current task" for the duration of its
+        # execution so code it invokes (notably ``BaseWorkflow.add_task``) can
+        # discover its creator and gate any runtime-added task behind it.
+        with running_task(self.id):
+            if self.skip_if_complete and await self.is_complete():
+                ctx.bus.emit(
+                    HorusTaskEvent(
+                        message=_(
+                            "Skipping task %(task_name)s. Already complete."
+                        )
+                        % {"task_name": self.name},
+                        task_id=self.id,
+                        task_name=self.name,
+                    )
                 )
-            )
-            self.status = TaskStatus.SKIPPED
+                self.status = TaskStatus.SKIPPED
+                horus_logger.log.debug(
+                    _("Task %(task_name)s status → SKIPPED")
+                    % {"task_name": self.name}
+                )
+                return
+            self.status = TaskStatus.RUNNING
             horus_logger.log.debug(
-                _("Task %(task_name)s status → SKIPPED")
+                _("Task %(task_name)s status → RUNNING")
                 % {"task_name": self.name}
             )
-            return
-        self.status = TaskStatus.RUNNING
-        horus_logger.log.debug(
-            _("Task %(task_name)s status → RUNNING") % {"task_name": self.name}
-        )
-        try:
-            await TaskMiddleware.call_with_middleware(
-                TaskMiddlewareContext(task=self),
-                self._run,
-            )
-        except CancelledError:
-            self.status = TaskStatus.CANCELED
-            horus_logger.log.debug(
-                _("Task %(task_name)s status → CANCELED")
-                % {"task_name": self.name}
-            )
-            raise
-        except Exception:
-            self.status = TaskStatus.FAILED
-            horus_logger.log.debug(
-                _("Task %(task_name)s status → FAILED")
-                % {"task_name": self.name}
-            )
-            raise
-        else:
-            self.status = TaskStatus.COMPLETED
-            horus_logger.log.debug(
-                _("Task %(task_name)s status → COMPLETED")
-                % {"task_name": self.name}
-            )
+            try:
+                await TaskMiddleware.call_with_middleware(
+                    TaskMiddlewareContext(task=self),
+                    self._run,
+                )
+            except CancelledError:
+                self.status = TaskStatus.CANCELED
+                horus_logger.log.debug(
+                    _("Task %(task_name)s status → CANCELED")
+                    % {"task_name": self.name}
+                )
+                raise
+            except Exception:
+                self.status = TaskStatus.FAILED
+                horus_logger.log.debug(
+                    _("Task %(task_name)s status → FAILED")
+                    % {"task_name": self.name}
+                )
+                raise
+            else:
+                self.status = TaskStatus.COMPLETED
+                horus_logger.log.debug(
+                    _("Task %(task_name)s status → COMPLETED")
+                    % {"task_name": self.name}
+                )
 
     async def sync_status(self) -> TaskStatus:
         """

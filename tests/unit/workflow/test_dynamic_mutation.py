@@ -37,7 +37,7 @@ from horus_builtin.task.function import FunctionTask
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.dag import CyclicDependencyError
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_runtime.context import HorusContext
+from horus_runtime.context import HorusContext, running_task
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
@@ -344,6 +344,54 @@ class TestExpand:
 
 
 @pytest.mark.unit
+class TestImplicitCreatorGating:
+    """
+    A task added mid-run with no incoming edge is gated behind the task that
+    created it, so it enters the scheduler's scope and runs afterwards. A task
+    added with an edge (or outside any running task) is left ungated.
+    """
+
+    def test_edgeless_add_task_inside_running_task_is_gated(self) -> None:
+        """add_task from inside a running task records creator -> new dep."""
+        wf = HorusWorkflow(name="wf", tasks=[_task("creator")])
+
+        with running_task("creator"):
+            wf.add_task(_task("child"))
+
+        assert wf.implicit_task_dependencies == {"child": {"creator"}}
+
+    def test_add_task_outside_a_running_task_is_not_gated(self) -> None:
+        """Static, construction-time add_task records no implicit dep."""
+        wf = HorusWorkflow(name="wf", tasks=[_task("t1")])
+
+        wf.add_task(_task("t2"))
+
+        assert wf.implicit_task_dependencies == {}
+
+    def test_task_wired_by_own_edge_is_not_gated(self, tmp_path: Path) -> None:
+        """
+        A new task that already has an incoming task edge (e.g. a map/loop
+        clone, or a fan-in join) is ordered by that edge and must not also be
+        forced behind the creator.
+        """
+        producer = _task(
+            "producer",
+            outputs=[FileArtifact(id="out", path=tmp_path / "out.txt")],
+        )
+        wf = HorusWorkflow(name="wf", tasks=[producer])
+
+        consumer = _task(
+            "consumer",
+            inputs=[FileArtifact(id="in", path=tmp_path / "in.txt")],
+        )
+        edge = _edge("producer", "out", "consumer", "in")
+        with running_task("producer"):
+            wf.expand(tasks=[consumer], edges=[edge])
+
+        assert wf.implicit_task_dependencies == {}
+
+
+@pytest.mark.unit
 class TestTaskWorkflowProperty:
     """BaseTask.workflow reaches the live workflow via HorusContext."""
 
@@ -422,3 +470,57 @@ class TestDynamicMutationEndToEnd:
         marker_path = (tmp_path / "marker.txt").resolve()
         assert marker_path.exists()
         assert marker_path.read_text() == "HELLO"
+
+    async def test_edgeless_injected_task_runs_after_its_creator(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A trigger injects a downstream task with **no** edge back to itself
+        (the programmatic dynamic-DAG pattern: the task is generated during the
+        trigger's own body, so it can only run afterwards). The scheduler gates
+        it behind its creator, dispatches it, and it reaches COMPLETED.
+        """
+        del horus_context
+
+        def downstream_fn(marker: FileArtifact) -> None:
+            marker.path.write_text("ran")
+
+        def trigger_fn(task: BaseTask, out: FileArtifact) -> None:
+            out.path.write_text("hello")
+
+            wf = task.workflow
+            assert wf is not None
+
+            downstream = FunctionTask(
+                id="downstream",
+                name="downstream",
+                runtime=PythonFunctionRuntime(func=downstream_fn),
+                outputs=[FileArtifact(id="marker", path=Path("marker.txt"))],
+            )
+            # No add_edge: the task is edge-less and only reachable because it
+            # is gated behind the trigger that created it.
+            wf.add_task(downstream)
+
+        trigger = FunctionTask(
+            id="trigger",
+            name="trigger",
+            runtime=PythonFunctionRuntime(func=trigger_fn),
+            outputs=[FileArtifact(id="out", path=Path("trigger_out.txt"))],
+        )
+
+        wf = HorusWorkflow(
+            name="dynamic-edgeless",
+            tasks=[trigger],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+
+        await wf.run(trigger_id="trigger")
+
+        assert wf.status.value == "completed"
+        assert wf.implicit_task_dependencies == {"downstream": {"trigger"}}
+
+        downstream_task = next(t for t in wf.tasks if t.id == "downstream")
+        assert downstream_task.status == TaskStatus.COMPLETED
+        assert (tmp_path / "marker.txt").resolve().read_text() == "ran"

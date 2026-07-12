@@ -52,7 +52,7 @@ from horus_builtin.workflow.loop import (
     lower_loop_entry,
 )
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
-from horus_runtime.context import HorusContext
+from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
@@ -212,6 +212,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     it, artifact paths and logs). Set to the workflow YAML's folder by
     :meth:`from_yaml`; ``None`` for programmatically-built workflows, which
     fall back to the process CWD. Runtime-only state, not serialized.
+    """
+
+    _implicit_task_deps: dict[str, set[str]] = PrivateAttr(
+        default_factory=dict
+    )
+    """
+    Runtime-only ordering dependencies not expressed by any edge:
+    ``new_task_id -> {creator_task_id}``. Populated when
+    :meth:`add_task`/:meth:`expand` is called from inside a running task and
+    the new task has no incoming task edge of its own — it is gated behind its
+    creator so a task generated mid-run (e.g. by a ``plan`` step expanding the
+    DAG) runs after the step that created it, without the caller having to
+    invent a placeholder edge. Merged into the scheduler's dependency map
+    (see :func:`horus_builtin.workflow.scheduler.run_schedule`) alongside the
+    edge-derived deps. Never serialized.
     """
 
     _revision: int = PrivateAttr(default=0)
@@ -504,6 +519,49 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     # every loop iteration, so a mutation applied while a task is running
     # takes effect on the next iteration with no further plumbing.
 
+    @property
+    def implicit_task_dependencies(self) -> dict[str, set[str]]:
+        """
+        A copy of the runtime-only ``new_task_id -> {creator_task_id}``
+        ordering dependencies (see :attr:`_implicit_task_deps`). The scheduler
+        folds these into its edge-derived dependency map every loop iteration.
+        """
+        return {
+            task_id: set(creators)
+            for task_id, creators in self._implicit_task_deps.items()
+        }
+
+    def _gate_new_tasks_behind_creator(self, new_task_ids: set[str]) -> None:
+        """
+        Record an implicit ordering dependency from each brand-new task with
+        no incoming task edge onto the task that created it (the task running
+        in the current context, if any).
+
+        This is what makes a task added mid-run reachable: the scheduler's
+        scope is ``ancestors(trigger) | descendants(trigger)``, so a task with
+        no path back to the trigger would never run. Gating it behind its
+        creator — which is itself in scope — makes it a descendant and orders
+        it strictly after the creator completes.
+
+        A no-op outside a running task (static, construction-time building is
+        unchanged) and for any new task that already has an incoming task edge
+        (e.g. map/loop clones wired to their source), which is already ordered
+        by that edge and must not be forced behind the expander instead.
+        """
+        creator = current_task_id()
+        if creator is None:
+            return
+        # Task ids that are already the target of a task -> task edge: those
+        # are ordered by an explicit edge and need no implicit gating.
+        task_ids = {task.id for task in self.tasks}
+        wired_targets = {
+            edge.target for edge in self.edges if edge.source in task_ids
+        }
+        for task_id in new_task_ids:
+            if task_id == creator or task_id in wired_targets:
+                continue
+            self._implicit_task_deps.setdefault(task_id, set()).add(creator)
+
     def add_artifact(self, artifact: BaseArtifact) -> None:
         """
         Add a standalone root artifact to the live workflow.
@@ -556,6 +614,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         self.tasks.append(task)
         self._anchor_task(task)
+        self._gate_new_tasks_behind_creator({task.id})
         self._revision += 1
 
     def add_edge(self, edge: WorkflowEdge) -> None:
@@ -702,6 +761,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         self.edges.extend(new_edges)
         for task in new_tasks:
             self._anchor_task(task)
+        # Runs after edges are appended so a new task wired by one of the
+        # batch's own edges (e.g. a map/loop clone, or a fan-in join fed by
+        # its producers) is recognised as already-ordered and left ungated.
+        self._gate_new_tasks_behind_creator({task.id for task in new_tasks})
         self._revision += 1
 
     @classmethod

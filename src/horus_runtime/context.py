@@ -21,6 +21,8 @@ Runtime initialization, plugin loading, and global context management for
 horus-runtime.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Union
@@ -34,6 +36,36 @@ from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
+
+_current_task_id: ContextVar[str | None] = ContextVar(
+    "horus_current_task_id", default=None
+)
+"""
+Id of the task currently executing in this (async) context, or ``None`` when
+no task is running. Set by :meth:`BaseTask.run` for the duration of a task's
+execution so code invoked from inside a task — notably the runtime DAG-mutation
+API (``BaseWorkflow.add_task``) — can discover which task created it and gate
+the new task behind that creator. Being a :class:`~contextvars.ContextVar`, it
+is naturally isolated per concurrently running task.
+"""
+
+
+def current_task_id() -> str | None:
+    """Return the id of the task running in the current context, if any."""
+    return _current_task_id.get()
+
+
+@contextmanager
+def running_task(task_id: str) -> Iterator[None]:
+    """
+    Mark *task_id* as the task executing in the current context for the
+    duration of the ``with`` block, restoring the previous value on exit.
+    """
+    token = _current_task_id.set(task_id)
+    try:
+        yield
+    finally:
+        _current_task_id.reset(token)
 
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
 
