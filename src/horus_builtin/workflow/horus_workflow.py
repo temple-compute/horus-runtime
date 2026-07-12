@@ -46,7 +46,7 @@ class HorusWorkflow(BaseWorkflow):
         "The default workflow implementation for Horus built-in workflows."
     )
 
-    orchestrator_target: BaseTarget = LocalTarget()
+    orchestrator_target: BaseTarget | None = LocalTarget()
     """
     The orchestrator runs locally; root input artifacts (those not produced by
     any upstream task) are sourced from the local filesystem.

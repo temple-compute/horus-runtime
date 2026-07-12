@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import ClassVar, NamedTuple, Self, final
+from typing import ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
@@ -167,6 +167,23 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     otherwise over-subscribe it.
     """
 
+    failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
+    """
+    How the scheduler reacts to a task failure.
+
+    - ``"fail_fast"`` (the default): the first task to fail cancels every
+      other task still in flight and the run stops immediately, matching the
+      runtime's historical behavior.
+    - ``"continue"``: a failed task does not abort the run. Its descendants
+      are never dispatched (they permanently lack a satisfied dependency),
+      but every other branch of the DAG keeps running to completion. Once
+      nothing more can run, the workflow still ends ``FAILED`` if any task
+      failed, naming every failed task.
+
+    Either way a task failure always results in a ``FAILED`` workflow; the
+    policy only controls how much of the DAG gets to run first.
+    """
+
     _base_directory: Path | None = PrivateAttr(default=None)
     """
     Directory relative paths are anchored to (the run directory and, through
@@ -296,7 +313,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         - target an existing task and one of its declared input ids;
         - source either an existing task's declared output id, or a root
           artifact id via the ``artifact-<rootId>`` convention;
-        - be the only edge feeding its ``(target, target_input)``.
+        - be the only ``transfer=True`` edge feeding its
+          ``(target, target_input)``. Ordering-only (``transfer=False``)
+          edges are exempt: any number of them may feed the same input,
+          alongside at most one ``transfer=True`` edge, since they never
+          contribute a transfer source (see :meth:`_build_source_map`).
         """
         task_inputs = {t.id: {a.id for a in t.inputs} for t in self.tasks}
         task_outputs = {t.id: {a.id for a in t.outputs} for t in self.tasks}
@@ -306,11 +327,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         for edge in self.edges:
             self._assert_edge_target_resolves(edge, task_inputs)
 
-            # At most one edge may feed a given consumer input.
-            key = (edge.target, edge.target_input)
-            if key in seen_targets:
-                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
-            seen_targets.add(key)
+            # At most one transfer edge may feed a given consumer input.
+            # Ordering-only edges (transfer=False) are exempt.
+            if edge.transfer:
+                key = (edge.target, edge.target_input)
+                if key in seen_targets:
+                    raise DuplicateEdgeTargetError(
+                        edge.target, edge.target_input
+                    )
+                seen_targets.add(key)
 
             self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
@@ -560,6 +585,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         :class:`_EdgeSource`. Edges are validated at construction
         (see :meth:`check_edges_resolve`), so every entry resolves to a real
         producer output or root artifact.
+
+        Only ``transfer=True`` edges contribute an entry: ordering-only
+        (``transfer=False``) edges affect DAG ordering (see
+        :func:`horus_builtin.workflow.dag.build_dependencies`) but never
+        supply a transfer source.
         """
         targets_by_task = {t.id: t.target for t in self.tasks}
         outputs_by_task = {
@@ -569,6 +599,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         source_map: dict[tuple[str, str], _EdgeSource] = {}
         for edge in self.edges:
+            if not edge.transfer:
+                continue
             key = (edge.target, edge.target_input)
             producer_target = targets_by_task.get(edge.source)
             if producer_target is not None:
