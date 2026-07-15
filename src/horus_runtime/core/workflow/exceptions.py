@@ -95,6 +95,25 @@ class UnknownEdgeEndpointError(WorkflowError):
         )
 
 
+class IncompleteEdgeError(WorkflowError):
+    """
+    Raised when an edge names one endpoint artifact id but not the other. An
+    edge either names both (it may carry data) or neither (it only orders its
+    two tasks); anything in between is a typo that would silently drop a
+    transfer.
+    """
+
+    def __init__(self, source: str, target: str):
+        super().__init__(
+            _(
+                "Edge '%(source)s' -> '%(target)s' names only one of "
+                "'source_output' and 'target_input'. Name both to connect two "
+                "artifacts, or neither to only order the two tasks."
+            )
+            % {"source": source, "target": target}
+        )
+
+
 class DuplicateEdgeTargetError(WorkflowError):
     """
     Raised when two edges feed the same consumer input. A single input can be

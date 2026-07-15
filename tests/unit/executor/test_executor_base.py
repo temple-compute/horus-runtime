@@ -21,13 +21,22 @@ Unit tests for BaseExecutor class.
 
 import inspect
 from abc import ABC
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Union
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.target.local import LocalTarget
+from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
 )
@@ -221,3 +230,58 @@ class TestBaseExecutorValidation:
 
             # This should fail because execute method is not implemented
             IncompleteExecutor()  # type: ignore
+
+
+@pytest.mark.unit
+class TestOutputDirectoriesAreCreated:
+    """
+    ``BaseExecutor.execute`` creates each declared output's parent directory,
+    so tasks never need a mkdir step of their own.
+    """
+
+    def _task(
+        self, tmp_path: Path, cmd: str, outputs: list[BaseArtifact]
+    ) -> HorusTask:
+        return HorusTask(
+            id="writer",
+            name="writer",
+            outputs=outputs,
+            runtime=CommandRuntime(command=cmd),
+            executor=ShellExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+
+    @pytest.mark.usefixtures("horus_context")
+    async def test_missing_output_dir_is_created(self, tmp_path: Path) -> None:
+        """A task writing into a non-existent directory succeeds anyway."""
+        out = tmp_path / "results" / "nested" / "out.txt"
+        task = self._task(
+            tmp_path,
+            f"echo hi > {out}",
+            [FileArtifact(id="out", path=out)],
+        )
+
+        await task.run()
+
+        assert out.exists()
+        assert task.status is TaskStatus.COMPLETED
+
+    @pytest.mark.usefixtures("horus_context")
+    async def test_folder_output_path_itself_is_not_created(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Only the *parent* is created. A FolderArtifact reports exists() for any
+        directory, so pre-creating its own path would make the task look
+        complete and skip forever.
+        """
+        out = tmp_path / "results" / "bundle"
+        task = self._task(
+            tmp_path, "true", [FolderArtifact(id="out", path=out)]
+        )
+
+        await task.executor.execute(task)
+
+        assert out.parent.is_dir()
+        assert not out.exists()
+        assert not await task.is_complete()

@@ -46,6 +46,7 @@ from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
     DuplicateEdgeTargetError,
+    IncompleteEdgeError,
     UnknownEdgeEndpointError,
 )
 
@@ -582,3 +583,144 @@ class TestOrderingOnlyEdges:
                     _edge("p2", "o2", "c", "in", transfer=True),
                 ],
             )
+
+
+@pytest.mark.unit
+class TestArtifactLessOrderingEdges:
+    """
+    An edge naming no artifacts orders two tasks that need declare none.
+    ``transfer=False`` alone cannot express this: it still requires both ids
+    to name declared artifacts.
+    """
+
+    def _pair(self, tmp_path: Path) -> tuple[HorusTask, HorusTask]:
+        """A producer, and a task declaring no inputs and no outputs."""
+        producer = _task(
+            task_id="prep",
+            inputs=[],
+            outputs=[FileArtifact(id="out", path=tmp_path / "p.txt")],
+        )
+        bare = _task(task_id="cleanup", inputs=[], outputs=[])
+        return producer, bare
+
+    def test_orders_a_task_that_declares_no_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        """The case transfer=False cannot express: nothing to name."""
+        producer, bare = self._pair(tmp_path)
+        edges = [WorkflowEdge(source="prep", target="cleanup")]
+        wf = HorusWorkflow(
+            name="ordering", tasks=[bare, producer], edges=edges
+        )
+        plan = execution_plan(wf.tasks, trigger_id="prep", edges=wf.edges)
+        assert plan == ["prep", "cleanup"]
+
+    def test_naming_no_artifacts_forces_transfer_false(self) -> None:
+        """
+        An edge with nothing to carry cannot be a transfer edge, so every
+        downstream `if edge.transfer` check answers correctly without having
+        to re-derive it from the ids.
+        """
+        edge = WorkflowEdge(source="prep", target="cleanup")
+        assert edge.transfer is False
+        # Even when the default is overridden: there is still nothing to move.
+        assert (
+            WorkflowEdge(
+                source="prep", target="cleanup", transfer=True
+            ).transfer
+            is False
+        )
+
+    def test_contributes_no_transfer_source(self, tmp_path: Path) -> None:
+        """It feeds no input, so it adds no entry to the source map."""
+        producer, bare = self._pair(tmp_path)
+        wf = HorusWorkflow(
+            name="ordering",
+            tasks=[producer, bare],
+            edges=[WorkflowEdge(source="prep", target="cleanup")],
+        )
+        assert wf._build_source_map() == {}
+
+    def test_many_into_one_task_allowed(self, tmp_path: Path) -> None:
+        """
+        Several may gate one task: the one-edge-per-input rule is about
+        inputs, and these have none.
+        """
+        a = _task(
+            task_id="a",
+            inputs=[],
+            outputs=[FileArtifact(id="o", path=tmp_path / "a.txt")],
+        )
+        b = _task(
+            task_id="b",
+            inputs=[],
+            outputs=[FileArtifact(id="o", path=tmp_path / "b.txt")],
+        )
+        last = _task(task_id="last", inputs=[], outputs=[])
+        wf = HorusWorkflow(
+            name="fan_in",
+            tasks=[last, a, b],
+            edges=[
+                WorkflowEdge(source="a", target="last"),
+                WorkflowEdge(source="b", target="last"),
+            ],
+        )
+        # Triggered from "last" so both predecessors are in scope as ancestors.
+        plan = execution_plan(wf.tasks, trigger_id="last", edges=wf.edges)
+        assert plan.index("last") > plan.index("a")
+        assert plan.index("last") > plan.index("b")
+
+    def test_add_edge_accepts_many_into_one_task(self, tmp_path: Path) -> None:
+        """
+        add_edge must agree with the constructor: it applies the duplicate
+        rule only to transfer edges.
+        """
+        a = _task(
+            task_id="a",
+            inputs=[],
+            outputs=[FileArtifact(id="o", path=tmp_path / "a.txt")],
+        )
+        b = _task(
+            task_id="b",
+            inputs=[],
+            outputs=[FileArtifact(id="o", path=tmp_path / "b.txt")],
+        )
+        last = _task(task_id="last", inputs=[], outputs=[])
+        wf = HorusWorkflow(
+            name="fan_in",
+            tasks=[a, b, last],
+            edges=[WorkflowEdge(source="a", target="last")],
+        )
+        wf.add_edge(WorkflowEdge(source="b", target="last"))
+        assert len(wf.edges) == 2
+
+    def test_unknown_task_still_rejected(self, tmp_path: Path) -> None:
+        """Dropping the ids does not drop endpoint validation."""
+        producer, bare = self._pair(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[producer, bare],
+                edges=[WorkflowEdge(source="prep", target="ghost")],
+            )
+
+    def test_root_artifact_source_rejected(self, tmp_path: Path) -> None:
+        """A root artifact is not a task: nothing to order against."""
+        _, bare = self._pair(tmp_path)
+        with pytest.raises(UnknownEdgeEndpointError):
+            HorusWorkflow(
+                name="bad",
+                tasks=[bare],
+                artifacts=[FileArtifact(id="root", path=tmp_path / "r.txt")],
+                edges=[WorkflowEdge(source="artifact-root", target="cleanup")],
+            )
+
+    def test_half_named_edge_raises(self) -> None:
+        """
+        One id without the other is a typo, not an ordering edge: it must not
+        silently stop transferring.
+        """
+        with pytest.raises(IncompleteEdgeError):
+            WorkflowEdge(source="a", source_output="o", target="b")
+        with pytest.raises(IncompleteEdgeError):
+            WorkflowEdge(source="a", target="b", target_input="in")

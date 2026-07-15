@@ -434,9 +434,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Raise :exc:`UnknownEdgeEndpointError` unless *edge* targets a real
         task and one of its declared input ids. Shared by
         :meth:`check_edges_resolve`, :meth:`add_edge`, and :meth:`expand`.
+
+        An edge naming no artifacts only has to target a real task: it exists
+        to order tasks that may declare no inputs at all.
         """
         if edge.target not in task_inputs:
             raise UnknownEdgeEndpointError("target task", edge.target)
+        if edge.target_input is None:
+            return
         if edge.target_input not in task_inputs[edge.target]:
             raise UnknownEdgeEndpointError("target input", edge.target_input)
 
@@ -451,16 +456,27 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         task output, or a root artifact via the ``artifact-<rootId>``
         convention. Shared by :meth:`check_edges_resolve`, :meth:`add_edge`,
         and :meth:`expand`.
+
+        An edge naming no artifacts only has to source a real task: it exists
+        to order tasks that may declare no outputs at all. A root artifact is
+        not a task and so has nothing to order against, which leaves it
+        rejected by the final branch.
         """
         if edge.source in task_outputs:
-            if edge.source_output not in task_outputs[edge.source]:
+            if (
+                edge.source_output is not None
+                and edge.source_output not in task_outputs[edge.source]
+            ):
                 raise UnknownEdgeEndpointError(
                     "source output", edge.source_output
                 )
         elif edge.source.startswith("artifact-"):
-            if edge.source_output not in root_ids:
+            if (
+                edge.source_output is None
+                or edge.source_output not in root_ids
+            ):
                 raise UnknownEdgeEndpointError(
-                    "root artifact", edge.source_output
+                    "root artifact", str(edge.source_output)
                 )
         else:
             raise UnknownEdgeEndpointError("source task", edge.source)
@@ -493,7 +509,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
             # At most one transfer edge may feed a given consumer input.
             # Ordering-only edges (transfer=False) are exempt.
-            if edge.transfer:
+            # (`target_input is not None` is implied by `transfer`, and is
+            # spelled out to narrow the type.)
+            if edge.transfer and edge.target_input is not None:
                 key = (edge.target, edge.target_input)
                 if key in seen_targets:
                     raise DuplicateEdgeTargetError(
@@ -641,11 +659,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         root_ids = {a.id for a in self.artifacts}
 
         self._assert_edge_target_resolves(edge, task_inputs)
-        if any(
-            e.target == edge.target and e.target_input == edge.target_input
-            for e in self.edges
-        ):
-            raise DuplicateEdgeTargetError(edge.target, edge.target_input)
+
+        # At most one transfer edge may feed a given consumer input, exactly
+        # as in check_edges_resolve and expand: ordering-only edges never
+        # contribute a transfer source, so any number of them may pile onto
+        # the same input. (`target_input is not None` is implied by
+        # `transfer`, and is spelled out to narrow the type.)
+        if edge.transfer and edge.target_input is not None:
+            if any(
+                e.transfer
+                and e.target == edge.target
+                and e.target_input == edge.target_input
+                for e in self.edges
+            ):
+                raise DuplicateEdgeTargetError(edge.target, edge.target_input)
+
         self._assert_edge_source_resolves(edge, task_outputs, root_ids)
 
         if would_create_cycle(self.edges, edge, self.tasks):
@@ -738,7 +766,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         for edge in new_edges:
             self._assert_edge_target_resolves(edge, task_inputs)
 
-            if edge.transfer:
+            # (`target_input is not None` is implied by `transfer`, and is
+            # spelled out to narrow the type.)
+            if edge.transfer and edge.target_input is not None:
                 key = (edge.target, edge.target_input)
                 if key in seen_targets:
                     raise DuplicateEdgeTargetError(
@@ -827,7 +857,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         source_map: dict[tuple[str, str], _EdgeSource] = {}
         for edge in self.edges:
-            if not edge.transfer:
+            # (The id checks are implied by `transfer`, and are spelled out to
+            # narrow the types for the key and lookups below.)
+            if (
+                not edge.transfer
+                or edge.target_input is None
+                or edge.source_output is None
+            ):
                 continue
             key = (edge.target, edge.target_input)
             producer_target = targets_by_task.get(edge.source)

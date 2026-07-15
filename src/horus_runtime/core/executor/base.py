@@ -104,6 +104,14 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         # code works on both local and remote targets (M2.3).
         await task.target.mkdir(task.side_artifacts_dir)
 
+        # Declared outputs are written by the task itself (a shell command
+        # redirecting to ${artifact} never goes through Artifact.write), so
+        # their directory must exist beforehand. Only the *parent*: creating a
+        # FolderArtifact's own path would make it exist() and the task would
+        # skip itself forever.
+        for artifact in task.outputs:
+            await task.target.mkdir(str(artifact.path.parent))
+
         try:
             await ExecutorMiddleware.call_with_middleware(
                 ExecutorMiddlewareContext(executor=self, task=task),
