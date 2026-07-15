@@ -19,9 +19,16 @@
 Explicit connection between a producer's output artifact and a consumer's
 input artifact. Edges are the source of truth for the workflow DAG: a
 ``source`` task must complete before its ``target`` task.
+
+Omitting both artifact ids makes the edge purely ordering: it needs no
+artifact on either end, so it can order tasks that declare none.
 """
 
-from pydantic import BaseModel
+from typing import Self
+
+from pydantic import BaseModel, model_validator
+
+from horus_runtime.core.workflow.exceptions import IncompleteEdgeError
 
 
 class WorkflowEdge(BaseModel):
@@ -33,14 +40,20 @@ class WorkflowEdge(BaseModel):
     source: str
     """Producer task id, or ``artifact-<rootId>`` for a root source."""
 
-    source_output: str
-    """Output artifact id on the source (or the root artifact's id)."""
+    source_output: str | None = None
+    """
+    Output artifact id on the source (or the root artifact's id). ``None``
+    only on an artifact-less ordering edge (see ``transfer``).
+    """
 
     target: str
     """Consumer task id."""
 
-    target_input: str
-    """Input artifact id on the consumer task."""
+    target_input: str | None = None
+    """
+    Input artifact id on the consumer task. ``None`` only on an artifact-less
+    ordering edge (see ``transfer``).
+    """
 
     transfer: bool = True
     """
@@ -53,4 +66,26 @@ class WorkflowEdge(BaseModel):
     one ordering-only edge alongside a single ``transfer=True`` edge) may all
     feed the same input. This is what lets many producers order-gate one
     consumer whose actual data input is, say, a folder populated out of band.
+
+    Forced to ``False`` when the edge names no artifacts at all: there is
+    then nothing to carry. Such an edge orders two tasks that need declare no
+    inputs or outputs, which ``transfer=False`` alone cannot express (it still
+    requires both ids to name declared artifacts).
     """
+
+    @model_validator(mode="after")
+    def check_endpoints_agree(self) -> Self:
+        """
+        Both artifact ids or neither, and an edge naming none cannot transfer.
+
+        A half-specified edge is a typo: letting it through would silently
+        downgrade a data edge to an ordering one. Forcing ``transfer=False``
+        when both ids are absent keeps ``transfer`` the single question every
+        consumer already asks ("does this edge carry data?"), so nothing
+        downstream needs to re-derive it from the ids.
+        """
+        if (self.source_output is None) != (self.target_input is None):
+            raise IncompleteEdgeError(self.source, self.target)
+        if self.target_input is None:
+            self.transfer = False
+        return self
