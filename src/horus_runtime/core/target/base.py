@@ -43,6 +43,10 @@ from horus_runtime.middleware.target import (
     TargetMiddleware,
     TargetMiddlewareContext,
 )
+from horus_runtime.middleware.target_command import (
+    TargetCommandMiddleware,
+    TargetCommandMiddlewareContext,
+)
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
@@ -285,13 +289,40 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     ) -> ChannelProcess:
         """
         Run *cmd* on the target and return a :class:`.ChannelProcess` handle.
+
+        The command is routed through the ``TargetCommandMiddleware`` chain
+        first, so middleware may rewrite it (e.g. wrap it in an instrumentation
+        tool) before it is dispatched.
         """
+        ctx = TargetCommandMiddlewareContext(
+            target=self,
+            command=cmd,
+            cwd=cwd,
+            env=env,
+            detach=detach,
+        )
+        return await TargetCommandMiddleware.call_with_middleware(
+            ctx,
+            lambda: self._run_command(ctx),
+        )
+
+    async def _run_command(
+        self, ctx: TargetCommandMiddlewareContext
+    ) -> ChannelProcess:
+        """
+        Dispatch the (possibly rewritten) command from *ctx* to the target.
+        """
+        detach = ctx.detach
         if detach is None:
             detach = self.detach_by_default
         if not detach:
-            return await self.run_command_sync(cmd, cwd=cwd, env=env)
-        job_dir = new_job_dir(cwd or self.resolved_working_directory)
-        handle = await self.launch(cmd, cwd=cwd, env=env, job_dir=job_dir)
+            return await self.run_command_sync(
+                ctx.command, cwd=ctx.cwd, env=ctx.env
+            )
+        job_dir = new_job_dir(ctx.cwd or self.resolved_working_directory)
+        handle = await self.launch(
+            ctx.command, cwd=ctx.cwd, env=ctx.env, job_dir=job_dir
+        )
         return PollingChannelProcess(self, handle)
 
     @abstractmethod
