@@ -102,7 +102,18 @@ class BaseTransferStrategy[
         destination: D,
     ) -> None:
         """
-        Override this method to implement the transfer logic. This is called by
-        the public ``transfer`` method, which handles any common pre- or
-        post-transfer logic (e.g. logging, events, etc.).
+        Implement the transfer of *artifact* from *source* to *destination*.
+
+        **Contract — artifact.path after transfer:**
+
+        After a successful ``_transfer``, ``artifact.path`` must be set to
+        ``Path(destination.path_on_target(artifact))``.  This is the canonical
+        path at which downstream code will look for the artifact on the
+        *destination* target.  Every concrete strategy must uphold this
+        invariant so that callers never have to guess which convention a
+        particular strategy used.
+
+        This is called by the public ``transfer`` method, which handles
+        common pre- or post-transfer logic (same-filesystem shortcut,
+        middleware, etc.).
         """

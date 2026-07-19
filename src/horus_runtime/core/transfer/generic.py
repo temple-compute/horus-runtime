@@ -58,6 +58,13 @@ class GenericTransfer(BaseTransferStrategy):
         orchestrator, and unpackages on the destination. The same-filesystem
         case (equal ``location_id``) is handled upstream by
         :meth:`BaseTransferStrategy.transfer` and never reaches here.
+
+        **Path consistency (Bug #71):** ``dest_path`` is derived from
+        ``destination.resolved_working_directory`` — the same source used by
+        executors to compute ``task.working_dir``.  This eliminates any
+        working-directory mismatch between the transfer and the executor, so
+        output files are always found by direct path lookup with no ``find``
+        fallback required.
         """
         src_store = ArtifactStore(source)
         dst_store = ArtifactStore(destination)
@@ -71,12 +78,23 @@ class GenericTransfer(BaseTransferStrategy):
         pkg_dst = f"{destination.resolved_working_directory}/{name}"
         await destination.put_file(data, pkg_dst)
 
-        dest_path = destination.path_on_target(artifact)
-        await dst_store.unpackage(artifact, pkg_dst)
+        # Derive dest_path from destination.resolved_working_directory so it
+        # is consistent with how executors locate files (task.working_dir =
+        # target.resolved_working_directory / task.id).  The previous approach
+        # used destination.path_on_target(artifact) which, for targets that do
+        # not override path_on_target, returns the source's absolute path —
+        # causing a working-dir mismatch that forced a slow `find` fallback.
+        dest_path = (
+            f"{destination.resolved_working_directory}"
+            f"/{PurePosixPath(artifact.path).name}"
+        )
 
-        # Point the artifact at its materialized destination path before any
-        # cleanup, so path_on_target/downstream templating resolve correctly.
+        # Repoint the artifact at the destination path *before* unpackage so
+        # that path_on_target (used internally by dst_store.unpackage) returns
+        # the correct destination location.
         artifact.path = Path(dest_path)
+
+        await dst_store.unpackage(artifact, pkg_dst)
 
         # Best-effort cleanup of staging packages. Never remove a package that
         # *is* the real artifact: identity packaging leaves pkg_src == the
