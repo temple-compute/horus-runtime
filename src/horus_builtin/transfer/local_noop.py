@@ -19,6 +19,8 @@
 No-op transfer strategy for local-to-local artifact transfers.
 """
 
+from pathlib import Path
+
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.target.base import BaseTarget
@@ -42,4 +44,14 @@ class LocalNoOpTransfer(BaseTransferStrategy):
     ) -> None:
         """
         No-op: artifact is already on the local filesystem.
+
+        ``artifact.path`` is repointed at the destination view of the artifact
+        (via :meth:`~horus_runtime.core.target.base.BaseTarget.path_on_target`)
+        to satisfy the ``_transfer`` contract even though no bytes move.  In
+        practice this strategy is pre-empted by the same-filesystem shortcut in
+        :meth:`~horus_runtime.core.transfer.strategy.BaseTransferStrategy.transfer`
+        (all ``LocalTarget`` instances share the same ``location_id``), but the
+        assignment keeps this class self-consistent and safe to call directly.
         """
+        del source  # unused — artifact already accessible on destination
+        artifact.path = Path(destination.path_on_target(artifact))

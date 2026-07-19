@@ -290,7 +290,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
             with Live(
                 view,
                 console=self._console,
-                refresh_per_second=10,
+                refresh_per_second=8,
                 transient=False,
             ) as live:
                 self._live = live
