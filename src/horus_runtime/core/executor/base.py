@@ -138,19 +138,10 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         execution logic for different types of executors.
         """
 
-    async def stop_running_container(self) -> None:
-        """
-        Stop any container started by this executor, if applicable.
-
-        The base implementation is a no-op.  Executors that run tasks inside
-        containers (e.g. Docker) must override this to stop the container so
-        that :meth:`~horus_runtime.core.target.base.BaseTarget.cancel` can
-        terminate orphaned ``docker run`` processes.
-
-        Called by :meth:`~horus_runtime.core.target.base.BaseTarget.cancel`
-        before the asyncio task is cancelled, ensuring the remote container is
-        cleaned up even when cancellation arrives before the executor records
-        the container ID.
+    async def cancel_execution(self) -> None:
+        """Called when the task is cancelled before it completes naturally.
+        Override to terminate any external process (remote job, subprocess,
+        batch slot) started by this executor. The default is a no-op.
         """
 
     async def collect_side_artifacts(self, task: "BaseTask") -> None:

@@ -211,9 +211,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         ``await`` point, then wait for it to finish any cleanup.
 
         Before cancelling the asyncio task, this calls
-        :meth:`~horus_runtime.core.executor.base.BaseExecutor.stop_running_container`
-        on the task's executor so that container-based executors (e.g. Docker)
-        can stop the remote container and avoid leaving orphaned processes.
+        :meth:`~horus_runtime.core.executor.base.BaseExecutor.cancel_execution`
+        on the task's executor so that executors can terminate any external
+        process and avoid leaving orphaned resources.
         """
         if self._task_future is None or self._task_future.done():
             return
@@ -228,7 +228,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         # CancelledError, so the remote process is terminated even if it
         # never reaches an await point where cancellation would propagate.
         if self._task is not None:
-            await self._task.executor.stop_running_container()
+            await self._task.executor.cancel_execution()
         self._task_future.cancel()
         try:
             await self._task_future
