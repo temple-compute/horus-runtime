@@ -92,6 +92,17 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     handle any runtime type.
     """
 
+    def anchor_local_paths(self, base: Path) -> None:
+        """
+        Resolve any relative local file paths this executor owns against
+        `base`. Called by the workflow before execution. No-op by default.
+
+        Mirrors :meth:`BaseRuntime.anchor_local_paths`; an executor that
+        references a file next to the workflow (a conda ``environment_file``,
+        say) needs the same anchoring or it would resolve against the process
+        working directory instead.
+        """
+
     @final
     async def execute(self, task: "BaseTask") -> None:
         """

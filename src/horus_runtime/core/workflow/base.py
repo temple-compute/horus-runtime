@@ -121,9 +121,17 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Unique identifier for this workflow instance.
     """
 
-    name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9 _-]+$")
+    name: str = Field(min_length=1, pattern=r"^[^\x00-\x1f\x7f]+$")
     """
     Human-readable name for this workflow.
+
+    Only used for display and log messages, never as a path, so the pattern
+    only excludes control characters. Real names carry punctuation --
+    "MD Setup - Protein-Ligand Complex (3HTB + JZ4)", "p38a / Imatinib" --
+    and an alphanumeric-only rule rejected most of the Pantheon library.
+
+    Anything deriving a filename from this must sanitise it itself; a name is
+    free text and may contain path separators.
     """
 
     tasks: list[BaseTask] = Field(
@@ -1056,8 +1064,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         - Declared input/output artifact paths become absolute, rooted under
           :attr:`run_directory` for paths some task produces, or the base
           directory for external paths (see :meth:`_anchor_artifact`).
-        - ``task.runtime.anchor_local_paths(base)`` resolves any relative
-          local files the runtime owns (e.g. a script path).
+        - ``task.runtime.anchor_local_paths(base)`` and the executor's
+          equivalent resolve any relative local files those own (e.g. a
+          script path, or a conda ``environment_file``).
         - A co-located task target (same ``location_id`` as the orchestrator
           target) that has not set its own ``working_directory`` inherits the
           orchestrator target's working directory, mirroring what
@@ -1076,6 +1085,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 artifact, base=base, run_root=run_root, produced=produced
             )
         task.runtime.anchor_local_paths(base)
+        task.executor.anchor_local_paths(base)
 
         if self.orchestrator_target is not None:
             orchestrator_wd = self.orchestrator_target.working_directory

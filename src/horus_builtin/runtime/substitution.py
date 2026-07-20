@@ -42,6 +42,8 @@ from typing import TYPE_CHECKING
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
+    from pathlib import PurePath
+
     from horus_runtime.core.artifact.base import BaseArtifact
     from horus_runtime.core.target.base import BaseTarget
     from horus_runtime.core.task.base import BaseTask
@@ -120,6 +122,21 @@ class _Resolver(Mapping[str, str]):
 
     def __len__(self) -> int:
         return len(self._roots)
+
+
+def is_template(value: "str | PurePath") -> bool:
+    """
+    True if *value* carries a ``$`` placeholder and so must be rendered by
+    :func:`substitute` against a task rather than used verbatim.
+
+    Fields that normally hold a path on the orchestrator (a script, a conda
+    environment file) accept ``${artifact_id}`` instead, naming an input
+    artifact that the transfer layer has already placed on the target. That
+    lets a workflow run on a machine that never had the original file.
+
+    ``$$`` is the escape for a literal ``$`` and does not make a template.
+    """
+    return "$" in str(value).replace("$$", "")
 
 
 def substitute(template: str, task: "BaseTask") -> str:
