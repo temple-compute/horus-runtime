@@ -30,6 +30,7 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.packaging import package_workflow
 from horus_runtime.version import __version__ as horus_version
 
 
@@ -136,6 +137,49 @@ def run(
         raise click.ClickException(str(exc)) from exc
     finally:
         ctx.shutdown()
+
+
+@main.command()
+@click.argument(
+    "workflow_yaml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Zip to write. Defaults to <workflow-dir-name>.zip beside it.",
+)
+def package(workflow_yaml: Path, output: Path | None) -> None:
+    """
+    Bundle WORKFLOW_YAML and the files it references into a zip.
+
+    Collects every external input artifact, script, and executor environment
+    file, so the workflow can run on a machine that never had this directory.
+    Run output is excluded. Exits non-zero if a referenced file is missing.
+    """
+    ctx = HorusContext.boot()
+    try:
+        archive, members, skipped = package_workflow(workflow_yaml, output)
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        ctx.shutdown()
+
+    click.echo("  + workflow.yaml")
+    for rel in members:
+        click.echo(f"  + {rel}")
+    for rel in skipped:
+        # Usually a path a plugin pins into the run root when it expands
+        # (``map:`` does this), but it can also be a genuinely missing input.
+        click.echo(f"  - {rel} " + _("(not found; assumed generated)"))
+    click.echo(
+        _("Wrote %(archive)s (%(count)d file(s))")
+        % {"archive": archive, "count": len(members) + 1}
+    )
 
 
 if __name__ == "__main__":
