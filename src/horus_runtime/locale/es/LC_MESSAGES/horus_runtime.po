@@ -8,8 +8,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-02-15 19:05+0100\n"
-"PO-Revision-Date: 2026-01-28 16:50+0100\n"
+"POT-Creation-Date: 2026-07-20 13:50+0200\n"
+"PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
 "Language: es\n"
@@ -20,11 +20,498 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: src/horus_runtime/cli.py:30
+#: src/horus_runtime/cli.py:106
+msgid "Workflow has no tasks to run."
+msgstr "El flujo de trabajo no tiene tareas que ejecutar."
+
+#: src/horus_runtime/cli.py:115
+#, python-format
+msgid "Unknown task id(s) for --no-skip: %(unknown)s. Valid task ids: %(valid)s"
+msgstr ""
+"ID(s) de tarea desconocido(s) para --no-skip: %(unknown)s. IDs de tarea "
+"válidos: %(valid)s"
+
+#: src/horus_runtime/cli.py:178
+msgid "(not found; assumed generated)"
+msgstr "(no encontrado; se asume generado)"
+
+#: src/horus_runtime/cli.py:180
+#, python-format
+msgid "Wrote %(archive)s (%(count)d file(s))"
+msgstr "Se escribió %(archive)s (%(count)d archivo(s))"
+
+#: src/horus_runtime/context.py:130
+msgid "HorusContext is not set. Did you forget to call HorusContext.boot()?"
+msgstr "HorusContext no está definido. ¿Olvidó llamar a HorusContext.boot()?"
+
+#: src/horus_runtime/context.py:141
 msgid "Horus Runtime is starting..."
 msgstr "El entorno de ejecución de Horus se está iniciando..."
 
-#: src/horus_runtime/core/registry/auto_registry.py:115
+#: src/horus_runtime/context.py:158
+msgid "Horus Runtime ready!"
+msgstr "¡El entorno de ejecución de Horus está listo!"
+
+#: src/horus_runtime/context.py:173
+msgid "Horus Runtime is shutting down..."
+msgstr "El entorno de ejecución de Horus se está deteniendo..."
+
+#: src/horus_runtime/packaging.py:139
+#, python-format
+msgid ""
+"Workflow references %(count)d missing file(s):\n"
+"%(files)s"
+msgstr ""
+"El flujo de trabajo referencia %(count)d archivo(s) inexistente(s):\n"
+"%(files)s"
+
+#: src/horus_runtime/core/placement.py:92
+#, python-format
+msgid ""
+"Task '%(task_name)s' requests %(requested)s %(dimension)s at location "
+"'%(location_id)s', which only ever has %(total)s available. This request "
+"can never be satisfied."
+msgstr ""
+"La tarea '%(task_name)s' solicita %(requested)s %(dimension)s en la "
+"ubicación '%(location_id)s', que como máximo dispone de %(total)s. Esta "
+"solicitud nunca podrá satisfacerse."
+
+#: src/horus_runtime/core/artifact/base.py:194
+#, python-format
+msgid "Artifact at %(path)s. %(event)s"
+msgstr "Artefacto en %(path)s. %(event)s"
+
+#: src/horus_runtime/core/artifact/store.py:131
+#, python-format
+msgid "Failed to %(op)s artifact '%(id)s' on target (exit code %(rc)s)"
+msgstr ""
+"No se pudo %(op)s el artefacto '%(id)s' en el destino (código de salida "
+"%(rc)s)"
+
+#: src/horus_runtime/core/executor/base.py:84
+msgid "Horus base executor"
+msgstr "Ejecutor base de Horus"
+
+#: src/horus_runtime/core/executor/base.py:138
+#, python-format
+msgid "Failed to collect side artifacts for task %(task_id)s: %(err)s"
+msgstr ""
+"No se pudieron recopilar los artefactos secundarios de la tarea "
+"%(task_id)s: %(err)s"
+
+#: src/horus_runtime/core/executor/base.py:181
+#, python-format
+msgid "Failed to list side artifacts for task %(task_id)s: %(err)s"
+msgstr ""
+"No se pudieron listar los artefactos secundarios de la tarea %(task_id)s: "
+"%(err)s"
+
+#: src/horus_runtime/core/executor/base.py:201
+#: src/horus_runtime/core/executor/base.py:261
+#, python-format
+msgid "Skipping side artifact with unsafe name %(name)s"
+msgstr "Se omite el artefacto secundario con nombre no seguro %(name)s"
+
+#: src/horus_runtime/core/executor/base.py:218
+#: src/horus_runtime/core/executor/base.py:271
+#, python-format
+msgid "Skipping large side artifact %(name)s (%(size)d bytes)"
+msgstr ""
+"Se omite el artefacto secundario de gran tamaño %(name)s (%(size)d bytes)"
+
+#: src/horus_runtime/core/executor/base.py:235
+#, python-format
+msgid "Failed to collect side artifact %(name)s: %(err)s"
+msgstr "No se pudo recopilar el artefacto secundario %(name)s: %(err)s"
+
+#: src/horus_runtime/core/interaction/exceptions.py:41
+#: src/horus_runtime/core/interaction/transport.py:217
+#, python-format
+msgid "No renderer registered for %(transport)s:%(interaction)s"
+msgstr ""
+"No hay ningún renderizador registrado para %(transport)s:%(interaction)s"
+
+#: src/horus_runtime/core/interaction/exceptions.py:56
+msgid "No interaction transport configured for this task."
+msgstr "No hay ningún transporte de interacción configurado para esta tarea."
+
+#: src/horus_runtime/core/interaction/exceptions.py:71
+#, python-format
+msgid "Failed to parse interaction '%(kind)s' after %(retries)d retries."
+msgstr ""
+"No se pudo analizar la interacción '%(kind)s' tras %(retries)d reintentos."
+
+#: src/horus_runtime/core/interaction/exceptions.py:88
+#, python-format
+msgid "Missing required batch key '%(key)s'."
+msgstr "Falta la clave de lote obligatoria '%(key)s'."
+
+#: src/horus_runtime/core/interaction/exceptions.py:102
+#, python-format
+msgid "Batch value for key '%(key)s' is invalid: %(reason)s"
+msgstr "El valor de lote para la clave '%(key)s' no es válido: %(reason)s"
+
+#: src/horus_runtime/core/interaction/exceptions.py:117
+#, python-format
+msgid "Missing required input '%(input)s'."
+msgstr "Falta la entrada obligatoria '%(input)s'."
+
+#: src/horus_runtime/core/interaction/exceptions.py:131
+#, python-format
+msgid "YAML value for key '%(key)s' is invalid: %(reason)s"
+msgstr "El valor YAML para la clave '%(key)s' no es válido: %(reason)s"
+
+#: src/horus_runtime/core/interaction/transport.py:73
+#, python-format
+msgid ""
+"Interaction '%(interaction)s' asked via transport '%(transport)s' using "
+"renderer '%(renderer)s'."
+msgstr ""
+"Se solicitó la interacción '%(interaction)s' mediante el transporte "
+"'%(transport)s' usando el renderizador '%(renderer)s'."
+
+#: src/horus_runtime/core/interaction/transport.py:103
+#, python-format
+msgid "Interaction '%(interaction)s' answered successfully."
+msgstr "La interacción '%(interaction)s' se respondió correctamente."
+
+#: src/horus_runtime/core/interaction/transport.py:132
+#, python-format
+msgid ""
+"Interaction '%(interaction)s' parse failed. Retry %(attempt)d of "
+"%(max_retries)d."
+msgstr ""
+"Falló el análisis de la interacción '%(interaction)s'. Reintento "
+"%(attempt)d de %(max_retries)d."
+
+#: src/horus_runtime/core/interaction/transport.py:164
+#, python-format
+msgid "Interaction '%(interaction)s' failed: %(reason)s"
+msgstr "La interacción '%(interaction)s' falló: %(reason)s"
+
+#: src/horus_runtime/core/interaction/transport.py:196
+msgid "max_retries must be at least 1."
+msgstr "max_retries debe ser al menos 1."
+
+#: src/horus_runtime/core/interaction/transport.py:289
+#, python-format
+msgid "All %(retries)d retries exhausted."
+msgstr "Se agotaron los %(retries)d reintentos."
+
+#: src/horus_runtime/core/runtime/base.py:57
+msgid "Horus base runtime"
+msgstr "Entorno de ejecución base de Horus"
+
+#: src/horus_runtime/core/target/base.py:133
+msgid "No task is currently running on this target."
+msgstr "No hay ninguna tarea en ejecución en este destino."
+
+#: src/horus_runtime/core/target/base.py:146
+#, python-format
+msgid "Task '%(task_name)s' is already running on this target."
+msgstr "La tarea '%(task_name)s' ya se está ejecutando en este destino."
+
+#: src/horus_runtime/core/target/base.py:182
+#, python-format
+msgid "Dispatched task '%(task_name)s' to %(kind)s target"
+msgstr "Se despachó la tarea '%(task_name)s' al destino %(kind)s"
+
+#: src/horus_runtime/core/target/base.py:194
+#: src/horus_runtime/core/target/base.py:246
+msgid "Task has not been dispatched yet."
+msgstr "La tarea aún no se ha despachado."
+
+#: src/horus_runtime/core/target/base.py:198
+#, python-format
+msgid "Waiting for task '%(task_name)s' to complete on %(kind)s target"
+msgstr ""
+"Esperando a que la tarea '%(task_name)s' finalice en el destino %(kind)s"
+
+#: src/horus_runtime/core/target/base.py:221
+#, python-format
+msgid "Cancelling task '%(task_name)s' on %(kind)s target"
+msgstr "Cancelando la tarea '%(task_name)s' en el destino %(kind)s"
+
+#: src/horus_runtime/core/target/exceptions.py:44
+#, python-format
+msgid ""
+"Target '%(kind)s' has no working_directory set. Provide one explicitly or"
+" use a target that derives it automatically."
+msgstr ""
+"El destino '%(kind)s' no tiene working_directory definido. Proporcione uno"
+" explícitamente o use un destino que lo derive automáticamente."
+
+#: src/horus_runtime/core/task/base.py:71
+msgid "Horus base task"
+msgstr "Tarea base de Horus"
+
+#: src/horus_runtime/core/task/base.py:213
+#, python-format
+msgid ""
+"Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
+"Expected one of: %(expected)s"
+msgstr ""
+"El entorno de ejecución '%(runtime)s' no es compatible con el ejecutor "
+"'%(executor)s'. Se esperaba uno de: %(expected)s"
+
+#: src/horus_runtime/core/task/base.py:248
+#, python-format
+msgid "Skipping task %(task_name)s. Already complete."
+msgstr "Se omite la tarea %(task_name)s. Ya está completada."
+
+#: src/horus_runtime/core/task/base.py:257
+#, python-format
+msgid "Task %(task_name)s status → SKIPPED"
+msgstr "Estado de la tarea %(task_name)s → SKIPPED"
+
+#: src/horus_runtime/core/task/base.py:263
+#, python-format
+msgid "Task %(task_name)s status → RUNNING"
+msgstr "Estado de la tarea %(task_name)s → RUNNING"
+
+#: src/horus_runtime/core/task/base.py:274
+#, python-format
+msgid "Task %(task_name)s status → CANCELED"
+msgstr "Estado de la tarea %(task_name)s → CANCELED"
+
+#: src/horus_runtime/core/task/base.py:281
+#, python-format
+msgid "Task %(task_name)s status → FAILED"
+msgstr "Estado de la tarea %(task_name)s → FAILED"
+
+#: src/horus_runtime/core/task/base.py:288
+#, python-format
+msgid "Task %(task_name)s status → COMPLETED"
+msgstr "Estado de la tarea %(task_name)s → COMPLETED"
+
+#: src/horus_runtime/core/task/base.py:330
+#, python-format
+msgid "Task %(task_name)s reset → IDLE"
+msgstr "Reinicio de la tarea %(task_name)s → IDLE"
+
+#: src/horus_runtime/core/transfer/exceptions.py:41
+#, python-format
+msgid ""
+"No transfer strategy registered for '%(source_kind)s' → "
+"'%(destination_kind)s'. Register a BaseTransferStrategy subclass that "
+"declares handles_source and handles_destination for these target kinds."
+msgstr ""
+"No hay ninguna estrategia de transferencia registrada para "
+"'%(source_kind)s' → '%(destination_kind)s'. Registre una subclase de "
+"BaseTransferStrategy que declare handles_source y handles_destination para"
+" estos tipos de destino."
+
+#: src/horus_runtime/core/transfer/exceptions.py:65
+#, python-format
+msgid ""
+"Artifact '%(artifact_id)s' is not accessible by target "
+"'%(destination_target_kind)s' and no orchestrator_target is set on the "
+"workflow. Set workflow.orchestrator_target to the target that holds user-"
+"provided root artifacts."
+msgstr ""
+"El artefacto '%(artifact_id)s' no es accesible por el destino "
+"'%(destination_target_kind)s' y no se ha definido orchestrator_target en "
+"el flujo de trabajo. Defina workflow.orchestrator_target como el destino "
+"que contiene los artefactos raíz proporcionados por el usuario."
+
+#: src/horus_runtime/core/workflow/base.py:114
+msgid "Horus base workflow"
+msgstr "Flujo de trabajo base de Horus"
+
+#: src/horus_runtime/core/workflow/base.py:690
+#, python-format
+msgid ""
+"Adding edge from '%(source)s.%(source_output)s' to "
+"'%(target)s.%(target_input)s' would create a cycle."
+msgstr ""
+"Añadir una arista de '%(source)s.%(source_output)s' a "
+"'%(target)s.%(target_input)s' crearía un ciclo."
+
+#: src/horus_runtime/core/workflow/base.py:976
+#, python-format
+msgid ""
+"Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
+"%(strategy)s."
+msgstr ""
+"Transfiriendo el artefacto '%(id)s' de '%(src)s' a '%(dst)s' mediante "
+"%(strategy)s."
+
+#: src/horus_runtime/core/workflow/base.py:1184
+#, python-format
+msgid "Workflow %(workflow_name)s status → RUNNING"
+msgstr "Estado del flujo de trabajo %(workflow_name)s → RUNNING"
+
+#: src/horus_runtime/core/workflow/base.py:1204
+#, python-format
+msgid "Workflow %(workflow_name)s status → CANCELED"
+msgstr "Estado del flujo de trabajo %(workflow_name)s → CANCELED"
+
+#: src/horus_runtime/core/workflow/base.py:1211
+#, python-format
+msgid "Workflow %(workflow_name)s status → FAILED"
+msgstr "Estado del flujo de trabajo %(workflow_name)s → FAILED"
+
+#: src/horus_runtime/core/workflow/base.py:1218
+#, python-format
+msgid "Workflow %(workflow_name)s status → COMPLETED"
+msgstr "Estado del flujo de trabajo %(workflow_name)s → COMPLETED"
+
+#: src/horus_runtime/core/workflow/base.py:1240
+#, python-format
+msgid "Resetting workflow %(workflow_name)s."
+msgstr "Reiniciando el flujo de trabajo %(workflow_name)s."
+
+#: src/horus_runtime/core/workflow/exceptions.py:43
+#, python-format
+msgid ""
+"Another workflow with ID %(id)s is already running in this context. Only "
+"one workflow can run at a time per context."
+msgstr ""
+"Ya se está ejecutando otro flujo de trabajo con el ID %(id)s en este "
+"contexto. Solo puede ejecutarse un flujo de trabajo a la vez por contexto."
+
+#: src/horus_runtime/core/workflow/exceptions.py:59
+#, python-format
+msgid ""
+"Multiple tasks share the same ID '%(id)s'. Task IDs must be unique within"
+" a workflow."
+msgstr ""
+"Varias tareas comparten el mismo ID '%(id)s'. Los IDs de tarea deben ser "
+"únicos dentro de un flujo de trabajo."
+
+#: src/horus_runtime/core/workflow/exceptions.py:75
+#, python-format
+msgid ""
+"Multiple tasks declare the same output artifact ID '%(id)s'. Output "
+"artifact IDs must be unique across all tasks in a workflow."
+msgstr ""
+"Varias tareas declaran el mismo ID de artefacto de salida '%(id)s'. Los "
+"IDs de artefacto de salida deben ser únicos entre todas las tareas de un "
+"flujo de trabajo."
+
+#: src/horus_runtime/core/workflow/exceptions.py:93
+#, python-format
+msgid "Workflow edge references unknown %(endpoint)s '%(value)s'."
+msgstr ""
+"Una arista del flujo de trabajo referencia un %(endpoint)s desconocido: "
+"'%(value)s'."
+
+#: src/horus_runtime/core/workflow/exceptions.py:109
+#, python-format
+msgid ""
+"Edge '%(source)s' -> '%(target)s' names only one of 'source_output' and "
+"'target_input'. Name both to connect two artifacts, or neither to only "
+"order the two tasks."
+msgstr ""
+"La arista '%(source)s' -> '%(target)s' indica solo uno de 'source_output' "
+"y 'target_input'. Indique ambos para conectar dos artefactos, o ninguno "
+"para únicamente ordenar las dos tareas."
+
+#: src/horus_runtime/core/workflow/exceptions.py:127
+#, python-format
+msgid ""
+"Multiple edges feed input '%(input)s' of task '%(target)s'. Each consumer"
+" input may be fed by at most one edge."
+msgstr ""
+"Varias aristas alimentan la entrada '%(input)s' de la tarea '%(target)s'. "
+"Cada entrada consumidora puede ser alimentada por una arista como máximo."
+
+#: src/horus_runtime/core/workflow/exceptions.py:150
+#, python-format
+msgid "Workflow finished with failed task(s): %(tasks)s."
+msgstr "El flujo de trabajo finalizó con tarea(s) fallida(s): %(tasks)s."
+
+#: src/horus_runtime/event/bus.py:79
+#, python-format
+msgid "Subscribing handler %(subscriber)s to event type %(event_type)s"
+msgstr ""
+"Suscribiendo el manejador %(subscriber)s al tipo de evento %(event_type)s"
+
+#: src/horus_runtime/event/bus.py:103
+#, python-format
+msgid "Error publishing event %(event)s: %(error)s"
+msgstr "Error al publicar el evento %(event)s: %(error)s"
+
+#: src/horus_runtime/event/bus.py:124
+msgid "Event bus is already started."
+msgstr "El bus de eventos ya está iniciado."
+
+#: src/horus_runtime/event/bus.py:128
+msgid "Initializing transport and subscribers from the registry."
+msgstr "Inicializando el transporte y los suscriptores desde el registro."
+
+#: src/horus_runtime/event/bus.py:138
+#, python-format
+msgid "Starting transport: %(transport_type)s"
+msgstr "Iniciando el transporte: %(transport_type)s"
+
+#: src/horus_runtime/event/bus.py:154
+#, python-format
+msgid "Subscribing handler: %(subscriber_cls)s"
+msgstr "Suscribiendo el manejador: %(subscriber_cls)s"
+
+#: src/horus_runtime/event/bus.py:171
+#, python-format
+msgid "Stopping transport: %(transport_type)s"
+msgstr "Deteniendo el transporte: %(transport_type)s"
+
+#: src/horus_runtime/event/bus.py:180
+#, python-format
+msgid "Error stopping transport %(transport_type)s: %(error)s"
+msgstr "Error al detener el transporte %(transport_type)s: %(error)s"
+
+#: src/horus_runtime/middleware/auto_middleware.py:67
+#, python-format
+msgid ""
+"%(cls_name)s is abstract or opted-out, skipping registration. Concrete "
+"subclasses will still be registered if they inherit from AutoMiddleware."
+msgstr ""
+"%(cls_name)s es abstracta o está excluida; se omite su registro. Las "
+"subclases concretas se seguirán registrando si heredan de AutoMiddleware."
+
+#: src/horus_runtime/middleware/auto_middleware.py:83
+#, python-format
+msgid ""
+"%(cls_name)s inherits from AutoMiddleware but no domain root "
+"(entry_point=...) was found in its MRO."
+msgstr ""
+"%(cls_name)s hereda de AutoMiddleware pero no se encontró ninguna raíz de "
+"dominio (entry_point=...) en su MRO."
+
+#: src/horus_runtime/middleware/auto_middleware.py:107
+#, python-format
+msgid "Error loading middleware: %(error)s"
+msgstr "Error al cargar el middleware: %(error)s"
+
+#: src/horus_runtime/registry/auto_registry.py:158
+#, python-format
+msgid ""
+"%(entry_point)s already exists in the registry. Entry points must be "
+"unique."
+msgstr ""
+"%(entry_point)s ya existe en el registro. Los puntos de entrada deben ser "
+"únicos."
+
+#: src/horus_runtime/registry/auto_registry.py:176
+#, python-format
+msgid ""
+"%(cls)s tried to register without specifying a 'entry_point'. Make sure "
+"all base classes that inherit from AutoRegistry define an entry_point."
+msgstr ""
+"%(cls)s intentó registrarse sin especificar un 'entry_point'. Asegúrese de"
+" que todas las clases base que heredan de AutoRegistry definan un "
+"entry_point."
+
+#: src/horus_runtime/registry/auto_registry.py:190
+#, python-format
+msgid ""
+"%(cls_name)s is abstract or opted-out, skipping registration. Concrete "
+"subclasses will still be registered if they inherit from AutoRegistry."
+msgstr ""
+"%(cls_name)s es abstracta o está excluida; se omite su registro. Las "
+"subclases concretas se seguirán registrando si heredan de AutoRegistry."
+
+#: src/horus_runtime/registry/auto_registry.py:204
 #, python-format
 msgid ""
 "%(cls)s must define a class property named 'registry_key' with a non-"
@@ -35,7 +522,7 @@ msgstr ""
 " valor no vacío para permitir que el mecanismo de auto-registro registre "
 "las subclases en el registro correspondiente."
 
-#: src/horus_runtime/core/registry/auto_registry.py:129
+#: src/horus_runtime/registry/auto_registry.py:218
 #, python-format
 msgid ""
 "%(cls)s must define a class property named '%(key)s' with a non-empty "
@@ -44,16 +531,91 @@ msgstr ""
 "%(cls)s debe definir una propiedad de clase llamada '%(key)s' con un "
 "valor no vacío para ser registrada en el registro correspondiente."
 
-#: src/horus_runtime/core/registry/auto_registry.py:154
+#: src/horus_runtime/registry/auto_registry.py:230
 #, python-format
-msgid "Initializing %(group)s registry for %(cls)s"
-msgstr "Inicializando el registro %(group)s para %(cls)s"
+msgid "Duplicate registry key '%(key_value)s' for %(cls)s and %(cls_key)s"
+msgstr "Clave de registro duplicada '%(key_value)s' para %(cls)s y %(cls_key)s"
 
-#: src/horus_runtime/core/registry/auto_registry.py:169
+#: src/horus_runtime/registry/auto_registry.py:269
+#, python-format
+msgid "Expected dict or %(origin)s, got %(type)s"
+msgstr "Se esperaba un dict o %(origin)s, pero se obtuvo %(type)s"
+
+#: src/horus_runtime/registry/auto_registry.py:275
+#, python-format
+msgid "Missing '%(registry_key)s' discriminator in data"
+msgstr "Falta el discriminador '%(registry_key)s' en los datos"
+
+#: src/horus_runtime/registry/auto_registry.py:282
 #, python-format
 msgid ""
-"No subclasses registered for %(cls)s. Ensure that there are subclasses of"
-" this base class with add_to_registry=True."
+"Unknown %(registry_key)s='%(discriminator)s' for %(origin)s. Registered: "
+"%(registered)s"
 msgstr ""
-"No hay subclases registradas para %(cls)s. Asegúrese de que existan "
-"subclases de esta clase base con add_to_registry=True."
+"%(registry_key)s='%(discriminator)s' desconocido para %(origin)s. "
+"Registrados: %(registered)s"
+
+#: src/horus_runtime/registry/auto_registry.py:422
+#, python-format
+msgid "Initializing %(group)s registry."
+msgstr "Inicializando el registro %(group)s."
+
+#: src/horus_runtime/registry/auto_registry.py:427
+#, python-format
+msgid "- %(entry_point)s"
+msgstr "- %(entry_point)s"
+
+#: src/horus_runtime/registry/auto_registry.py:438
+#, python-format
+msgid "Failed to load plugin %(entry_point)s: %(error)s"
+msgstr "No se pudo cargar el complemento %(entry_point)s: %(error)s"
+
+#: src/horus_runtime/registry/auto_registry_product.py:70
+#, python-format
+msgid ""
+"%(cls_name)s uses AutoRegistryProduct but does not inherit from "
+"AutoRegistry."
+msgstr ""
+"%(cls_name)s usa AutoRegistryProduct pero no hereda de AutoRegistry."
+
+#: src/horus_runtime/registry/auto_registry_product.py:103
+#, python-format
+msgid ""
+"%(cls_name)s uses AutoRegistryProduct but no composite registry_key "
+"template was found. Make sure a base class defines registry_key in "
+"'field_name:attr1.attr2' format."
+msgstr ""
+"%(cls_name)s usa AutoRegistryProduct pero no se encontró ninguna plantilla"
+" compuesta de registry_key. Asegúrese de que una clase base defina "
+"registry_key con el formato 'field_name:attr1.attr2'."
+
+#: src/horus_runtime/registry/auto_registry_product.py:121
+#, python-format
+msgid ""
+"%(cls_name)s registry_key references attribute '%(attr)s' which does not "
+"exist."
+msgstr ""
+"El registry_key de %(cls_name)s referencia el atributo '%(attr)s', que no "
+"existe."
+
+#: src/horus_runtime/registry/auto_registry_product.py:134
+#, python-format
+msgid ""
+"%(cls_name)s registry_key references attribute '%(attr)s' whose registry "
+"key is not a non-empty string."
+msgstr ""
+"El registry_key de %(cls_name)s referencia el atributo '%(attr)s' cuya "
+"clave de registro no es una cadena no vacía."
+
+#~ msgid "Initializing %(group)s registry for %(cls)s"
+#~ msgstr "Inicializando el registro %(group)s para %(cls)s"
+
+#~ msgid ""
+#~ "No subclasses registered for %(cls)s. "
+#~ "Ensure that there are subclasses of "
+#~ "this base class with add_to_registry=True."
+#~ msgstr ""
+#~ "No hay subclases registradas para "
+#~ "%(cls)s. Asegúrese de que existan "
+#~ "subclases de esta clase base con "
+#~ "add_to_registry=True."
