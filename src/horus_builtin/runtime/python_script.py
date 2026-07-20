@@ -25,6 +25,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.substitution import (
+    is_template as _is_template,
+)
 from horus_builtin.runtime.substitution import substitute
 from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.events import RuntimeEvent
@@ -67,16 +70,32 @@ class PythonScriptRuntime(CommandRuntime):
     command: str = ""
 
     def anchor_local_paths(self, base: Path) -> None:
-        """Resolve ``script`` against ``base`` if it is a relative path."""
+        """
+        Resolve ``script`` against ``base`` if it is a relative path.
+
+        A templated script (see :meth:`_setup_runtime`) names an artifact
+        rather than a file on this machine, so it is left untouched.
+        """
+        if _is_template(self.script):
+            return
         if not self.script.is_absolute():
             self.script = (base / self.script).resolve()
 
     async def _setup_runtime(self, task: "BaseTask") -> str:
-        remote_path = f"{task.working_dir}/{self.script.name}"
+        if _is_template(self.script):
+            # ``script: ${my_script}`` names an input artifact instead of a
+            # file on the orchestrator. The transfer layer has already placed
+            # it on the target, so resolve its on-target path and skip the
+            # upload -- the orchestrator may not have the file at all (this is
+            # how tc-os runs an imported workflow).
+            remote_path = substitute(str(self.script), task)
+            await task.target.mkdir(task.working_dir)
+        else:
+            remote_path = f"{task.working_dir}/{self.script.name}"
 
-        # Placing the file also creates task.working_dir on the target, which
-        # the executor uses as cwd and where the script's outputs land.
-        await task.target.put_file(self.script, remote_path)
+            # Placing the file also creates task.working_dir on the target,
+            # which the executor uses as cwd and where the outputs land.
+            await task.target.put_file(self.script, remote_path)
 
         args = substitute(self.args, task) if self.args else ""
         cmd = f"{self.python} {shlex.quote(remote_path)} {args}".rstrip()

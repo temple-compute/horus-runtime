@@ -25,6 +25,7 @@ from typing import cast
 
 import pytest
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
@@ -102,6 +103,57 @@ async def test_python_script_quotes_remote_path_with_spaces(
     placed = Path(task.working_dir) / "job.py"
     assert cmd == f"python {shlex.quote(str(placed))}"
     assert "'" in cmd  # the space forced quoting, so the path is one arg
+
+
+@pytest.mark.usefixtures("horus_context")
+async def test_python_script_templated_script_uses_input_artifact(
+    tmp_path: Path,
+) -> None:
+    """
+    ``script: ${id}`` runs the input artifact already on the target, without
+    reading the file from this machine.
+
+    This is how an imported workflow runs on a host that never had the repo:
+    the transfer layer materialises the script, so there is nothing to upload.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    # Deliberately never created on the orchestrator side beyond the target
+    # dir: the point is that _setup_runtime does not read it from here.
+    staged = work / "job.py"
+    staged.write_text("print('hi')\n")
+
+    script_in = FileArtifact(id="job_script", path=staged)
+    result = JSONArtifact(id="result", path=tmp_path / "result.json")
+    task = HorusTask(
+        id="run",
+        name="run",
+        runtime=PythonScriptRuntime(
+            script=Path("${job_script}"), args="$result"
+        ),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=work.as_posix()),
+        inputs=[script_in],
+        outputs=[result],
+    )
+
+    cmd = await task.runtime.setup_runtime(task)
+
+    assert cmd == f"python {staged} {result.path}"
+
+
+def test_python_script_templated_script_is_not_anchored(
+    tmp_path: Path,
+) -> None:
+    """A templated script names an artifact, so anchoring must leave it be."""
+    runtime = PythonScriptRuntime(script=Path("${job_script}"))
+    runtime.anchor_local_paths(tmp_path)
+    assert str(runtime.script) == "${job_script}"
+
+    # A plain relative path still anchors to the workflow directory.
+    plain = PythonScriptRuntime(script=Path("scripts/job.py"))
+    plain.anchor_local_paths(tmp_path)
+    assert plain.script == (tmp_path / "scripts" / "job.py").resolve()
 
 
 def test_artifact_ref_resolves_on_target_path(tmp_path: Path) -> None:
