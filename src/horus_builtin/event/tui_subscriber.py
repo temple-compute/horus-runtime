@@ -139,6 +139,10 @@ _SECONDS_PER_MINUTE = 60
 _LOG_LINES = 8
 _TRANSFER_LINGER_S = 2.0
 
+# Live refresh rate. The spinner advances at this same rate so its animation
+# can't beat against the frame rate.
+_REFRESH_HZ = 8
+
 
 class _LogLine(NamedTuple):
     """One rendered entry in the log/event pane."""
@@ -161,7 +165,8 @@ def _make_console() -> Console:
 
 def _spinner_frame() -> str:
     """Pick a spinner glyph from the wall clock (animates via Live refresh)."""
-    return _SPINNER_FRAMES[int(time.monotonic() * 10) % len(_SPINNER_FRAMES)]
+    tick = int(time.monotonic() * _REFRESH_HZ)
+    return _SPINNER_FRAMES[tick % len(_SPINNER_FRAMES)]
 
 
 def _fmt_duration(seconds: float | None) -> str:
@@ -280,6 +285,11 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
     def live(self) -> Iterator[None]:
         """Drive the Rich ``Live`` dashboard for the ``with`` body.
 
+        Runs on the terminal's alternate screen (``screen=True``) so Rich
+        diffs frames into a dedicated buffer instead of erasing and repainting
+        scrollback lines, which is what made the display flicker as the
+        dashboard's height changed between frames.
+
         Redirects loguru's terminal sink into the log pane for the duration so
         log lines never corrupt the display, restoring it on exit.
         """
@@ -290,8 +300,9 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
             with Live(
                 view,
                 console=self._console,
-                refresh_per_second=8,
+                refresh_per_second=_REFRESH_HZ,
                 transient=False,
+                screen=True,
             ) as live:
                 self._live = live
                 try:
@@ -301,11 +312,12 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
                     raise
                 finally:
                     self._live = None
-                    # Final repaint so terminating statuses (and any error
-                    # panel) are shown before Live tears down.
-                    live.update(view)
         finally:
             horus_logger.restore_terminal()
+            # The alternate screen is gone by now, so leave a receipt of the
+            # final state behind in normal scrollback. Runs on the failure
+            # path too, so a crash still reports what happened.
+            self._console.print(self._render_summary())
 
     def handle(self, event: BaseEvent) -> None:
         """React to bus events: pause for interactions, feed the log pane."""
@@ -563,6 +575,40 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         return Panel(
             body, title=_("Failed"), border_style="red", padding=(0, 1)
         )
+
+    def _render_summary(self) -> RenderableType:
+        """One-line receipt of the final state, for normal scrollback.
+
+        The dashboard lives on the alternate screen and disappears when Live
+        tears down, so this is all the user is left with after a run.
+        """
+        workflow = self._workflow
+        if workflow is None:
+            return Text(_("No workflow ran."), style="dim")
+
+        scope = self._scope or {t.id for t in workflow.tasks}
+        tasks = [t for t in workflow.tasks if t.id in scope]
+        done = sum(1 for t in tasks if t.status in _TERMINAL)
+        elapsed = (
+            None
+            if self._started_at is None
+            else time.monotonic() - self._started_at
+        )
+        line = Text.assemble(
+            (workflow.name, "bold"),
+            ("  ·  ", "dim"),
+            (
+                workflow.status.value.upper(),
+                _WF_STATUS_STYLE.get(workflow.status, "white"),
+            ),
+            ("  ·  ", "dim"),
+            (f"{done}/{len(tasks)} " + _("tasks"), "dim"),
+            ("  ·  ", "dim"),
+            (_fmt_duration(elapsed), "dim"),
+        )
+        if self._error is None:
+            return line
+        return Group(line, self._render_error())
 
 
 def render_workflow(workflow: BaseWorkflow, trigger_id: str) -> None:
