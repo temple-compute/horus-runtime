@@ -32,7 +32,7 @@ topological (DAG) order, which may differ from the order they are defined.
 
 from abc import abstractmethod
 from asyncio import CancelledError
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
@@ -40,6 +40,7 @@ from uuid import UUID, uuid4
 import yaml
 from pydantic import Field, PrivateAttr, model_validator
 
+from horus_builtin.workflow.branch import BranchRouter, branch_task
 from horus_builtin.workflow.dag import (
     CyclicDependencyError,
     build_dependencies,
@@ -363,6 +364,34 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             until=until,
             max_iterations=max_iterations,
             index_input=index_input,
+            name=name,
+            target=target,
+        )
+
+    def branch(
+        self,
+        *,
+        id: str,
+        func: Callable[..., str | list[str]],
+        routes: list[str],
+        name: str | None = None,
+        target: BaseTarget | None = None,
+    ) -> BranchRouter:
+        """
+        Append a switch-style branch (a router task plus one gated edge per
+        route) to this workflow.
+
+        Thin delegate to :func:`horus_builtin.workflow.branch.branch_task`;
+        see its docstring for the full parameter reference. There is no
+        equivalent YAML block, because a branch lowers to conditioned edges,
+        which YAML can already author directly (see the module docstring of
+        :mod:`horus_builtin.workflow.branch`).
+        """
+        return branch_task(
+            self,
+            id=id,
+            func=func,
+            routes=routes,
             name=name,
             target=target,
         )

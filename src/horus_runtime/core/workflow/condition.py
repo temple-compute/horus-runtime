@@ -54,6 +54,7 @@ ConditionOp = Literal[
     "ge",
     "in",
     "not_in",
+    "contains",
     "truthy",
     "exists",
 ]
@@ -61,7 +62,37 @@ ConditionOp = Literal[
 The closed set of comparisons an ``EdgeCondition`` may apply. Deliberately
 closed: an open expression grammar would be a code-execution surface in a
 document the backend stores verbatim and never validates.
+
+``in`` and ``contains`` are mirror images, and both are needed because the
+sentinel decides which side holds the collection: ``in`` tests a scalar in the
+document against a literal list, ``contains`` tests a *list* in the document
+against a scalar literal. The latter is what a document shaped
+``{"routes": [...]}`` needs, which is exactly what
+``horus_builtin.workflow.branch.BranchRouter`` writes.
 """
+
+
+def derive_ref(func: Callable[..., Any] | None) -> str | None:
+    """
+    Derive the ``module:qualname`` reference of *func*, or ``None``.
+
+    A lambda has a ``<lambda>`` qualname that cannot be imported back, so it
+    gets no reference: it works in-process and fails loudly elsewhere, which is
+    better than emitting a reference that silently will not resolve. Same for a
+    callable with no module.
+
+    Shared by every construct that carries a Python callable alongside a
+    serializable pointer to it (``PythonCondition``,
+    ``horus_builtin.workflow.branch.BranchRouter``), so "what survives the
+    dump" has one definition rather than one per authoring form.
+    """
+    if func is None:
+        return None
+    qualname = getattr(func, "__qualname__", "")
+    module = getattr(func, "__module__", "")
+    if module and qualname and "<lambda>" not in qualname:
+        return f"{module}:{qualname}"
+    return None
 
 
 class _SourcedCondition(BaseModel):
@@ -172,16 +203,10 @@ class PythonCondition(_SourcedCondition):
         """
         Fill ``ref`` and ``label`` from ``func`` so the dump stays meaningful.
 
-        A lambda has a ``<lambda>`` qualname that cannot be imported back, so
-        it gets no ``ref``: it works in-process and fails loudly elsewhere,
-        which is better than emitting a reference that silently will not
-        resolve.
+        See :func:`derive_ref` for why some callables get no ``ref`` at all.
         """
-        if self.func is not None and self.ref is None:
-            qualname = getattr(self.func, "__qualname__", "")
-            module = getattr(self.func, "__module__", "")
-            if module and qualname and "<lambda>" not in qualname:
-                self.ref = f"{module}:{qualname}"
+        if self.ref is None:
+            self.ref = derive_ref(self.func)
 
         if self.label is None:
             doc = getattr(self.func, "__doc__", None)

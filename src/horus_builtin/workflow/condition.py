@@ -101,6 +101,8 @@ _OPS: dict[str, Callable[[Any, Any], bool]] = {
     "ne": lambda actual, expected: bool(actual != expected),
     "in": lambda actual, expected: actual in expected,
     "not_in": lambda actual, expected: actual not in expected,
+    # Mirror of "in": the collection is in the document, not in the literal.
+    "contains": lambda actual, expected: expected in actual,
     "lt": lambda actual, expected: bool(actual < expected),
     "le": lambda actual, expected: bool(actual <= expected),
     "gt": lambda actual, expected: bool(actual > expected),
