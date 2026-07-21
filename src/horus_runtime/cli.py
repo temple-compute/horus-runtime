@@ -31,6 +31,7 @@ from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.packaging import package_workflow
+from horus_runtime.sanitize import find_root_inputs, sanitize_workflow
 from horus_runtime.version import __version__ as horus_version
 
 
@@ -179,6 +180,101 @@ def package(workflow_yaml: Path, output: Path | None) -> None:
     click.echo(
         _("Wrote %(archive)s (%(count)d file(s))")
         % {"archive": archive, "count": len(members) + 1}
+    )
+
+    # The files travel either way; undeclared, they just arrive unlabelled,
+    # so an importing UI cannot offer them as inputs. Warn, never rewrite.
+    root_inputs, _missing = find_root_inputs(
+        BaseWorkflow.from_yaml(workflow_yaml)
+    )
+    if root_inputs:
+        click.echo(
+            _(
+                "%(count)d undeclared root input(s); "
+                "run 'horus sanitize' to promote them"
+            )
+            % {"count": len(root_inputs)}
+        )
+
+
+@main.command()
+@click.argument(
+    "workflow_yaml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="YAML to write. Defaults to <name>.sanitized.yaml beside it.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Promote every root input without asking.",
+)
+def sanitize(workflow_yaml: Path, output: Path | None, yes: bool) -> None:
+    """
+    Declare WORKFLOW_YAML's implicit root inputs as root artifacts.
+
+    A task input that no edge feeds is a file you supply rather than one the
+    run produces. Promoting it to the top-level `artifacts:` list, wired by an
+    edge, is what lets a UI show it as a workflow input. Task inputs are left
+    untouched, so command substitutions keep working.
+    """
+    ctx = HorusContext.boot()
+    try:
+        workflow = BaseWorkflow.from_yaml(workflow_yaml)
+        candidates, missing = find_root_inputs(workflow)
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        ctx.shutdown()
+
+    for gap in missing:
+        # Not a root input: the path is run output. Only the author can say
+        # whether the missing dependency or the path is the mistake.
+        click.echo(
+            f"  ! {gap.task_id}.{gap.input_id} -> {gap.path} "
+            + _("produced by %(producer)s; missing edge")
+            % {"producer": gap.producer}
+        )
+
+    if not candidates:
+        click.echo(_("No root inputs to promote."))
+        return
+
+    accept = {
+        root.root_id
+        for root in candidates
+        if yes
+        or click.confirm(
+            f"  {root.path} -> artifacts/{root.root_id}?", default=True
+        )
+    }
+    if not accept:
+        click.echo(_("Nothing promoted."))
+        return
+
+    try:
+        written, promoted, _missing = sanitize_workflow(
+            workflow_yaml, output, accept
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    for root in promoted:
+        click.echo(f"  + artifacts/{root.root_id} ({root.path})")
+        for task_id, input_id in root.consumers:
+            click.echo(f"  + edge -> {task_id}.{input_id}")
+    click.echo(
+        _("Wrote %(path)s (%(count)d root input(s))")
+        % {"path": written, "count": len(promoted)}
     )
 
 
