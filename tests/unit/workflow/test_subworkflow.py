@@ -36,10 +36,10 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.subworkflow import (
     SubworkflowError,
-    SubworkflowExpander,
     derive_ports,
     lower_subworkflow_entry,
 )
+from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
 from horus_runtime.context import HorusContext
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
@@ -210,7 +210,7 @@ class TestDerivePorts:
 
     def test_root_artifacts_become_in_ports(self, tmp_path: Path) -> None:
         """Every standalone root artifact is an input port."""
-        body = _child_workflow(_seed_file(tmp_path)).model_dump(mode="json")
+        body = _child_workflow(_seed_file(tmp_path))
         in_ports, _out = derive_ports(body)
         assert [p.name for p in in_ports] == ["seed"]
         assert in_ports[0].artifact == "seed"
@@ -218,27 +218,29 @@ class TestDerivePorts:
 
     def test_unconsumed_outputs_become_out_ports(self, tmp_path: Path) -> None:
         """Only outputs no inner edge consumes are exposed."""
-        body = _child_workflow(_seed_file(tmp_path)).model_dump(mode="json")
+        body = _child_workflow(_seed_file(tmp_path))
         _in, out_ports = derive_ports(body)
         assert [p.name for p in out_ports] == ["report_out"]
         assert out_ports[0].task == "report"
 
     def test_colliding_output_ids_are_qualified(self) -> None:
         """Two leaves sharing an artifact id get ``taskid.artifactid``."""
-        body = {
-            "kind": "horus_workflow",
-            "name": "child",
-            "tasks": [
-                {"id": "a", "outputs": [{"id": "out"}]},
-                {"id": "b", "outputs": [{"id": "out"}]},
-            ],
-        }
+        body = BaseWorkflow.model_validate(
+            {
+                "kind": "horus_workflow",
+                "name": "child",
+                "tasks": [
+                    _task_dict("a", ["out"]),
+                    _task_dict("b", ["out"]),
+                ],
+            }
+        )
         _in, out_ports = derive_ports(body)
         assert sorted(p.name for p in out_ports) == ["a.out", "b.out"]
 
     def test_port_overrides_rename_derived_ports(self, tmp_path: Path) -> None:
         """``port_overrides`` renames a derived port and nothing else."""
-        body = _child_workflow(_seed_file(tmp_path)).model_dump(mode="json")
+        body = _child_workflow(_seed_file(tmp_path))
         in_ports, out_ports = derive_ports(body, {"report_out": "summary"})
         assert [p.name for p in in_ports] == ["seed"]
         assert [p.name for p in out_ports] == ["summary"]
@@ -249,9 +251,7 @@ class TestDerivePorts:
     ) -> None:
         """The expander declares one never-written artifact per port."""
         child = _child_workflow(_seed_file(tmp_path))
-        sub = SubworkflowExpander(
-            id="sub", name="sub", body=child.model_dump(mode="json")
-        )
+        sub = SubworkflowExpander(id="sub", name="sub", body=child)
         assert [a.id for a in sub.inputs] == ["seed"]
         assert [a.id for a in sub.outputs] == ["report_out"]
 
@@ -260,9 +260,7 @@ class TestDerivePorts:
     ) -> None:
         """Re-validating a dumped expander does not duplicate ports."""
         child = _child_workflow(_seed_file(tmp_path))
-        sub = SubworkflowExpander(
-            id="sub", name="sub", body=child.model_dump(mode="json")
-        )
+        sub = SubworkflowExpander(id="sub", name="sub", body=child)
         again = SubworkflowExpander.model_validate(sub.model_dump(mode="json"))
         assert [a.id for a in again.outputs] == ["report_out"]
 
@@ -283,8 +281,8 @@ class TestExistingWorkflowDropsInUnchanged:
         child = _child_workflow(_seed_file(tmp_path, "abc"))
         wf = _parent(tmp_path)
         sub = wf.subworkflow(id="sub", body=child)
-        assert [t["id"] for t in sub.body["tasks"]] == ["upper", "report"]
-        assert sub.body["edges"] == child.model_dump(mode="json")["edges"]
+        assert [t.id for t in sub.body.tasks] == ["upper", "report"]
+        assert sub.body.edges == child.edges
 
         await wf.run(trigger_id="sub")
 
@@ -619,7 +617,8 @@ class TestConditionInsideSubworkflow:
                 }
             ],
         }
-        sub = SubworkflowExpander(id="sub", name="sub", body=body)
+        sub_wf = BaseWorkflow.model_validate(body)
+        sub = SubworkflowExpander(id="sub", name="sub", body=sub_wf)
         # ``flag`` is consumed by the inner edge only as a condition
         # source, so it stays an out-port alongside ``out``.
         assert {a.id for a in sub.outputs} == {"flag", "out"}
@@ -741,18 +740,21 @@ class TestSubworkflowErrors:
             "name": "child",
             "tasks": [_task_dict("a"), _task_dict("a")],
         }
+        wf = BaseWorkflow.model_validate(body)
         with pytest.raises(TaskIdsAreNotUniqueError):
-            SubworkflowExpander(id="sub", name="sub", body=body)
+            SubworkflowExpander(id="sub", name="sub", body=wf)
 
     def test_slash_in_inner_id_is_rejected(self) -> None:
         """``/`` is reserved for the inlined id prefix."""
         body = {
             "kind": "horus_workflow",
             "name": "child",
-            "tasks": [{"id": "a/b"}],
+            "tasks": [_task_dict("a/b")],
         }
+        wf = BaseWorkflow.model_validate(body)
+
         with pytest.raises(SubworkflowError, match="'/'"):
-            SubworkflowExpander(id="sub", name="sub", body=body)
+            SubworkflowExpander(id="sub", name="sub", body=wf)
 
     def test_unresolved_inner_edge_is_rejected(self) -> None:
         """Existing edge validation is reused, not reimplemented."""
@@ -762,8 +764,9 @@ class TestSubworkflowErrors:
             "tasks": [_task_dict("a")],
             "edges": [{"source": "a", "target": "nope"}],
         }
+        wf = BaseWorkflow.model_validate(body)
         with pytest.raises(UnknownEdgeEndpointError):
-            SubworkflowExpander(id="sub", name="sub", body=body)
+            SubworkflowExpander(id="sub", name="sub", body=wf)
 
     async def test_depth_guard_stops_runaway_nesting(
         self, tmp_path: Path, horus_context: HorusContext

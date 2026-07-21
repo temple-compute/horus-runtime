@@ -34,7 +34,15 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NamedTuple, Self, final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    Self,
+    final,
+)
 from uuid import UUID, uuid4
 
 import yaml
@@ -53,11 +61,7 @@ from horus_builtin.workflow.loop import (
     lower_loop_entry,
 )
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
-from horus_builtin.workflow.subworkflow import (
-    SubworkflowExpander,
-    lower_subworkflow_entry,
-    subworkflow_task,
-)
+from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import ResourceCapacity
@@ -84,6 +88,9 @@ from horus_runtime.middleware.workflow import (
     WorkflowMiddlewareContext,
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
+
+if TYPE_CHECKING:
+    from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
 
 
 class _EdgeSource(NamedTuple):
@@ -377,15 +384,24 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         max_depth: int | None = None,
         name: str | None = None,
         target: BaseTarget | None = None,
-    ) -> SubworkflowExpander:
+    ) -> "SubworkflowExpander":
         """
         Append a subworkflow (inlined child workflow) task to this workflow.
 
         Thin delegate to
-        :func:`horus_builtin.workflow.subworkflow.subworkflow_task`; see its
-        docstring for the full parameter reference. Equivalent to authoring
-        a ``sub:`` block in YAML.
+        :func:`horus_builtin.workflow.subworkflow.expander.subworkflow_task`;
+        see its docstring for the full parameter reference. Equivalent to
+        authoring a ``sub:`` block in YAML.
         """
+        # Local import: `.expander` needs the real `BaseWorkflow` (its
+        # `body` field needs the actual class, not a forward ref), so this
+        # module cannot import it at the top without a cycle. Everything
+        # else in the `subworkflow` package (errors/ports/lowering) needs
+        # no such import and is imported at the top, safely.
+        from horus_builtin.workflow.subworkflow.expander import (  # noqa: PLC0415
+            subworkflow_task,
+        )
+
         return subworkflow_task(
             self,
             id=id,
