@@ -34,7 +34,7 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import ClassVar, Literal, NamedTuple, Self, final
+from typing import Any, ClassVar, Literal, NamedTuple, Self, final
 from uuid import UUID, uuid4
 
 import yaml
@@ -53,6 +53,11 @@ from horus_builtin.workflow.loop import (
     lower_loop_entry,
 )
 from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
+from horus_builtin.workflow.subworkflow import (
+    SubworkflowExpander,
+    lower_subworkflow_entry,
+    subworkflow_task,
+)
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import ResourceCapacity
@@ -303,6 +308,90 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             over=over,
             range=range,
             index_input=index_input,
+            name=name,
+            target=target,
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lower_subworkflow_tasks(cls, data: object) -> object:
+        """
+        Lower any task carrying a ``sub:`` block into a ``subworkflow``
+        task, before normal per-task ``kind``-discriminated parsing runs.
+
+        See :func:`horus_builtin.workflow.subworkflow.
+        lower_subworkflow_entry`. Unlike the ``map:``/``loop:`` lowerings
+        this one also rewrites ``data["edges"]``: every parent edge
+        touching a lowered subworkflow is forced to ``transfer=False``,
+        because the expander re-emits the data-carrying edge onto the real
+        inlined producer/consumer at run time and two ``transfer=True``
+        edges on one input are rejected. This hook is the only place
+        holding both the task list and the edge list.
+
+        A no-op for workflows with no ``sub:`` tasks, including
+        already-lowered, round-tripped ones (``to_yaml`` dumps a
+        :class:`SubworkflowExpander` in its native ``kind: subworkflow``
+        form, not back into ``sub:`` block syntax) and direct Python
+        construction with real task objects.
+        """
+        if not isinstance(data, dict):
+            return data
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return data
+        lowered_ids = {
+            t["id"]
+            for t in tasks
+            if isinstance(t, dict) and "sub" in t and "id" in t
+        }
+        if not lowered_ids:
+            return data
+
+        new_tasks: list[object] = [
+            lower_subworkflow_entry(entry)
+            if isinstance(entry, dict) and "sub" in entry
+            else entry
+            for entry in tasks
+        ]
+
+        def _force_ordering(edge: object) -> object:
+            if isinstance(edge, dict) and (
+                edge.get("source") in lowered_ids
+                or edge.get("target") in lowered_ids
+            ):
+                return {**edge, "transfer": False}
+            return edge
+
+        new_edges: list[object] = [
+            _force_ordering(edge) for edge in data.get("edges") or []
+        ]
+
+        return {**data, "tasks": new_tasks, "edges": new_edges}
+
+    def subworkflow(
+        self,
+        *,
+        id: str,
+        body: "BaseWorkflow | dict[str, Any]",
+        port_overrides: dict[str, str] | None = None,
+        max_depth: int | None = None,
+        name: str | None = None,
+        target: BaseTarget | None = None,
+    ) -> SubworkflowExpander:
+        """
+        Append a subworkflow (inlined child workflow) task to this workflow.
+
+        Thin delegate to
+        :func:`horus_builtin.workflow.subworkflow.subworkflow_task`; see its
+        docstring for the full parameter reference. Equivalent to authoring
+        a ``sub:`` block in YAML.
+        """
+        return subworkflow_task(
+            self,
+            id=id,
+            body=body,
+            port_overrides=port_overrides,
+            max_depth=max_depth,
             name=name,
             target=target,
         )
