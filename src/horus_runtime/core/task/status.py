@@ -59,5 +59,29 @@ class TaskStatus(Enum):
 
     SKIPPED = "skipped"
     """
-    The task was skipped because its outputs already exist.
+    The task did not execute, but counts as satisfied: downstream tasks run.
+    See ``SkipReason`` for why it was skipped.
+    """
+
+
+class SkipReason(Enum):
+    """
+    Why a ``SKIPPED`` task was skipped.
+
+    Both reasons produce the same ``TaskStatus`` because the scheduler treats
+    them identically (a skipped task is "done", so the DAG moves on). They are
+    distinguished here rather than by widening ``TaskStatus`` because that enum
+    is persisted and shared across repositories, and the difference matters
+    only for display: a cache hit and an untaken branch should not look alike.
+    """
+
+    COMPLETE = "complete"
+    """
+    ``skip_if_complete`` was set and the outputs already existed, so the work
+    was memoized away.
+    """
+
+    INACTIVE = "inactive"
+    """
+    No incoming edge was live, so this task is on a branch that was not taken.
     """

@@ -28,6 +28,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.workflow.condition import compute_liveness
 from horus_builtin.workflow.dag import (
     UnknownTaskError,
     ancestors,
@@ -38,6 +39,7 @@ from horus_builtin.workflow.dag import (
 from horus_runtime.context import HorusContext
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow, _EdgeSource
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.i18n import tr as _
@@ -121,6 +123,7 @@ async def _execute_ready_task(
     source_map: dict[tuple[str, str], _EdgeSource],
     pool: TargetPool,
     placement: PlacementManager,
+    liveness: dict[str, bool],
 ) -> None:
     """
     Run one ready task to completion: reserve placement, acquire a target,
@@ -134,7 +137,30 @@ async def _execute_ready_task(
     isn't resource-gated at all — see :class:`PlacementManager`), so a
     resource-constrained fan-out can genuinely hold this coroutine here
     without ever occupying a pool slot.
+
+    A task on a branch that was not taken is skipped here and returns cleanly,
+    so the caller counts it as completed and the DAG moves on (exactly as a
+    memoized ``skip_if_complete`` task does). The check has to happen *before*
+    ``placement.acquire`` and the transfer below: an inactive task's inputs
+    were never produced, so transferring them would fail on any target where
+    transfer is not a no-op.
     """
+    if not await compute_liveness(workflow, task.id, liveness):
+        task.status = TaskStatus.SKIPPED
+        task.skip_reason = SkipReason.INACTIVE
+        message = _(
+            "Task %(task_name)s skipped: no incoming branch was taken."
+        ) % {"task_name": task.name}
+        horus_logger.log.debug(message)
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=task.id,
+                task_name=task.name,
+                message=message,
+            )
+        )
+        return
+
     declared_target = task.target
     location_id = declared_target.location_id
     await placement.acquire(task.name, location_id, task.resources)
@@ -292,6 +318,14 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     blocked: set[str] = set()
     failed: dict[str, BaseException] = {}
 
+    # Conditional-branch bookkeeping: task_id -> whether any incoming edge was
+    # live. Populated by the gate in `_execute_ready_task` as each task is
+    # dispatched, and read back there when deciding a task's own liveness, so
+    # deactivation propagates down a chain without a second traversal. Distinct
+    # from `blocked`: an inactive task still counts as completed, so a join
+    # downstream of both branches of a fork still runs.
+    liveness: dict[str, bool] = {}
+
     while True:
         # Recomputed every iteration (instead of once up front) so the
         # runtime DAG-mutation API (BaseWorkflow.add_task/add_edge/expand)
@@ -340,7 +374,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 dispatched.add(task_id)
                 wrapper = asyncio.create_task(
                     _execute_ready_task(
-                        workflow, task, source_map, pool, placement
+                        workflow, task, source_map, pool, placement, liveness
                     )
                 )
                 running[wrapper] = task_id
