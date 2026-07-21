@@ -17,11 +17,6 @@
 #
 """
 Port derivation for the subworkflow construct.
-
-Kept separate from :mod:`horus_builtin.workflow.subworkflow.expander` so it
-can be imported (directly, or via the package's ``__init__``) without
-pulling in a real ``BaseWorkflow`` import: this module only ever needs
-``BaseWorkflow`` as a type hint, never to construct or validate one.
 """
 
 from collections import Counter

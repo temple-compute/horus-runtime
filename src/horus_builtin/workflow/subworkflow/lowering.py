@@ -28,7 +28,7 @@ def lower_subworkflow_entry(entry: dict[str, Any]) -> dict[str, Any]:
     ``kind: subworkflow`` task-dict.
 
     Because ports are derived from the body, the sugar is just the child
-    workflow written inline — there is no port or binding block to author.
+    workflow written inline. There is no port or binding block to author.
 
     Args:
         entry: The raw task dict as parsed from YAML, carrying ``id`` and a

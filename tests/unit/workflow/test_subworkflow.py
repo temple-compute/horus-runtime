@@ -740,8 +740,8 @@ class TestSubworkflowErrors:
             "name": "child",
             "tasks": [_task_dict("a"), _task_dict("a")],
         }
-        wf = BaseWorkflow.model_validate(body)
         with pytest.raises(TaskIdsAreNotUniqueError):
+            wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 
     def test_slash_in_inner_id_is_rejected(self) -> None:
@@ -751,9 +751,9 @@ class TestSubworkflowErrors:
             "name": "child",
             "tasks": [_task_dict("a/b")],
         }
-        wf = BaseWorkflow.model_validate(body)
 
         with pytest.raises(SubworkflowError, match="'/'"):
+            wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 
     def test_unresolved_inner_edge_is_rejected(self) -> None:
@@ -764,8 +764,8 @@ class TestSubworkflowErrors:
             "tasks": [_task_dict("a")],
             "edges": [{"source": "a", "target": "nope"}],
         }
-        wf = BaseWorkflow.model_validate(body)
         with pytest.raises(UnknownEdgeEndpointError):
+            wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 
     async def test_depth_guard_stops_runaway_nesting(
