@@ -77,6 +77,11 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     kind_description: ClassVar[str] = ""
     """Description of this artifact kind."""
 
+    view_bundle: ClassVar[str | None] = None
+    """``"import.package:relative/path.js"`` -- a built ESM bundle shipped
+    inside this distribution, resolved server-side via importlib.resources.
+    The browser never sees this string."""
+
     id: str
     """
     The artifact's stable ID.
