@@ -24,10 +24,14 @@ Omitting both artifact ids makes the edge purely ordering: it needs no
 artifact on either end, so it can order tasks that declare none.
 """
 
-from typing import Self
+from typing import Annotated, Self
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
+from horus_runtime.core.workflow.condition import (
+    Condition,
+    EdgeCondition,
+)
 from horus_runtime.core.workflow.exceptions import IncompleteEdgeError
 
 
@@ -73,6 +77,19 @@ class WorkflowEdge(BaseModel):
     requires both ids to name declared artifacts).
     """
 
+    condition: Annotated[Condition, Field(discriminator="kind")] | None = None
+    """
+    Predicate gating this edge. ``None`` (the default) means the edge is always
+    taken, which is every edge that existed before branching.
+
+    A condition does not change the DAG: the edge still makes ``target``
+    depend on ``source``, and both branches of a fork stay statically present
+    so ``execution_plan`` keeps reasoning about the whole graph and the canvas
+    can draw the paths not taken. It changes only whether the target is
+    *live* (see ``horus_builtin.workflow.condition.compute_liveness``): a task
+    with no live incoming edge is skipped rather than run.
+    """
+
     @model_validator(mode="after")
     def check_endpoints_agree(self) -> Self:
         """
@@ -88,4 +105,22 @@ class WorkflowEdge(BaseModel):
             raise IncompleteEdgeError(self.source, self.target)
         if self.target_input is None:
             self.transfer = False
+        return self
+
+    @model_validator(mode="after")
+    def check_condition_resolves(self) -> Self:
+        """
+        A declarative condition must know which output to read.
+
+        Its ``source_task``/``source_output`` default to this edge's own
+        endpoints, so on an artifact-less ordering edge (where both are
+        ``None``) those defaults resolve to nothing. Require the condition to
+        name its own source in that case, rather than failing mid-run with a
+        confusing "task has no such output".
+        """
+        condition = self.condition
+        if isinstance(condition, EdgeCondition):
+            output = condition.source_output or self.source_output
+            if output is None:
+                raise IncompleteEdgeError(self.source, self.target)
         return self

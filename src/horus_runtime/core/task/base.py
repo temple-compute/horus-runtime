@@ -37,7 +37,7 @@ from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
@@ -149,6 +149,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The current status of the task's execution.
     """
 
+    skip_reason: SkipReason | None = None
+    """
+    Why the task was skipped, set only alongside ``TaskStatus.SKIPPED``. Lets a
+    consumer tell a memoized cache hit apart from a branch that was not taken,
+    which are the same status but mean opposite things to a reader.
+    """
+
     runs: int = 0
     """
     Number of times this task has been run. This can be used for tracking and
@@ -253,6 +260,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     )
                 )
                 self.status = TaskStatus.SKIPPED
+                self.skip_reason = SkipReason.COMPLETE
                 horus_logger.log.debug(
                     _("Task %(task_name)s status → SKIPPED")
                     % {"task_name": self.name}
@@ -326,6 +334,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         reset logic to ``_reset()``.
         """
         self.status = TaskStatus.IDLE
+        self.skip_reason = None
         horus_logger.log.debug(
             _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
         )
