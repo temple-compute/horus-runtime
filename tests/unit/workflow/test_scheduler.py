@@ -345,6 +345,50 @@ class TestConcurrentReadySet:
         assert blocking.status == TaskStatus.CANCELED
         assert sink.runs == 0
 
+    async def test_external_cancel_kills_executor_and_marks_task_canceled(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Cancelling the workflow run from the outside (as the orchestrator
+        does on a user cancel) must propagate to in-flight tasks: the task
+        ends CANCELED, the workflow ends CANCELED, and the executor's
+        ``cancel_execution`` kill hook fires so external processes
+        (containers, remote jobs) are terminated.
+        """
+        del horus_context
+        started = asyncio.Event()
+        kill_calls: list[str] = []
+
+        class SpyExecutor(ShellExecutor):
+            add_to_registry: ClassVar[bool] = False
+
+            async def cancel_execution(self) -> None:
+                kill_calls.append("killed")
+
+        class HangingTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                started.set()
+                await asyncio.Event().wait()
+
+        task = _task("hang", tmp_path=tmp_path, task_cls=HangingTask)
+        task.executor = SpyExecutor()
+        wf = HorusWorkflow(name="external_cancel", tasks=[task], edges=[])
+
+        with patch.object(
+            HorusWorkflow, "transfer_artifacts", new=AsyncMock()
+        ):
+            run = asyncio.create_task(wf.run(trigger_id="hang"))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(run, timeout=5)
+
+        assert task.status == TaskStatus.CANCELED
+        assert wf.status == WorkflowStatus.CANCELED
+        assert kill_calls == ["killed"]
+
     async def test_cycle_raises_instead_of_stopping_silently(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

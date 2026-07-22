@@ -182,8 +182,21 @@ async def _execute_ready_task(
             await workflow.transfer_artifacts(task, source_map)
 
             # Execute the task on its target and wait for it to finish.
-            await target.dispatch(task)
-            await target.wait()
+            try:
+                await target.dispatch(task)
+                await target.wait()
+            except asyncio.CancelledError:
+                # Cancelling this wrapper also cancels the inner task future
+                # (cancellation propagates through `target.wait()`'s await),
+                # so by now the task has recorded CANCELED and the future is
+                # done; `target.cancel()` would early-return. Call the
+                # executor's kill hook directly so any external process
+                # (container, remote job) that does not die with the
+                # coroutine is terminated. Shielded so a second cancel
+                # cannot abort the kill mid-flight.
+                if task.status is TaskStatus.CANCELED:
+                    await asyncio.shield(task.executor.cancel_execution())
+                raise
         finally:
             task.target = declared_target
             pool.release(declared_target, target)
@@ -379,9 +392,18 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 )
                 running[wrapper] = task_id
 
-        done, _pending = await asyncio.wait(
-            running, return_when=asyncio.FIRST_COMPLETED
-        )
+        try:
+            done, _pending = await asyncio.wait(
+                running, return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            # Workflow-level cancellation: `asyncio.wait` does not cancel the
+            # tasks it waits on, so propagate the cancel to every in-flight
+            # wrapper (each one kills its executor via `target.cancel()`, see
+            # `_execute_ready_task`) and wait for them to unwind before
+            # re-raising.
+            await _cancel_running(running)
+            raise
 
         failures = _collect_completions(done, running, completed)
         if failures and workflow.failure_policy == "fail_fast":
