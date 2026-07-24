@@ -43,7 +43,16 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from horus_runtime.core.workflow.base import BaseWorkflow
+
+
+def _yaml_scalar(value: str) -> str:
+    """Render *value* as a single-line YAML scalar, quoting when needed."""
+    # safe_dump appends an explicit "...\n" document-end marker for a bare
+    # top-level scalar; take just the first line, which is the scalar itself.
+    return yaml.safe_dump(value, default_flow_style=True).splitlines()[0]
 
 
 class SanitizeError(Exception):
@@ -65,6 +74,12 @@ class RootInput:
 
     consumers: tuple[tuple[str, str], ...]
     """``(task_id, input_id)`` pairs to wire, one edge each."""
+
+    name: str = ""
+    """Display name, copied from the task input when the author set one."""
+
+    description: str = ""
+    """Description, copied from the task input when the author set one."""
 
 
 @dataclass(frozen=True)
@@ -152,6 +167,12 @@ def find_root_inputs(
                 continue
             # One file consumed by several tasks travels as one root
             # artifact with one edge per consumer.
+            # name defaults to the artifact's own id (see
+            # BaseArtifact.default_name), so only an id-differing name
+            # reflects something the author actually wrote; a bare echo
+            # carries no information the root_id doesn't already.
+            is_echo = artifact.name == artifact.id
+            authored_name = "" if is_echo else artifact.name
             existing = by_path.get(declared)
             if existing is not None:
                 by_path[declared] = RootInput(
@@ -159,6 +180,8 @@ def find_root_inputs(
                     kind=existing.kind,
                     path=existing.path,
                     consumers=(*existing.consumers, (task.id, artifact.id)),
+                    name=existing.name or authored_name,
+                    description=existing.description or artifact.description,
                 )
                 continue
             root_id = _root_id(declared, artifact.id, task.id, taken)
@@ -168,6 +191,8 @@ def find_root_inputs(
                 kind=artifact.kind,
                 path=declared,
                 consumers=((task.id, artifact.id),),
+                name=authored_name,
+                description=artifact.description,
             )
 
     return sorted(by_path.values(), key=lambda r: r.path), missing
@@ -178,8 +203,14 @@ def _render(root_inputs: list[RootInput]) -> tuple[list[str], list[str]]:
     artifacts: list[str] = []
     edges: list[str] = []
     for root in root_inputs:
+        artifacts += [f"  - id: {root.root_id}"]
+        if root.name:
+            artifacts.append(f"    name: {_yaml_scalar(root.name)}")
+        if root.description:
+            artifacts.append(
+                f"    description: {_yaml_scalar(root.description)}"
+            )
         artifacts += [
-            f"  - id: {root.root_id}",
             f"    kind: {root.kind}",
             f"    path: {root.path.as_posix()}",
             "",
