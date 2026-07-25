@@ -334,7 +334,9 @@ class MapExpander(HorusTask):
                 )
                 self._set_input_path(clone, self.over.index_input, index_path)
 
-            self._set_output_path(clone, gathered_root / str(i))
+            await self._set_output_path(
+                clone, gathered_root / str(i), orchestrator
+            )
 
             clones.append(clone)
             edges.append(
@@ -592,8 +594,31 @@ class MapExpander(HorusTask):
             )
         self._pin_path(artifact, path)
 
-    def _set_output_path(self, clone: BaseTask, path: Path) -> None:
-        """Pin *clone*'s (sole) declared output at *path*."""
+    async def _set_output_path(
+        self, clone: BaseTask, slot_dir: Path, orchestrator: BaseTarget
+    ) -> None:
+        """
+        Pin *clone*'s (sole) declared output under its ``{i}/`` slot dir.
+
+        A :class:`.FolderArtifact` output already names a directory, so it
+        is pinned straight at *slot_dir* (the gather task then sees
+        ``{i}/<whatever the clone wrote>``). Any other output keeps its
+        declared filename, pinned at ``slot_dir / <filename>``; since
+        nothing else creates *slot_dir* for a bare file output, it is
+        created here first (only in this branch -- pre-creating it for a
+        folder output would make the clone look already-complete and skip
+        it on resume).
+
+        A :class:`~horus_builtin.workflow.subworkflow.expander.
+        SubworkflowExpander` clone is a third case: its sole declared
+        output is always a never-written ``FileArtifact`` port placeholder,
+        regardless of what the real inner producer's output kind is. Its
+        own ``_run`` re-points that real producer at wherever the
+        placeholder got pinned (see ``SubworkflowExpander._pin_out_port``),
+        so it is pinned straight at *slot_dir* like a folder output,
+        leaving that re-pointing free to hand the real producer's own
+        declared filename onward.
+        """
         if len(clone.outputs) != 1:
             raise MapConfigurationError(
                 _(
@@ -602,7 +627,20 @@ class MapExpander(HorusTask):
                 )
                 % {"id": self.id}
             )
-        self._pin_path(clone.outputs[0], path)
+        # Imported here, as in BaseWorkflow.sub, to avoid a
+        # base.py <-> map.py <-> expander.py cycle at module load time.
+        from horus_builtin.workflow.subworkflow.expander import (  # noqa: PLC0415
+            SubworkflowExpander,
+        )
+
+        artifact = clone.outputs[0]
+        if isinstance(artifact, FolderArtifact) or isinstance(
+            clone, SubworkflowExpander
+        ):
+            self._pin_path(artifact, slot_dir)
+        else:
+            await orchestrator.mkdir(str(slot_dir))
+            self._pin_path(artifact, slot_dir / artifact.path.name)
 
     @staticmethod
     def _clone_output_id(clone: BaseTask) -> str:

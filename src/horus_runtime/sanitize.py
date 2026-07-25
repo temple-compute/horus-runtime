@@ -45,6 +45,7 @@ from pathlib import Path
 
 import yaml
 
+from horus_builtin.workflow.map import MapExpander
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.workflow.base import BaseWorkflow
 
@@ -135,6 +136,14 @@ def find_root_inputs(
         (edge.target, edge.target_input)
         for edge in workflow.edges
         if edge.target_input is not None
+    }
+    # A map's fan-in input is wired by MapExpander at run time, not by a
+    # static edge, so it would otherwise look like an author-supplied root
+    # input and get promoted to one.
+    wired |= {
+        (task.gather_task, task.gather_input)
+        for task in workflow.tasks
+        if isinstance(task, MapExpander)
     }
     # Reuses the runtime's own produced-vs-external rule rather than
     # restating it here, so sanitizing can never drift from packaging.
@@ -260,22 +269,23 @@ def apply_promotions(text: str, root_inputs: list[RootInput]) -> str:
     artifact_lines, edge_lines = _render(root_inputs)
     keys = _top_level_keys(lines)
 
-    if "edges" not in keys:
-        raise SanitizeError(
-            "Workflow has no top-level 'edges:' block to extend."
-        )
-
     # Insert the later block first so the earlier block's index stays valid.
-    edges_at = _block_end(lines, keys["edges"], keys)
-    lines[edges_at:edges_at] = ["", *edge_lines] if edge_lines else []
+    if "edges" in keys:
+        edges_at = _block_end(lines, keys["edges"], keys)
+        lines[edges_at:edges_at] = ["", *edge_lines] if edge_lines else []
+    else:
+        # A map:-only workflow has no top-level edges: block of its own (the
+        # map block describes all its wiring); create one at the end.
+        lines += ["", "edges:", *edge_lines]
 
     if "artifacts" in keys:
         at = _block_end(lines, keys["artifacts"], keys)
         lines[at:at] = artifact_lines
     else:
         # Root inputs read best above the tasks that consume them; fall back
-        # to the edges block for a workflow with no tasks key of its own.
-        anchor = keys.get("tasks", keys["edges"])
+        # to the edges block (just created above if it didn't already
+        # exist) for a workflow with no tasks key of its own.
+        anchor = keys.get("tasks", keys.get("edges", len(lines)))
         lines[anchor:anchor] = ["artifacts:", *artifact_lines]
 
     return "\n".join(lines) + "\n"

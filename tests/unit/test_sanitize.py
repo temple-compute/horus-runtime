@@ -24,8 +24,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_runtime.core.workflow.base import BaseWorkflow
-from horus_runtime.sanitize import find_root_inputs, sanitize_workflow
+from horus_runtime.sanitize import (
+    RootInput,
+    apply_promotions,
+    find_root_inputs,
+    sanitize_workflow,
+)
 
 # `seed` and `config` are unwired inputs (root inputs). `data` is wired by an
 # edge. `shared.yaml` is read by both tasks, so it is one artifact, two edges.
@@ -297,6 +303,133 @@ def test_authored_name_and_description_survive_promotion(
     reloaded_config = next(a for a in reloaded.artifacts if a.id == "config")
     assert reloaded_config.name == "Run configuration"
     assert reloaded_config.description == "Parameters controlling the run."
+
+
+MAP_WORKFLOW = """
+kind: horus_workflow
+name: Map Sanitize Me
+tasks:
+  - kind: horus_task
+    id: split
+    name: Split
+    inputs:
+      - id: items
+        kind: file
+        path: examples/items.json
+    outputs:
+      - id: batches
+        kind: json
+        path: results/batches.json
+    executor:
+      kind: shell
+    runtime:
+      kind: command
+      command: cp ${items} ${batches}
+    target:
+      kind: local
+  - id: score
+    map:
+      over:
+        source_task: split
+        source_output: batches
+        item_input: item
+      template:
+        kind: horus_task
+        inputs:
+          - id: item
+            kind: file
+            path: item_in.json
+        outputs:
+          - id: scored
+            kind: file
+            path: scored.txt
+        executor:
+          kind: shell
+        runtime:
+          kind: command
+          command: cp ${item} ${scored}
+        target:
+          kind: local
+      gather:
+        task: gather
+        input: results
+  - kind: horus_task
+    id: gather
+    name: Gather
+    inputs:
+      - id: results
+        kind: folder
+        path: score.gathered
+    outputs:
+      - id: summary
+        kind: file
+        path: results/summary.txt
+    executor:
+      kind: shell
+    runtime:
+      kind: command
+      command: touch ${summary}
+    target:
+      kind: local
+
+orchestrator_target:
+  kind: local
+"""
+
+
+@pytest.fixture
+def map_workflow_dir(tmp_path: Path) -> Path:
+    """A map: + gather workflow, laid out the way w01 is."""
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "items.json").write_text("[]\n")
+    (tmp_path / "workflow.yaml").write_text(MAP_WORKFLOW)
+    return tmp_path
+
+
+@pytest.mark.usefixtures("horus_context")
+def test_map_gather_input_is_not_a_root_input(map_workflow_dir: Path) -> None:
+    """The gather task's fan-in input is wired by MapExpander at run time,
+    not by a static edge, so it must not be mistaken for an author-supplied
+    root input or a missing edge.
+    """
+    workflow = BaseWorkflow.from_yaml(map_workflow_dir / "workflow.yaml")
+    roots, missing = find_root_inputs(workflow)
+
+    assert all(r.path.name != "score.gathered" for r in roots)
+    assert all(m.task_id != "gather" for m in missing)
+    assert {r.path.as_posix() for r in roots} == {"examples/items.json"}
+
+
+def test_apply_promotions_creates_missing_edges_block() -> None:
+    """A map:-only workflow has no top-level edges: block of its own; the
+    rewrite must create one rather than raising.
+    """
+    text = (
+        "kind: horus_workflow\n"
+        "name: No Edges Yet\n"
+        "tasks:\n"
+        "  - kind: horus_task\n"
+        "    id: produce\n"
+    )
+    root = RootInput(
+        root_id="items",
+        artifact=FileArtifact(id="items", path=Path("examples/items.json")),
+        consumers=(("produce", "items"),),
+    )
+
+    result = apply_promotions(text, [root])
+
+    assert "edges:" in result
+    doc = yaml.safe_load(result)
+    assert doc["edges"] == [
+        {
+            "source": "artifact-items",
+            "source_output": "items",
+            "target": "produce",
+            "target_input": "items",
+        }
+    ]
+    assert doc["artifacts"][0]["id"] == "items"
 
 
 @pytest.mark.usefixtures("horus_context")
