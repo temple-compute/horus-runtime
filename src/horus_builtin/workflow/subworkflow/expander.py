@@ -252,7 +252,7 @@ class SubworkflowExpander(HorusTask):
                     )
                 )
 
-        edges.extend(self._out_port_edges(wf, out_ports))
+        edges.extend(self._out_port_edges(wf, out_ports, by_id))
 
         wf.expand(tasks=tasks, edges=edges, artifacts=artifacts)
         horus_logger.log.debug(
@@ -442,7 +442,10 @@ class SubworkflowExpander(HorusTask):
         )
 
     def _out_port_edges(
-        self, wf: BaseWorkflow, out_ports: list[SubworkflowPort]
+        self,
+        wf: BaseWorkflow,
+        out_ports: list[SubworkflowPort],
+        by_id: dict[str, BaseTask],
     ) -> list[WorkflowEdge]:
         """
         Re-emit every parent edge sourcing an out-port from the real inner
@@ -451,12 +454,16 @@ class SubworkflowExpander(HorusTask):
         """
         edges: list[WorkflowEdge] = []
         for port in out_ports:
-            if port.task is None or _is_pinned(self.outputs, port.name):
+            if port.task is None:
+                continue
+            if _is_pinned(self.outputs, port.name):
                 # An enclosing construct (a MapExpander materializing this
-                # clone's slot) has taken the port over and consumes the
-                # placeholder directly. Known gap: fan-in of a mapped
-                # subworkflow's results therefore sees the placeholder
-                # rather than the inner producer's real output.
+                # clone's slot) has taken the port over and pinned the
+                # placeholder to the slot's absolute path. Point the real
+                # inner producer's output at that same path instead, so
+                # the slot receives the clone's actual result rather than
+                # the never-written placeholder.
+                self._pin_out_port(by_id, port)
                 continue
             for edge in wf.edges:
                 if edge.source != self.id or edge.source_output != port.name:
@@ -486,6 +493,33 @@ class SubworkflowExpander(HorusTask):
                     )
                 )
         return edges
+
+    def _pin_out_port(
+        self, by_id: dict[str, BaseTask], port: SubworkflowPort
+    ) -> None:
+        """
+        Point the real inner producer's output artifact at the absolute
+        path an enclosing construct pinned *port*'s placeholder to.
+
+        Mirrors the "pinned" branch of :meth:`_resolve_in_port`: instead of
+        the placeholder, the actual producer now writes directly to the
+        slot the enclosing construct materialized, so it is filled with
+        the real result rather than staying empty.
+        """
+        assert port.task is not None
+        producer = by_id.get(self._prefixed(port.task))
+        if producer is None:
+            return
+        artifact = next(
+            (a for a in producer.outputs if a.id == port.artifact), None
+        )
+        placeholder = next(
+            (a for a in self.outputs if a.id == port.name), None
+        )
+        if artifact is None or placeholder is None:
+            return
+        assert placeholder.declared_path is not None
+        _pin(artifact, placeholder.declared_path)
 
 
 def _is_pinned(artifacts: list[BaseArtifact], port_name: str) -> bool:
