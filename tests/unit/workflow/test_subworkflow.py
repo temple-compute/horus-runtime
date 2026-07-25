@@ -483,9 +483,8 @@ class TestSubworkflowAsMapTemplate:
     ) -> None:
         """
         Each map clone inlines its own copy of the body, with per-clone
-        paths. Fan-in of a mapped subworkflow's *results* is a known gap:
-        ``MapExpander._pin_path`` pins the port placeholder rather than
-        the inner producer's real output.
+        paths, and the gather task fans in each clone's real output
+        rather than the never-written port placeholder.
         """
         del horus_context
         emit = _shell_task(
@@ -530,6 +529,10 @@ class TestSubworkflowAsMapTemplate:
             inner = _inner(wf, f"fan[{i}]/emit")
             assert inner.status is TaskStatus.COMPLETED
             assert (inner.outputs[0].path / "idx.json").read_text() == str(i)
+
+        gathered = _inner(wf, "gather").inputs[0].path
+        for i in range(2):
+            assert (gathered / str(i) / "idx.json").read_text() == str(i)
 
 
 @pytest.mark.unit
