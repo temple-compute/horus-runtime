@@ -21,6 +21,9 @@ YAML sugar lowering for the subworkflow construct.
 
 from typing import Any
 
+from horus_builtin.workflow.subworkflow.errors import SubworkflowError
+from horus_runtime.i18n import tr as _
+
 
 def lower_subworkflow_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """
@@ -37,8 +40,20 @@ def lower_subworkflow_entry(entry: dict[str, Any]) -> dict[str, Any]:
     Returns:
         A ``kind: subworkflow`` task dict ready for
         ``BaseTask.model_validate``.
+
+    Raises:
+        SubworkflowError: If *entry* is missing the ``id`` or ``sub`` key.
     """
-    task_id = entry["id"]
+    task_id = entry.get("id")
+    if task_id is None:
+        raise SubworkflowError(
+            _("A task with a 'sub' block is missing required key 'id'.")
+        )
+    if "sub" not in entry:
+        raise SubworkflowError(
+            _("Subworkflow task '%(id)s' is missing required key 'sub'.")
+            % {"id": task_id}
+        )
     data: dict[str, Any] = {
         "kind": "subworkflow",
         "id": task_id,

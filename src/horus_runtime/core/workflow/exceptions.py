@@ -27,8 +27,15 @@ if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
 
 
-class WorkflowError(Exception):
-    """Base exception for workflow-related errors."""
+class WorkflowError(ValueError):
+    """
+    Base exception for workflow-related errors.
+
+    Derives from :class:`ValueError` so that any subclass raised inside a
+    Pydantic validator (e.g. ``BaseWorkflow``'s ``model_validator`` hooks)
+    is automatically wrapped into a :class:`pydantic.ValidationError` by
+    Pydantic, instead of escaping as a raw, unwrapped exception.
+    """
 
 
 class OneWorkflowAtATimeError(WorkflowError):

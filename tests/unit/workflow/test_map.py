@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
@@ -524,6 +525,109 @@ class TestYamlLowering:
         assert expander["over"]["index_input"] == "idx"
         assert expander["inputs"] == []
         assert edges == []
+
+    def test_lower_entry_missing_gather_raises(self) -> None:
+        """A ``map:`` block missing ``gather`` raises a typed error naming
+        the offending task, not a bare ``KeyError``.
+        """
+        entry = {
+            "id": "score",
+            "map": {"range": 2, "index_input": "i", "template": {}},
+        }
+        with pytest.raises(MapConfigurationError, match="'score'"):
+            lower_map_entry(entry)
+
+    def test_lower_entry_missing_template_raises(self) -> None:
+        """A ``map:`` block missing ``template`` raises a typed error
+        naming the offending task.
+        """
+        entry = {
+            "id": "score",
+            "map": {
+                "range": 2,
+                "index_input": "i",
+                "gather": {"task": "gather", "input": "results"},
+            },
+        }
+        with pytest.raises(MapConfigurationError, match="'score'"):
+            lower_map_entry(entry)
+
+    def test_lower_entry_missing_gather_task_raises(self) -> None:
+        """A ``gather`` block missing ``task`` raises a typed error naming
+        the offending task.
+        """
+        entry = {
+            "id": "score",
+            "map": {
+                "range": 2,
+                "index_input": "i",
+                "template": {},
+                "gather": {"input": "results"},
+            },
+        }
+        with pytest.raises(MapConfigurationError, match="'score'"):
+            lower_map_entry(entry)
+
+    def test_lower_entry_missing_gather_input_raises(self) -> None:
+        """A ``gather`` block missing ``input`` raises a typed error naming
+        the offending task.
+        """
+        entry = {
+            "id": "score",
+            "map": {
+                "range": 2,
+                "index_input": "i",
+                "template": {},
+                "gather": {"task": "gather"},
+            },
+        }
+        with pytest.raises(MapConfigurationError, match="'score'"):
+            lower_map_entry(entry)
+
+    def test_lower_entry_missing_id_raises(self) -> None:
+        """A ``map:`` entry missing ``id`` raises a typed error rather than
+        a bare ``KeyError``.
+        """
+        entry = {
+            "map": {
+                "range": 2,
+                "index_input": "i",
+                "template": {},
+                "gather": {"task": "gather", "input": "results"},
+            }
+        }
+        with pytest.raises(MapConfigurationError, match="'id'"):
+            lower_map_entry(entry)
+
+    def test_malformed_map_block_raises_validation_error(self) -> None:
+        """A malformed ``map:`` block surfaces as a ``ValidationError``
+        naming the offending task when loaded through a workflow, not a
+        bare ``KeyError``.
+
+        This is the exact reproduction from the downstream tc-os incident:
+        a queued validation request that raised a raw ``KeyError`` here hung
+        the whole consumer loop until restart, because ``KeyError`` never
+        reaches pydantic's ``ValidationError`` handler.
+        """
+        with pytest.raises(ValidationError, match="'a'") as exc_info:
+            BaseWorkflow.model_validate(
+                {
+                    "kind": "horus_workflow",
+                    "name": "x",
+                    "tasks": [
+                        {
+                            "kind": "horus_task",
+                            "id": "a",
+                            "map": {
+                                "range": 2,
+                                "index_input": "i",
+                                "template": {},
+                            },
+                        }
+                    ],
+                }
+            )
+        assert not isinstance(exc_info.value, KeyError)
 
     def test_yaml_workflow_loads_and_runs(
         self, tmp_path: Path, horus_context: HorusContext

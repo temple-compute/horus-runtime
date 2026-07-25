@@ -665,9 +665,30 @@ def lower_map_entry(
         ``(expander_dict, edges)`` — a ``kind: map_expander`` task dict
         ready for ``BaseTask.model_validate``, and any edges (as plain
         dicts) that must accompany it into the workflow's ``edges`` list.
+
+    Raises:
+        MapConfigurationError: If *entry* is missing the ``id`` key, or its
+            ``map`` block is missing ``template`` or ``gather``, or
+            ``gather`` is missing ``task`` or ``input``.
     """
-    task_id = entry["id"]
+    task_id = entry.get("id")
+    if task_id is None:
+        raise MapConfigurationError(
+            _("A task with a 'map' block is missing required key 'id'.")
+        )
     map_block = entry["map"]
+
+    if "template" not in map_block:
+        raise MapConfigurationError(
+            _("Map task '%(id)s' is missing required key 'map.template'.")
+            % {"id": task_id}
+        )
+    if "gather" not in map_block:
+        raise MapConfigurationError(
+            _("Map task '%(id)s' is missing required key 'map.gather'.")
+            % {"id": task_id}
+        )
+
     over_block = map_block.get("over") or {}
     range_value = map_block.get("range")
     index_input = map_block.get("index_input", over_block.get("index_input"))
@@ -681,6 +702,19 @@ def lower_map_entry(
     }
 
     gather_block = map_block["gather"]
+    if not isinstance(gather_block, dict) or "task" not in gather_block:
+        raise MapConfigurationError(
+            _("Map task '%(id)s' 'map.gather' is missing required key 'task'.")
+            % {"id": task_id}
+        )
+    if "input" not in gather_block:
+        raise MapConfigurationError(
+            _(
+                "Map task '%(id)s' 'map.gather' is missing required "
+                "key 'input'."
+            )
+            % {"id": task_id}
+        )
 
     expander: dict[str, Any] = {
         "kind": "map_expander",
