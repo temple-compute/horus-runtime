@@ -294,6 +294,45 @@ class TestExpand:
         # Bumped once for the whole batch, not once per item.
         assert wf._revision == before + 1
 
+    def test_expand_supersedes_what_it_rederives(self, tmp_path: Path) -> None:
+        """
+        Re-expanding an id replaces the task and drops the stale edges on it,
+        so an expander can re-run against a snapshot that already carries its
+        previous expansion.
+        """
+        root = _task(
+            "root",
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "r.txt")],
+        )
+        wf = HorusWorkflow(name="wf", tasks=[root])
+        mapped = _task(
+            "map1", inputs=[FileArtifact(id="in", path=tmp_path / "m.txt")]
+        )
+        stale_edge = _edge("root", "root_out", "map1", "in")
+        wf.expand(tasks=[mapped], edges=[stale_edge])
+
+        fresh = _task(
+            "map1", inputs=[FileArtifact(id="in", path=tmp_path / "m2.txt")]
+        )
+        fresh_edge = _edge("root", "root_out", "map1", "in")
+        wf.expand(tasks=[fresh], edges=[fresh_edge])
+
+        assert [t.id for t in wf.tasks] == ["root", "map1"]
+        # The freshly derived task wins: its paths belong to this run.
+        assert wf.tasks[1] is fresh
+        assert wf.edges == [fresh_edge]
+
+    def test_expand_duplicate_ids_within_one_batch_still_raise(self) -> None:
+        """Supersession is against the workflow, not within the batch: two
+        new tasks sharing an id is still an authoring error.
+        """
+        wf = HorusWorkflow(name="wf", tasks=[_task("root")])
+
+        with pytest.raises(TaskIdsAreNotUniqueError):
+            wf.expand(tasks=[_task("dup"), _task("dup")])
+
+        assert [t.id for t in wf.tasks] == ["root"]
+
     def test_expand_invalid_batch_commits_nothing(self) -> None:
         """
         One bad edge in the batch (references a task id that isn't part of

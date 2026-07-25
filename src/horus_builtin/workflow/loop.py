@@ -534,6 +534,7 @@ class LoopController(HorusTask):
         """
         artifact.path = path
         artifact.declared_path = path
+        artifact.pinned = True
 
 
 def lower_loop_entry(entry: dict[str, Any]) -> dict[str, Any]:

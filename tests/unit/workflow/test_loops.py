@@ -209,6 +209,38 @@ class TestConditionalLoopEndToEnd:
         assert wf.status.value == "completed"
         assert _body_ids(wf) == ["loop#1"]
 
+    async def test_rerun_from_an_already_expanded_snapshot(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Re-running from the post-run snapshot re-derives the same body/checker
+        clones instead of colliding with them. Same shape as the map's
+        equivalent test: tc-os freezes a new run from the previous run's
+        snapshot, which already carries the expansion.
+        """
+        del horus_context
+        wf = HorusWorkflow(
+            name="wf",
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.loop(
+            id="loop",
+            body=_body_task(_STOP_AT_BODY % {"stop": 1}),
+            until="signal",
+            max_iterations=10,
+            index_input="idx",
+        )
+        await wf.run(trigger_id="loop")
+        assert wf.status.value == "completed"
+
+        resumed = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+        await resumed.run(trigger_id="loop")
+
+        assert resumed.status.value == "completed"
+        assert _body_ids(resumed) == ["loop#1", "loop#2"]
+
 
 @pytest.mark.unit
 class TestMaxIterationsSafetyBound:

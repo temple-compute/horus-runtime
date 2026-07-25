@@ -107,6 +107,16 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     :meth:`resolve_path` runs. See ``BaseWorkflow._resolve_run_paths``.
     """
 
+    pinned: bool = Field(default=False, init=False, exclude=True)
+    """
+    Set when some expander (map/loop) has already materialized this
+    artifact's data at ``path`` directly on the workflow's orchestrator
+    filesystem. ``BaseWorkflow.transfer_artifacts`` skips these entirely
+    instead of treating the lack of a ``transfer=True`` producer edge as "root
+    input, fetch from ``orchestrator_target``" -- which would otherwise try
+    (and fail) to fetch data that was never uploaded/registered anywhere.
+    """
+
     kind: str
     """
     Type of the artifact, such as 'file', 'folder', 'dataset', 'model', etc.

@@ -48,6 +48,7 @@ from horus_builtin.workflow.map import (
 from horus_runtime.context import HorusContext
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.core.workflow.edge import WorkflowEdge
 
 
 def _template_task(
@@ -251,6 +252,140 @@ class TestCollectionMapEndToEnd:
         assert wf.status.value == "completed"
         gathered = tmp_path / "score.gathered"
         assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+
+    async def test_gather_wired_to_trigger_still_waits_for_expander(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A gather task that is reachable from the trigger by something other
+        than the clones still runs *after* the expander.
+
+        The gather task's other tests leave it edge-isolated, so it only
+        enters the scheduler's trigger-reachable scope once expansion wires
+        the clone edges. Wire it to the trigger directly and it is in scope
+        from the start -- without the expander -> gather ordering edge it is
+        dispatched alongside the expander and its unpinned fan-in input is
+        mistaken for a root input.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a", "b"])
+        gather = _gather_task(tmp_path)
+        gather.inputs.append(FolderArtifact(id="seed", path=Path("seed_in")))
+
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            edges=[
+                WorkflowEdge(
+                    source="split",
+                    source_output="batches",
+                    target="gather",
+                    target_input="seed",
+                )
+            ],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=_template_task(),
+            over=("split", "batches", "batch"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        gathered = tmp_path / "score.gathered"
+        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+
+    async def test_file_output_lands_inside_its_clone_directory(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A clone whose output is a *file* still gets its own ``{i}/`` directory,
+        with the file inside it under its declared name.
+
+        Pinning the file at ``{i}`` itself made ``{i}`` a file, so a gather
+        task walking per-clone subdirectories (the layout this module
+        documents) found none and silently produced an empty result instead of
+        failing.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a", "b"])
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=HorusTask(
+                id="template",
+                name="template",
+                runtime=CommandRuntime(command="cp $batch/data.txt $scored"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batch", path=Path("batch_in"))],
+                outputs=[FileArtifact(id="scored", path=Path("score.txt"))],
+            ),
+            over=("split", "batches", "batch"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        gathered = tmp_path / "score.gathered"
+        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+        for i, name in enumerate(("a", "b")):
+            clone_dir = gathered / str(i)
+            assert clone_dir.is_dir()
+            assert (clone_dir / "score.txt").read_text() == name
+
+    async def test_rerun_from_an_already_expanded_snapshot(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Re-running a workflow *from its own post-run snapshot* re-derives the
+        same clone set rather than colliding with it.
+
+        The resume tests below deliberately start from a fresh workflow
+        object, so nothing covered the shape tc-os actually runs: it PATCHes
+        the whole live workflow back onto the run record (clones included) and
+        freezes the next run from that snapshot, so the expander re-expands on
+        top of its own previous output.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a", "b", "c"])
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=_template_task(),
+            over=("split", "batches", "batch"),
+            gather=("gather", "results"),
+        )
+        await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
+
+        # The round trip a run snapshot makes through the API.
+        resumed = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+        await resumed.run(trigger_id="split")
+
+        assert resumed.status.value == "completed"
+        clone_ids = [t.id for t in resumed.tasks if t.id.startswith("score[")]
+        assert clone_ids == ["score[0]", "score[1]", "score[2]"]
 
 
 @pytest.mark.unit
@@ -552,12 +687,19 @@ class TestYamlLowering:
                 "target": "score",
                 "target_input": "batches",
                 "transfer": False,
-            }
+            },
+            {
+                "source": "score",
+                "source_output": "score.fanout",
+                "target": "gather",
+                "target_input": "results",
+                "transfer": False,
+            },
         ]
 
     def test_lower_range_entry(self) -> None:
-        """Range-mode ``map:`` lowers with no construction-time edge and no
-        placeholder input.
+        """Range-mode ``map:`` lowers with no source edge and no placeholder
+        input -- only the expander -> gather ordering edge.
         """
         entry = {
             "id": "rmap",
@@ -573,7 +715,15 @@ class TestYamlLowering:
         assert expander["over"]["range"] == 5
         assert expander["over"]["index_input"] == "idx"
         assert expander["inputs"] == []
-        assert edges == []
+        assert edges == [
+            {
+                "source": "rmap",
+                "source_output": "rmap.fanout",
+                "target": "gather",
+                "target_input": "results",
+                "transfer": False,
+            }
+        ]
 
     def test_lower_entry_missing_gather_raises(self) -> None:
         """A ``map:`` block missing ``gather`` raises a typed error naming
