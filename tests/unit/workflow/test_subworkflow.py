@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
@@ -45,10 +46,6 @@ from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import (
-    TaskIdsAreNotUniqueError,
-    UnknownEdgeEndpointError,
-)
 
 
 def _shell_task(
@@ -641,6 +638,43 @@ class TestYamlLowering:
         assert lowered["body"]["name"] == "child"
         assert lowered["port_overrides"] == {"a": "b"}
 
+    def test_lower_entry_missing_sub_raises(self) -> None:
+        """A ``sub:`` entry missing the ``sub`` key raises a typed error
+        naming the offending task, not a bare ``KeyError``.
+        """
+        with pytest.raises(SubworkflowError, match="'sub'"):
+            lower_subworkflow_entry({"id": "sub"})
+
+    def test_lower_entry_missing_id_raises(self) -> None:
+        """A ``sub:`` entry missing ``id`` raises a typed error rather
+        than a bare ``KeyError``.
+        """
+        entry = {
+            "sub": {"kind": "horus_workflow", "name": "child", "tasks": []}
+        }
+        with pytest.raises(SubworkflowError, match="'id'"):
+            lower_subworkflow_entry(entry)
+
+    def test_malformed_sub_block_raises_validation_error(self) -> None:
+        """A ``sub:`` task missing ``id`` surfaces as a ``ValidationError``,
+        not a bare ``KeyError``, when loaded through a workflow alongside
+        another, well-formed ``sub:`` task (which is what makes the
+        workflow-level lowering hook fire in the first place).
+        """
+        child = {"kind": "horus_workflow", "name": "child", "tasks": []}
+        with pytest.raises(ValidationError, match="'id'") as exc_info:
+            BaseWorkflow.model_validate(
+                {
+                    "kind": "horus_workflow",
+                    "name": "x",
+                    "tasks": [
+                        {"id": "good", "sub": child},
+                        {"sub": child},
+                    ],
+                }
+            )
+        assert not isinstance(exc_info.value, KeyError)
+
     async def test_yaml_workflow_with_sub_block_runs(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -740,7 +774,7 @@ class TestSubworkflowErrors:
             "name": "child",
             "tasks": [_task_dict("a"), _task_dict("a")],
         }
-        with pytest.raises(TaskIdsAreNotUniqueError):
+        with pytest.raises(ValidationError, match="share the same ID 'a'"):
             wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 
@@ -752,7 +786,7 @@ class TestSubworkflowErrors:
             "tasks": [_task_dict("a/b")],
         }
 
-        with pytest.raises(SubworkflowError, match="'/'"):
+        with pytest.raises(ValidationError, match="'/'"):
             wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 
@@ -764,7 +798,9 @@ class TestSubworkflowErrors:
             "tasks": [_task_dict("a")],
             "edges": [{"source": "a", "target": "nope"}],
         }
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown target task 'nope'"
+        ):
             wf = BaseWorkflow.model_validate(body)
             SubworkflowExpander(id="sub", name="sub", body=wf)
 

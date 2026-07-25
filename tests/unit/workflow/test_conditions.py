@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
@@ -45,7 +46,6 @@ from horus_runtime.core.workflow.condition import (
     PythonCondition,
 )
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import IncompleteEdgeError
 
 
 def _decider(
@@ -113,7 +113,7 @@ class TestEdgeConditionModel:
         An artifact-less ordering edge gives the condition no default source,
         so one must be named explicitly rather than failing mid-run.
         """
-        with pytest.raises(IncompleteEdgeError):
+        with pytest.raises(ValidationError, match="names only one of"):
             WorkflowEdge(
                 source="a",
                 target="b",

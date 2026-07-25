@@ -28,6 +28,7 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
@@ -43,12 +44,6 @@ from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import (
-    ArtifactIdsAreNotUniqueError,
-    DuplicateEdgeTargetError,
-    IncompleteEdgeError,
-    UnknownEdgeEndpointError,
-)
 
 
 def _task(
@@ -262,7 +257,7 @@ class TestReusableTasks:
                 FileArtifact(id="dup", path=tmp_path / "b.txt"),
             ],
         )
-        with pytest.raises(ArtifactIdsAreNotUniqueError):
+        with pytest.raises(ValidationError, match="output artifact ID 'dup'"):
             HorusWorkflow(name="bad", tasks=[bad])
 
 
@@ -373,7 +368,9 @@ class TestEdgeValidation:
     def test_unknown_source_output_raises(self, tmp_path: Path) -> None:
         """A typo in source_output is caught instead of silently misrouting."""
         producer, consumer = self._producer_consumer(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown source output 'TYPO'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[producer, consumer],
@@ -383,7 +380,9 @@ class TestEdgeValidation:
     def test_unknown_source_task_raises(self, tmp_path: Path) -> None:
         """A source that is neither a known task nor a root edge fails."""
         producer, consumer = self._producer_consumer(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown source task 'producr'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[producer, consumer],
@@ -393,7 +392,9 @@ class TestEdgeValidation:
     def test_unknown_target_input_raises(self, tmp_path: Path) -> None:
         """A target_input that no task input declares is rejected."""
         producer, consumer = self._producer_consumer(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown target input 'in_TYPO'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[producer, consumer],
@@ -403,7 +404,9 @@ class TestEdgeValidation:
     def test_unknown_target_task_raises(self, tmp_path: Path) -> None:
         """An edge targeting a non-existent task is rejected."""
         producer, consumer = self._producer_consumer(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown target task 'ghost'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[producer, consumer],
@@ -413,7 +416,9 @@ class TestEdgeValidation:
     def test_unknown_root_artifact_raises(self, tmp_path: Path) -> None:
         """A root-sourced edge whose root id does not exist is rejected."""
         _, consumer = self._producer_consumer(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown root artifact 'nope'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[consumer],
@@ -439,7 +444,9 @@ class TestEdgeValidation:
             inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
             outputs=[],
         )
-        with pytest.raises(DuplicateEdgeTargetError):
+        with pytest.raises(
+            ValidationError, match="Multiple edges feed input 'in'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[p1, p2, c],
@@ -574,7 +581,9 @@ class TestOrderingOnlyEdges:
             inputs=[FileArtifact(id="in", path=tmp_path / "c.txt")],
             outputs=[],
         )
-        with pytest.raises(DuplicateEdgeTargetError):
+        with pytest.raises(
+            ValidationError, match="Multiple edges feed input 'in'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[p1, p2, c],
@@ -697,7 +706,9 @@ class TestArtifactLessOrderingEdges:
     def test_unknown_task_still_rejected(self, tmp_path: Path) -> None:
         """Dropping the ids does not drop endpoint validation."""
         producer, bare = self._pair(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(
+            ValidationError, match="unknown target task 'ghost'"
+        ):
             HorusWorkflow(
                 name="bad",
                 tasks=[producer, bare],
@@ -707,7 +718,7 @@ class TestArtifactLessOrderingEdges:
     def test_root_artifact_source_rejected(self, tmp_path: Path) -> None:
         """A root artifact is not a task: nothing to order against."""
         _, bare = self._pair(tmp_path)
-        with pytest.raises(UnknownEdgeEndpointError):
+        with pytest.raises(ValidationError, match="unknown root artifact"):
             HorusWorkflow(
                 name="bad",
                 tasks=[bare],
@@ -720,7 +731,7 @@ class TestArtifactLessOrderingEdges:
         One id without the other is a typo, not an ordering edge: it must not
         silently stop transferring.
         """
-        with pytest.raises(IncompleteEdgeError):
+        with pytest.raises(ValidationError, match="names only one of"):
             WorkflowEdge(source="a", source_output="o", target="b")
-        with pytest.raises(IncompleteEdgeError):
+        with pytest.raises(ValidationError, match="names only one of"):
             WorkflowEdge(source="a", target="b", target_input="in")
