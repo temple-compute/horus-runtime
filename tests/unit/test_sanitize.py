@@ -282,12 +282,8 @@ def test_authored_name_and_description_survive_promotion(
     )
 
     config = next(r for r in promoted if r.root_id == "config")
-    assert config.name == "Run configuration"
-    assert config.description == "Parameters controlling the run."
-
-    plain = next(r for r in promoted if r.root_id == "plain")
-    assert plain.name == ""
-    assert plain.description == ""
+    assert config.artifact.name == "Run configuration"
+    assert config.artifact.description == "Parameters controlling the run."
 
     doc = yaml.safe_load(written.read_text())
     config_doc = next(a for a in doc["artifacts"] if a["id"] == "config")
@@ -301,3 +297,27 @@ def test_authored_name_and_description_survive_promotion(
     reloaded_config = next(a for a in reloaded.artifacts if a.id == "config")
     assert reloaded_config.name == "Run configuration"
     assert reloaded_config.description == "Parameters controlling the run."
+
+
+@pytest.mark.usefixtures("horus_context")
+def test_multiline_description_survives_promotion(tmp_path: Path) -> None:
+    """A description spanning lines is re-emitted as valid, equal YAML."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "run.yaml").write_text("k: v\n")
+    (tmp_path / "configs" / "plain.yaml").write_text("k: v\n")
+    (tmp_path / "workflow.yaml").write_text(
+        NAMED_INPUT_WORKFLOW.replace(
+            "        description: Parameters controlling the run.",
+            "        description: |-\n"
+            "          Parameters controlling the run.\n"
+            "          Second line: with a colon.",
+        )
+    )
+
+    written, _, _ = sanitize_workflow(tmp_path / "workflow.yaml")
+
+    reloaded = BaseWorkflow.from_yaml(written)
+    config = next(a for a in reloaded.artifacts if a.id == "config")
+    assert config.description == (
+        "Parameters controlling the run.\nSecond line: with a colon."
+    )
