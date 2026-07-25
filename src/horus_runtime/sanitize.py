@@ -40,9 +40,12 @@ the comments and the executor anchor that these files are written around.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+import yaml
+
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.workflow.base import BaseWorkflow
 
 
@@ -55,16 +58,30 @@ class RootInput:
     """An unwired task input, and the root artifact it would be promoted to."""
 
     root_id: str
-    """Id for the new root artifact."""
+    """Id for the new root artifact; differs from the input's own id only
+    when that id is already taken (see :func:`_root_id`)."""
 
-    kind: str
-    """Artifact kind, copied from the task input."""
-
-    path: Path
-    """Workflow-relative path, exactly as declared."""
+    artifact: BaseArtifact
+    """
+    The task input being promoted, kept whole rather than field-by-field so
+    every declared field (name, description, and whatever a plugin artifact
+    kind adds) travels to the root artifact without this module knowing it.
+    """
 
     consumers: tuple[tuple[str, str], ...]
     """``(task_id, input_id)`` pairs to wire, one edge each."""
+
+    @property
+    def path(self) -> Path:
+        """Workflow-relative path, exactly as declared."""
+        declared = self.artifact.declared_path
+        assert declared is not None  # only set for inputs with a declared path
+        return declared
+
+    @property
+    def kind(self) -> str:
+        """Artifact kind, as declared on the task input."""
+        return self.artifact.kind
 
 
 @dataclass(frozen=True)
@@ -151,13 +168,12 @@ def find_root_inputs(
                 )
                 continue
             # One file consumed by several tasks travels as one root
-            # artifact with one edge per consumer.
+            # artifact with one edge per consumer; the first consumer's
+            # declaration is the one promoted.
             existing = by_path.get(declared)
             if existing is not None:
-                by_path[declared] = RootInput(
-                    root_id=existing.root_id,
-                    kind=existing.kind,
-                    path=existing.path,
+                by_path[declared] = replace(
+                    existing,
                     consumers=(*existing.consumers, (task.id, artifact.id)),
                 )
                 continue
@@ -165,12 +181,33 @@ def find_root_inputs(
             taken.add(root_id)
             by_path[declared] = RootInput(
                 root_id=root_id,
-                kind=artifact.kind,
-                path=declared,
+                artifact=artifact,
                 consumers=((task.id, artifact.id),),
             )
 
     return sorted(by_path.values(), key=lambda r: r.path), missing
+
+
+def _artifact_block(root: RootInput) -> list[str]:
+    """Render one promoted artifact, with every field the author declared."""
+    # exclude_defaults keeps the block to what the author actually wrote. id
+    # and path are then overridden: the model holds the artifact's own id
+    # (the root may have been renamed to avoid a clash) and a CWD-resolved
+    # absolute path (see BaseArtifact.resolve_path), neither of which belongs
+    # in a portable workflow file.
+    data = root.artifact.model_dump(mode="json", exclude_defaults=True)
+    data["id"] = root.root_id
+    data["path"] = root.path.as_posix()
+    data.setdefault("kind", root.kind)  # kind is a default on every subclass
+    # default_name assigns name = id after validation, so an unset name
+    # survives exclude_defaults as an echo of the id, carrying nothing the
+    # id doesn't already say.
+    if data.get("name") == root.artifact.id:
+        data.pop("name")
+    block = yaml.safe_dump([data], sort_keys=False, allow_unicode=True)
+    # Blank lines occur inside a quoted multi-line scalar, where they are the
+    # line break itself; indenting them would only add trailing whitespace.
+    return [f"  {line}" if line else "" for line in block.splitlines()] + [""]
 
 
 def _render(root_inputs: list[RootInput]) -> tuple[list[str], list[str]]:
@@ -178,12 +215,7 @@ def _render(root_inputs: list[RootInput]) -> tuple[list[str], list[str]]:
     artifacts: list[str] = []
     edges: list[str] = []
     for root in root_inputs:
-        artifacts += [
-            f"  - id: {root.root_id}",
-            f"    kind: {root.kind}",
-            f"    path: {root.path.as_posix()}",
-            "",
-        ]
+        artifacts += _artifact_block(root)
         for task_id, input_id in root.consumers:
             edges += [
                 f"  - source: artifact-{root.root_id}",

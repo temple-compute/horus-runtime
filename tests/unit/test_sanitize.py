@@ -204,3 +204,120 @@ def test_nothing_to_promote_writes_nothing(workflow_dir: Path) -> None:
     assert promoted == []
     assert written == (workflow_dir / "workflow.yaml").resolve()
     assert not (workflow_dir / "workflow.sanitized.yaml").exists()
+
+
+NAMED_INPUT_WORKFLOW = """
+kind: horus_workflow
+name: Sanitize Named Input
+tasks:
+  - kind: horus_task
+    id: produce
+    name: Produce
+    inputs:
+      - id: config
+        name: Run configuration
+        description: Parameters controlling the run.
+        kind: file
+        path: configs/run.yaml
+      - id: plain
+        kind: file
+        path: configs/plain.yaml
+    outputs:
+      - id: data
+        kind: file
+        path: results/data.txt
+    executor:
+      kind: shell
+    runtime:
+      kind: command
+      command: cat ${config} ${plain} > ${data}
+    target:
+      kind: local
+  - kind: horus_task
+    id: consume
+    name: Consume
+    inputs:
+      - id: data
+        kind: file
+        path: results/data.txt
+    outputs:
+      - id: report
+        kind: file
+        path: results/report.txt
+    executor:
+      kind: shell
+    runtime:
+      kind: command
+      command: cp ${data} ${report}
+    target:
+      kind: local
+edges:
+  - source: produce
+    source_output: data
+    target: consume
+    target_input: data
+
+orchestrator_target:
+  kind: local
+"""
+
+
+@pytest.fixture
+def named_input_workflow_dir(tmp_path: Path) -> Path:
+    """A workflow whose root input already carries a name and description."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "run.yaml").write_text("k: v\n")
+    (tmp_path / "configs" / "plain.yaml").write_text("k: v\n")
+    (tmp_path / "workflow.yaml").write_text(NAMED_INPUT_WORKFLOW)
+    return tmp_path
+
+
+@pytest.mark.usefixtures("horus_context")
+def test_authored_name_and_description_survive_promotion(
+    named_input_workflow_dir: Path,
+) -> None:
+    """A task input's name/description carry over to the promoted root."""
+    written, promoted, _ = sanitize_workflow(
+        named_input_workflow_dir / "workflow.yaml"
+    )
+
+    config = next(r for r in promoted if r.root_id == "config")
+    assert config.artifact.name == "Run configuration"
+    assert config.artifact.description == "Parameters controlling the run."
+
+    doc = yaml.safe_load(written.read_text())
+    config_doc = next(a for a in doc["artifacts"] if a["id"] == "config")
+    assert config_doc["name"] == "Run configuration"
+    assert config_doc["description"] == "Parameters controlling the run."
+    plain_doc = next(a for a in doc["artifacts"] if a["id"] == "plain")
+    assert "name" not in plain_doc
+    assert "description" not in plain_doc
+
+    reloaded = BaseWorkflow.from_yaml(written)
+    reloaded_config = next(a for a in reloaded.artifacts if a.id == "config")
+    assert reloaded_config.name == "Run configuration"
+    assert reloaded_config.description == "Parameters controlling the run."
+
+
+@pytest.mark.usefixtures("horus_context")
+def test_multiline_description_survives_promotion(tmp_path: Path) -> None:
+    """A description spanning lines is re-emitted as valid, equal YAML."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "run.yaml").write_text("k: v\n")
+    (tmp_path / "configs" / "plain.yaml").write_text("k: v\n")
+    (tmp_path / "workflow.yaml").write_text(
+        NAMED_INPUT_WORKFLOW.replace(
+            "        description: Parameters controlling the run.",
+            "        description: |-\n"
+            "          Parameters controlling the run.\n"
+            "          Second line: with a colon.",
+        )
+    )
+
+    written, _, _ = sanitize_workflow(tmp_path / "workflow.yaml")
+
+    reloaded = BaseWorkflow.from_yaml(written)
+    config = next(a for a in reloaded.artifacts if a.id == "config")
+    assert config.description == (
+        "Parameters controlling the run.\nSecond line: with a colon."
+    )
