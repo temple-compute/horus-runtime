@@ -243,8 +243,9 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
     _live: Live | None = PrivateAttr(default=None)
     _workflow: BaseWorkflow | None = PrivateAttr(default=None)
 
-    # Execution scope (planned task ids) for an honest progress total.
-    _scope: set[str] = PrivateAttr(default_factory=set)
+    # Task the run was triggered from; the execution scope behind the
+    # progress total is re-planned from it on every frame (see _scope_ids).
+    _trigger: str | None = PrivateAttr(default=None)
     _started_at: float | None = PrivateAttr(default=None)
 
     # Per-task timing, derived from status transitions / completion events.
@@ -268,18 +269,34 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         Render *workflow*'s tasks before the run starts.
         """
         self._workflow = workflow
+        self._trigger = trigger_id or (
+            workflow.tasks[0].id if workflow.tasks else None
+        )
+
+    def _scope_ids(self, workflow: BaseWorkflow) -> set[str]:
+        """
+        Ids in the run's execution scope, re-planned from *workflow*'s
+        current tasks and edges.
+
+        A ``map:`` or ``sub:`` expander adds its clones, and the edges that
+        reach the gather task, only when it runs (see
+        :meth:`~horus_runtime.core.workflow.base.BaseWorkflow.expand`), so a
+        plan frozen before the run undercounts every fan-out: a five-clone
+        loop map reported ``1/1 tasks``. Re-planning per frame counts the
+        DAG as it actually is.
+        """
+        if self._trigger is None:
+            return {t.id for t in workflow.tasks}
         try:
-            target = trigger_id or (
-                workflow.tasks[0].id if workflow.tasks else None
-            )
-            if target is not None:
-                self._scope = set(
-                    execution_plan(
-                        workflow.tasks, trigger_id=target, edges=workflow.edges
-                    )
+            return set(
+                execution_plan(
+                    workflow.tasks,
+                    trigger_id=self._trigger,
+                    edges=workflow.edges,
                 )
+            )
         except Exception:
-            self._scope = {t.id for t in workflow.tasks}
+            return {t.id for t in workflow.tasks}
 
     @contextmanager
     def live(self) -> Iterator[None]:
@@ -470,7 +487,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         return Panel(line, border_style=style, padding=(0, 1))
 
     def _render_progress(self, workflow: BaseWorkflow) -> RenderableType:
-        scope = self._scope or {t.id for t in workflow.tasks}
+        scope = self._scope_ids(workflow)
         total = len(scope)
         tasks = [t for t in workflow.tasks if t.id in scope]
         done = sum(1 for t in tasks if t.status in _TERMINAL)
@@ -586,7 +603,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         if workflow is None:
             return Text(_("No workflow ran."), style="dim")
 
-        scope = self._scope or {t.id for t in workflow.tasks}
+        scope = self._scope_ids(workflow)
         tasks = [t for t in workflow.tasks if t.id in scope]
         done = sum(1 for t in tasks if t.status in _TERMINAL)
         elapsed = (

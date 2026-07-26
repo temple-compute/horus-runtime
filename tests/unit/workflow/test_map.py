@@ -290,6 +290,47 @@ class TestRangeMapEndToEnd:
             "2",
         ]
 
+    async def test_range_fans_out_with_file_output_keeps_filename(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A non-folder (FileArtifact) clone output keeps its declared
+        filename under the ``{i}/`` slot dir, rather than collapsing to a
+        bare file named ``0``/``1``/``2`` (the w03-loop-map regression).
+        """
+        del horus_context
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        template = HorusTask(
+            id="template",
+            name="template",
+            runtime=CommandRuntime(command="echo $idx > $square"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[FileArtifact(id="idx", path=Path("idx_in"))],
+            outputs=[FileArtifact(id="square", path=Path("square.txt"))],
+        )
+        wf.map(
+            id="rmap",
+            template=template,
+            range=3,
+            index_input="idx",
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="rmap")
+
+        assert wf.status.value == "completed"
+        gathered = tmp_path / "rmap.gathered"
+        for i in range(3):
+            assert (gathered / str(i) / "square.txt").exists()
+
 
 @pytest.mark.unit
 class TestPartialCompletion:

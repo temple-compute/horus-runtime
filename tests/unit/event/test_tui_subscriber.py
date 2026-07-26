@@ -34,6 +34,7 @@ from horus_runtime.core.interaction.transport import (
 )
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.event.subscriber import BaseEventSubscriber
 
 
@@ -115,6 +116,37 @@ class TestWorkflowTUISubscriber:
             assert tui._paused is True
             tui.handle(answered)
             assert tui._paused is False
+
+    def test_progress_total_follows_a_growing_dag(self) -> None:
+        """
+        Tasks added after ``track()`` count towards the total.
+
+        A ``map:``/``sub:`` expander only adds its clones once it runs, so a
+        scope planned before the run reported ``1/1 tasks`` for a five-clone
+        loop map.
+        """
+        wf = _workflow()
+        wf.edges.append(WorkflowEdge(source="a", target="b"))
+        tui = WorkflowTUISubscriber()
+        tui.track(wf, trigger_id="a")
+
+        console = Console(record=True, width=120)
+        console.print(tui.render())
+        assert "0/2 " in console.export_text()
+
+        wf.tasks.append(
+            HorusTask(
+                id="c",
+                name="Gamma",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+            )
+        )
+        wf.edges.append(WorkflowEdge(source="b", target="c"))
+
+        console = Console(record=True, width=120)
+        console.print(tui.render())
+        assert "0/3 " in console.export_text()
 
     def test_setup_is_noop(self) -> None:
         """setup() is a no-op and must not raise."""
