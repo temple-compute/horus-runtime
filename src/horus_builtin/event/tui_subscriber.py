@@ -259,6 +259,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
     _error: tuple[str, str] | None = PrivateAttr(default=None)
     _paused: bool = PrivateAttr(default=False)
     _finished: bool = PrivateAttr(default=False)
+    _finished_at: float | None = PrivateAttr(default=None)
 
     def setup(self) -> None:
         """No startup work needed."""
@@ -335,6 +336,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
                     # interactive TTY, non-interactive runs (CI, pipes)
                     # would otherwise hang forever on this.
                     self._finished = True
+                    self._finished_at = time.monotonic()
                     if sys.stdin.isatty():
                         with suppress(EOFError, KeyboardInterrupt):
                             input()
@@ -481,7 +483,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         elapsed = (
             None
             if self._started_at is None
-            else time.monotonic() - self._started_at
+            else (self._finished_at or time.monotonic()) - self._started_at
         )
         line = Text.assemble(
             (workflow.name, "bold"),
