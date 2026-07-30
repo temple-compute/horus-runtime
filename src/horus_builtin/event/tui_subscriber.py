@@ -29,7 +29,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 from pydantic import PrivateAttr
@@ -258,6 +258,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
     _last_transfer: tuple[str, float] | None = PrivateAttr(default=None)
     _error: tuple[str, str] | None = PrivateAttr(default=None)
     _paused: bool = PrivateAttr(default=False)
+    _finished: bool = PrivateAttr(default=False)
 
     def setup(self) -> None:
         """No startup work needed."""
@@ -328,6 +329,15 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
                     self._capture_error(exc)
                     raise
                 finally:
+                    # Leave the DAG/table/log view on screen instead of
+                    # tearing it down the instant the run returns, so the
+                    # user can still see final task state. Only wait on an
+                    # interactive TTY, non-interactive runs (CI, pipes)
+                    # would otherwise hang forever on this.
+                    self._finished = True
+                    if sys.stdin.isatty():
+                        with suppress(EOFError, KeyboardInterrupt):
+                            input()
                     self._live = None
         finally:
             horus_logger.restore_terminal()
@@ -459,6 +469,10 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         ]
         if self._error is not None:
             sections.append(self._render_error())
+        if self._finished:
+            sections.append(
+                Text(_("Workflow finished, press Enter to close"), style="dim")
+            )
         return Group(*sections)
 
     def _render_header(self, workflow: BaseWorkflow) -> RenderableType:
