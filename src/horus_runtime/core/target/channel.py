@@ -69,6 +69,27 @@ class ChannelProcess(ABC):
         Exit code of the process, or ``None`` if it has not yet terminated.
         """
 
+    @property
+    def pid(self) -> int | None:
+        """
+        Process id on the host where the command runs, when it is knowable.
+
+        Identifies *which* process this handle refers to, so an observer can
+        find it among the many a run has in flight at once — resource
+        sampling being the motivating case. It is deliberately a plain
+        integer and not a handle: the observer is expected to already know
+        which host to interpret it on (the target that produced this
+        process).
+
+        ``None`` means the channel cannot say. That is a legitimate answer,
+        not a failure — a remote channel that streams over an already-open
+        connection never learns a pid — so callers must treat it as
+        "unknown" and fall back rather than raising.
+
+        Defaults to ``None`` so existing channels stay valid.
+        """
+        return None
+
     @abstractmethod
     async def wait(self) -> int:
         """
@@ -223,6 +244,17 @@ class PollingChannelProcess(ChannelProcess):
     def returncode(self) -> int | None:
         """Cached exit code; set once :meth:`wait` sees completion."""
         return self._returncode
+
+    @property
+    def pid(self) -> int | None:
+        """
+        Pid of the detached job on the target host.
+
+        ``build_detach_command`` runs the job under ``setsid``/``nohup`` and
+        writes ``$!`` to the marker dir, so this is both the job's pid and its
+        process-group id — which is what makes the whole tree findable.
+        """
+        return self._handle.pid
 
     async def wait(self) -> int:
         """Poll until the job finishes; return its exit code."""

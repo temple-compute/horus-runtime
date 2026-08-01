@@ -20,7 +20,9 @@ The Horus target indicates where a task should be dispatched and executed.
 """
 
 import asyncio
+import functools
 import shlex
+import socket
 from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
@@ -52,6 +54,19 @@ from horus_runtime.registry.auto_registry import AutoRegistry
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
     from horus_runtime.core.task.base import BaseTask
+
+
+@functools.cache
+def orchestrator_location_id() -> str:
+    """
+    :attr:`BaseTarget.location_id` of the machine running the orchestrator.
+
+    Deliberately built with the same ``local://{hostname}`` shape that
+    ``LocalTarget`` reports, so the two compare equal without either side
+    knowing about the other. Cached because the hostname cannot change within
+    a process and this is consulted per task.
+    """
+    return f"local://{socket.gethostname()}"
 
 
 class BaseTarget(AutoRegistry, entry_point="target"):
@@ -121,6 +136,31 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             ``ssh://user@gpu-box``
             ``horus-agent://agent-42``
         """
+
+    def is_colocated_with(self, other: "BaseTarget") -> bool:
+        """
+        True when *other* runs in the same place as this target.
+
+        Same place means same :attr:`location_id`, which by that property's
+        contract means a shared filesystem and a shared process namespace.
+        Callers were already comparing ``location_id`` strings by hand to
+        decide whether a transfer is a no-op; this names the comparison so the
+        rule lives in one place.
+        """
+        return self.location_id == other.location_id
+
+    @property
+    def is_orchestrator_local(self) -> bool:
+        """
+        True when this target runs on the machine hosting the orchestrator.
+
+        The distinction an observer needs: work here can be inspected with
+        ordinary process APIs, while work anywhere else can only be reached
+        through the channel. Derived from :attr:`location_id` rather than from
+        the target's type, so a new local-ish target gets the right answer
+        without anyone updating an ``isinstance`` chain.
+        """
+        return self.location_id == orchestrator_location_id()
 
     @property
     def task_or_raise(self) -> "BaseTask":

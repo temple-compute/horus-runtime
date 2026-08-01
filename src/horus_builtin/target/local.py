@@ -60,6 +60,17 @@ class LocalChannelProcess(ChannelProcess):
         """Exit code, or ``None`` if the process has not yet terminated."""
         return self._proc.returncode
 
+    @property
+    def pid(self) -> int | None:
+        """
+        Pid of the spawned process, which is also its process-group id.
+
+        The subprocess is created with ``start_new_session=True``, so every
+        descendant it spawns inherits this pgid — making the whole tree
+        addressable from this one number.
+        """
+        return self._proc.pid
+
     async def wait(self) -> int:
         """Wait for the process to finish and return its exit code."""
         return await self._proc.wait()

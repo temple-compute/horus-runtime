@@ -20,6 +20,7 @@ Python executor for in-memory workflows in horus-runtime. (Function
 executor).
 """
 
+import os
 from inspect import isawaitable
 from typing import ClassVar
 
@@ -30,6 +31,8 @@ from horus_builtin.runtime.python import (
 )
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.core.resources import InProcessScope, ResourceScope
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -47,6 +50,21 @@ class PythonFunctionExecutor(BaseExecutor):
     )
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
+
+    async def resource_scope(
+        self, task: "BaseTask", process: ChannelProcess | None = None
+    ) -> ResourceScope:
+        """
+        Declare that the work runs inside the orchestrator process.
+
+        No process is spawned — the function is called directly on the
+        event loop — so there is nothing that belongs to this task alone.
+        Saying so explicitly is what lets an observer report an estimate
+        honestly instead of silently attributing the whole orchestrator to
+        this task.
+        """
+        del task, process
+        return InProcessScope(pid=os.getpid())
 
     async def _execute(self, task: "BaseTask") -> None:
         """
