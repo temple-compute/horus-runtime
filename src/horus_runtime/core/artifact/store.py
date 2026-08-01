@@ -35,6 +35,9 @@ from horus_runtime.i18n import tr as _
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
 
+_SHA256_HEX_LEN = 64
+"""Length of a hex-encoded sha256, used to sanity-check command output."""
+
 
 class ArtifactStore:
     """
@@ -52,6 +55,29 @@ class ArtifactStore:
         return await self.target.path_exists(
             self.target.path_on_target(artifact)
         )
+
+    async def digest(self, artifact: "BaseArtifact") -> str | None:
+        """
+        sha256 of *artifact*'s bytes as they are on the target, or ``None``
+        when it cannot be hashed (missing, a directory, no hashing tool).
+
+        Hashing happens target-side through the shell channel, like
+        :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
+        works for any target without a new primitive. ``shasum`` is the
+        fallback because macOS ships no ``sha256sum``.
+        """
+        path = shlex.quote(self.target.path_on_target(artifact))
+        proc = await self.target.run_command_sync(
+            f"sha256sum {path} 2>/dev/null || shasum -a 256 {path}"
+        )
+        out, _stderr = await proc.communicate()
+        if await proc.wait() != 0:
+            return None
+
+        fields = out.decode(errors="replace").split()
+        if not fields or len(fields[0]) != _SHA256_HEX_LEN:
+            return None
+        return fields[0]
 
     async def delete(self, artifact: "BaseArtifact") -> None:
         """

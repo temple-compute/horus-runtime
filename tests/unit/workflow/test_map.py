@@ -340,32 +340,40 @@ class TestPartialCompletion:
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
         """
-        Clone 1's output already exists on disk (as if from a prior run);
-        re-running with a *fresh* workflow object re-derives the same
-        clone set but skips clone 1 while the others run.
+        Clone 1 is left complete from a prior run (output *and* recorded
+        input manifest); re-running with a *fresh* workflow object re-derives
+        the same clone set but skips clone 1 while the others run.
         """
         del horus_context
-        # Pre-create clone 1's deterministic output location.
-        gathered_1 = tmp_path / "score.gathered" / "1"
-        gathered_1.mkdir(parents=True)
-        (gathered_1 / "out.txt").write_text("already done")
 
-        split = _split_task(tmp_path, ["a", "b", "c"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
+        def _build() -> HorusWorkflow:
+            wf = HorusWorkflow(
+                name="wf",
+                tasks=[
+                    _split_task(tmp_path, ["a", "b", "c"]),
+                    _gather_task(tmp_path),
+                ],
+                orchestrator_target=LocalTarget(
+                    working_directory=tmp_path.as_posix()
+                ),
+            )
+            wf.map(
+                id="score",
+                template=_template_task(),
+                over=("split", "batches", "batch"),
+                gather=("gather", "results"),
+            )
+            return wf
 
+        # A full prior run, with everything but clone 1's leftovers removed:
+        # an output on its own no longer proves a clone is complete, only an
+        # output plus the manifest recorded alongside it does.
+        await _build().run(trigger_id="split")
+        for i in (0, 2):
+            shutil.rmtree(tmp_path / "score.gathered" / str(i))
+            (tmp_path / ".horus" / f"score[{i}].json").unlink()
+
+        wf = _build()
         await wf.run(trigger_id="split")
 
         statuses = {t.id: t.status for t in wf.tasks}

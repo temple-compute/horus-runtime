@@ -54,11 +54,13 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
 
     The artifact is identified by a unique ID.
 
-    The workflow will derive status completion based on artifact existence
-    and hash. If the artifact exists and the hash matches, the workflow
-    considers the task that produces it as completed. If the artifact does
-    not exist or the hash does not match, the workflow considers the task as
-    not completed and will attempt to execute it to produce the artifact.
+    The workflow derives status completion from artifacts on both sides of a
+    task: a task counts as complete when all of its output artifacts exist
+    *and* the digests of its input artifacts still match the ones recorded
+    when it last ran (see
+    :meth:`~horus_builtin.task.horus_task.HorusTask.is_complete`). A missing
+    output, an edited input, or a missing record all mean "not complete", and
+    the workflow executes the task again.
 
 
     In summary, the artifact is the fundamental unit of data in the Horus

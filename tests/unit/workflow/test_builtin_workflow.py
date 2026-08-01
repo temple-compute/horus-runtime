@@ -293,6 +293,9 @@ class TestWorkflowRun:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            # Completion also needs a recorded manifest matching the current
+            # fingerprint; a task's own fingerprint always matches itself.
+            patch.object(HorusTask, "_read_manifest", HorusTask._fingerprint),
             patch.object(HorusTask, "_run") as mock_run,
         ):
             await wf.run(trigger_id="test_task_id")

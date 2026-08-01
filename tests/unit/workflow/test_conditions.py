@@ -451,6 +451,9 @@ class TestSkipReasonDistinguishesCacheHit:
             ),
         )
 
+        # The first run records the input manifest the pre-created output is
+        # missing; only the second run can be a cache hit.
+        await wf.run(trigger_id="cached")
         await wf.run(trigger_id="cached")
 
         assert task.status is TaskStatus.SKIPPED
