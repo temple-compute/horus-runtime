@@ -29,10 +29,12 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.status import TaskStatus
 from tests.conftest import MakeMockSubprocessType, MakeTaskType
 
 
@@ -331,3 +333,94 @@ class TestHorusTaskExecution:
         await task.reset()
 
         assert task.runs == 0
+
+
+@pytest.mark.unit
+class TestHorusTaskInputFingerprint:
+    """
+    Completion is decided by output existence *and* the recorded input
+    fingerprint, so an edited input or command invalidates the cached run.
+    """
+
+    @staticmethod
+    def _make_copy_task(tmp_path: Path, cmd: str = "") -> HorusTask:
+        """
+        Build a task that copies ``in.txt`` to ``out.txt`` under *tmp_path*.
+        """
+        src = tmp_path / "in.txt"
+        dest = tmp_path / "out.txt"
+        return HorusTask(
+            id="copy_task",
+            name="copy_task",
+            inputs=[FileArtifact(id="src", path=src)],
+            outputs=[FileArtifact(id="dest", path=dest)],
+            runtime=CommandRuntime(command=cmd or f"cat {src} > {dest}"),
+            executor=ShellExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+
+    async def test_skips_second_run_with_unchanged_inputs(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Nothing changed, so the second run is a cache hit.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+
+        await task.run()
+        await task.run()
+
+        assert task.runs == 1
+        assert task.status == TaskStatus.SKIPPED
+
+    async def test_reruns_after_input_content_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The output still exists, but it was produced from other bytes.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+
+        await task.run()
+        (tmp_path / "in.txt").write_text("two")
+        await task.run()
+
+        assert task.runs == 2
+        assert (tmp_path / "out.txt").read_text() == "two"
+
+    async def test_reruns_after_command_changes(self, tmp_path: Path) -> None:
+        """
+        Same inputs, different command, so the cached output is not the one
+        this task would produce.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+
+        await task.run()
+        task.runtime = CommandRuntime(
+            command=f"echo changed > {tmp_path / 'out.txt'}"
+        )
+        await task.run()
+
+        assert task.runs == 2
+        assert (tmp_path / "out.txt").read_text() == "changed\n"
+
+    async def test_does_not_skip_without_a_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Outputs from before manifests existed prove nothing about the inputs,
+        so the task runs once more and self-heals.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        (tmp_path / "out.txt").write_text("stale")
+        task = self._make_copy_task(tmp_path)
+
+        assert await task.is_complete() is False
+
+        await task.run()
+
+        assert task.runs == 1
+        assert await task.is_complete() is True

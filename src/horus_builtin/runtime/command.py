@@ -21,6 +21,8 @@ Command implementation for the runtime.
 
 from typing import TYPE_CHECKING, ClassVar
 
+from pydantic import Field
+
 from horus_builtin.runtime.substitution import substitute
 from horus_runtime.context import HorusContext
 from horus_runtime.core.runtime.base import BaseRuntime
@@ -51,7 +53,7 @@ class CommandRuntime(BaseRuntime[str]):
     through untouched.
     """
 
-    formatted_command: str = ""
+    formatted_command: str = Field(default="", exclude=True)
     """
     The formatted command after processing any placeholders.
     """
