@@ -54,12 +54,6 @@ class PythonExecExecutor(BaseExecutor):
     ) -> ResourceScope:
         """
         Declare that the work runs inside the orchestrator process.
-
-        No process is spawned — the code is run through `exec` on the
-        event loop — so there is nothing that belongs to this task alone.
-        Saying so explicitly is what lets an observer report an estimate
-        honestly instead of silently attributing the whole orchestrator to
-        this task.
         """
         del task, process
         return InProcessScope(pid=os.getpid())

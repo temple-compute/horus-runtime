@@ -154,11 +154,8 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         True when this target runs on the machine hosting the orchestrator.
 
-        The distinction an observer needs: work here can be inspected with
-        ordinary process APIs, while work anywhere else can only be reached
-        through the channel. Derived from :attr:`location_id` rather than from
-        the target's type, so a new local-ish target gets the right answer
-        without anyone updating an ``isinstance`` chain.
+        Derived from :attr:`location_id`, not the target's type, so a new
+        local-ish target needs no ``isinstance`` chain updated.
         """
         return self.location_id == orchestrator_location_id()
 
@@ -166,26 +163,9 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         self, task: "BaseTask", process: ChannelProcess | None = None
     ) -> ResourceScope | None:
         """
-        Where work dispatched through this target actually runs.
-
-        ``None`` — the default — means "nothing to add", and the executor's
-        own answer stands. Override when the target itself changes the shape
-        of the execution, which is not something the executor above it can
-        know: a scheduler target turns a command into a queued job owned by
-        the scheduler, so the process the orchestrator can see is not the work.
-
-        The executor still wins when it overrides
-        :meth:`~horus_runtime.core.executor.base.BaseExecutor.resource_scope`
-        outright, because an executor that reparents its work (a container, or
-        running in this very process) knows more than the target beneath it.
-
-        Args:
-            task: The task about to run.
-            process: The handle for the spawned command, when one exists yet.
-
-        Returns:
-            A :class:`~horus_runtime.core.resources.ResourceScope`, or ``None``
-            to defer to the executor.
+        Where work dispatched through this target runs, or ``None`` to defer
+        to the executor. Override when the target reshapes the execution, as
+        a scheduler does by turning a command into a queued job.
         """
         del task, process
         return None
