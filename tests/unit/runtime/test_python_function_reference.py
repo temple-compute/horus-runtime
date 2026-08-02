@@ -115,14 +115,18 @@ class TestPythonFunctionRuntimeFunc:
 
     def test_accepts_a_reference_string(self, function_module: str) -> None:
         """A dotted path is resolved at validation time."""
-        runtime = PythonFunctionRuntime(func=f"{function_module}:work")
+        runtime = PythonFunctionRuntime(
+            func=f"{function_module}:work"  # type: ignore[arg-type]
+        )
         assert callable(runtime.func)
 
     def test_serializes_back_to_a_reference(
         self, function_module: str
     ) -> None:
         """The dump is the string that imports the function again."""
-        runtime = PythonFunctionRuntime(func=f"{function_module}:work")
+        runtime = PythonFunctionRuntime(
+            func=f"{function_module}:work"  # type: ignore[arg-type]
+        )
         assert runtime.model_dump(mode="json")["func"] == (
             f"{function_module}:work"
         )
@@ -150,7 +154,9 @@ class TestYamlRoundTrip:
             FunctionTask(
                 id="step",
                 name="step",
-                runtime=PythonFunctionRuntime(func=f"{function_module}:work"),
+                runtime=PythonFunctionRuntime(
+                    func=f"{function_module}:work"  # type: ignore[arg-type]
+                ),
             )
         )
 

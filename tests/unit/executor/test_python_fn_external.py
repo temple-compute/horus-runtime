@@ -24,7 +24,9 @@ and the whole point of this executor is that the work leaves the process.
 """
 
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,6 +37,7 @@ from horus_builtin.executor.python_fn_external import (
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.function import FunctionTask
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.resources import ProcessTreeScope
 from horus_runtime.core.task.exceptions import TaskExecutionError
@@ -42,9 +45,9 @@ from horus_runtime.core.task.exceptions import TaskExecutionError
 
 def make_task(
     tmp_path: Path,
-    func: object,
+    func: Callable[..., Any],
     *,
-    inputs: list[FileArtifact] | None = None,
+    inputs: list[BaseArtifact] | None = None,
 ) -> FunctionTask:
     """Build a FunctionTask wired to the out-of-process executor."""
     return FunctionTask(
