@@ -100,6 +100,14 @@ def run(
     if debug:
         horus_logger.set_level("DEBUG")
 
+    if not no_tui:
+        # Log lines should only ever land in the TUI's own log pane, never
+        # on the real terminal (the file sink still captures everything).
+        # tui.live() installs the pane sink once the dashboard starts; this
+        # silences the gap before that, and restore_terminal() (in live()'s
+        # finally) puts stdout logging back once the dashboard tears down.
+        horus_logger.redirect_terminal(lambda _message: None)
+
     ctx = HorusContext.boot()
     try:
         workflow = BaseWorkflow.from_yaml(workflow_yaml)
