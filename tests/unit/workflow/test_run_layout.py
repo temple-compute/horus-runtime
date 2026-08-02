@@ -119,25 +119,6 @@ class TestResolveRunPaths:
         wf._resolve_run_paths()
 
         run_root = (tmp_path / "workflow_results").resolve()
-        import os  # noqa: PLC0415
-
-        print("DEBUG cwd:", os.getcwd())  # noqa: T201
-        print("DEBUG PYTHONPATH:", os.environ.get("PYTHONPATH"))  # noqa: T201
-        print("DEBUG PWD:", os.environ.get("PWD"))  # noqa: T201
-        print("DEBUG TMPDIR:", os.environ.get("TMPDIR"))  # noqa: T201
-        print("DEBUG wf._base_directory:", wf._base_directory)  # noqa: T201
-        print("DEBUG wf._effective_base:", wf._effective_base)  # noqa: T201
-        ot = wf.orchestrator_target
-        ot_wd = ot.working_directory if ot else None
-        print("DEBUG orchestrator_target.working_directory:", ot_wd)  # noqa: T201
-        print("DEBUG wf.run_directory:", wf.run_directory)  # noqa: T201
-        t0_wd = wf.tasks[0].target.working_directory
-        print("DEBUG task.target.working_directory:", t0_wd)  # noqa: T201
-        print("DEBUG task.working_dir:", wf.tasks[0].working_dir)  # noqa: T201
-        print("DEBUG produced.declared_path:", produced.declared_path)  # noqa: T201
-        print("DEBUG produced.path:", produced.path)  # noqa: T201
-        expected = (run_root / "results/vina.tar.gz").resolve()
-        print("DEBUG expected:", expected)  # noqa: T201
         # Produced output nests under the run root...
         assert produced.path == (run_root / "results/vina.tar.gz").resolve()
         # ...while an external (never-produced) input stays at the base dir.

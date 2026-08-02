@@ -183,22 +183,6 @@ class TestAddTask:
         wf.add_task(new_task)
 
         run_root = (tmp_path / "workflow_results").resolve()
-        import os  # noqa: PLC0415
-
-        print("DEBUG cwd:", os.getcwd())  # noqa: T201
-        print("DEBUG wf._base_directory:", wf._base_directory)  # noqa: T201
-        print("DEBUG wf._effective_base:", wf._effective_base)  # noqa: T201
-        ot = wf.orchestrator_target
-        ot_wd = ot.working_directory if ot else None
-        print("DEBUG orchestrator_target.working_directory:", ot_wd)  # noqa: T201
-        print("DEBUG wf.run_directory:", wf.run_directory)  # noqa: T201
-        nt_wd = new_task.target.working_directory
-        print("DEBUG new_task.target.working_directory:", nt_wd)  # noqa: T201
-        print("DEBUG new_task.working_dir:", new_task.working_dir)  # noqa: T201
-        print("DEBUG produced.declared_path:", produced.declared_path)  # noqa: T201
-        print("DEBUG produced.path:", produced.path)  # noqa: T201
-        expected = (run_root / "results/out.txt").resolve()
-        print("DEBUG expected:", expected)  # noqa: T201
         assert produced.path == (run_root / "results/out.txt").resolve()
         assert new_task.target.working_directory == run_root.as_posix()
         assert new_task.working_dir == (run_root / "added").as_posix()
