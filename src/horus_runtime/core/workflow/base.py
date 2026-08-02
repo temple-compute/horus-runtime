@@ -1178,32 +1178,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         """
         declared = artifact.declared_path
         if declared is None or declared.is_absolute():
-            print(  # noqa: T201
-                "DEBUG _anchor_artifact SKIP",
-                artifact.id,
-                "declared=",
-                declared,
-            )
             return
         root = run_root if declared in produced else base
-        print(  # noqa: T201
-            "DEBUG _anchor_artifact",
-            artifact.id,
-            "declared=",
-            declared,
-            "base=",
-            base,
-            "run_root=",
-            run_root,
-            "produced=",
-            produced,
-            "in_produced=",
-            declared in produced,
-            "root=",
-            root,
-        )
         artifact.path = (root / declared).resolve()
-        print("DEBUG _anchor_artifact RESULT", artifact.id, artifact.path)  # noqa: T201
 
     def _anchor_task(self, task: BaseTask) -> None:
         """
