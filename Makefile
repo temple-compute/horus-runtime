@@ -102,6 +102,12 @@ babel-check:
 		fi; \
 	done
 	@echo "Success: All strings are translated."
+
+# Separate from babel-check: a check must not write files. The compiled .mo
+# is git-ignored and not byte-reproducible, so folding this into babel-check
+# made every pre-commit run report "files were modified by this hook" even
+# when translations hadn't changed. Only the release build needs this.
+babel-compile:
 	uv run pybabel compile -d $(LOCALE_DIR) -D $(DOMAIN) --statistics
 
 babel-add:
