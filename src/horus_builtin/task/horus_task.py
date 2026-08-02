@@ -24,6 +24,8 @@ import json
 from pathlib import PurePosixPath
 from typing import ClassVar
 
+from pydantic import BaseModel
+
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
@@ -34,18 +36,18 @@ from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 
-_CONFIG_KEY = "__config__"
-"""Fingerprint entry holding the hash of the task's own configuration."""
-
 _UNHASHABLE = "unhashable"
 """Fingerprint value for an input the target cannot digest."""
 
-_DERIVED_FIELDS = {"formatted_command"}
-"""
-Fields the executor writes back onto the runtime while rendering it. They are
-results of a run, not configuration, so they stay out of the fingerprint: a
-task must fingerprint the same before and after it runs.
-"""
+
+class TaskFingerprint(BaseModel):
+    """
+    Everything that must stay unchanged for a task's recorded outputs to
+    still be valid.
+    """
+
+    inputs: dict[str, str]
+    config_hash: str
 
 
 class HorusTask(BaseTask):
@@ -115,7 +117,7 @@ class HorusTask(BaseTask):
             return None
         return f"{base}/.horus/{self.id}.json"
 
-    async def _fingerprint(self) -> dict[str, str]:
+    async def _fingerprint(self) -> TaskFingerprint:
         """
         Everything that must stay unchanged for the previous run's outputs to
         still be valid: the digest of every input, plus a hash of the task's
@@ -125,23 +127,21 @@ class HorusTask(BaseTask):
         # ponytail: a folder input digests to None, so a task whose inputs are
         # all folders keeps the old existence-only behaviour, upgrade path is a
         # recursive digest in ArtifactStore.digest.
-        fingerprint = {
+        inputs = {
             artifact.id: await store.digest(artifact) or _UNHASHABLE
             for artifact in self.inputs
         }
         config = json.dumps(
             {
-                "runtime": self.runtime.model_dump(
-                    mode="json", exclude=_DERIVED_FIELDS
-                ),
+                "runtime": self.runtime.model_dump(mode="json"),
                 "executor": self.executor.model_dump(mode="json"),
             },
             sort_keys=True,
         )
-        fingerprint[_CONFIG_KEY] = hashlib.sha256(config.encode()).hexdigest()
-        return fingerprint
+        config_hash = hashlib.sha256(config.encode()).hexdigest()
+        return TaskFingerprint(inputs=inputs, config_hash=config_hash)
 
-    async def _write_manifest(self, fingerprint: dict[str, str]) -> None:
+    async def _write_manifest(self, fingerprint: TaskFingerprint) -> None:
         """
         Record *fingerprint* on the target, next to the outputs the run just
         produced.
@@ -151,11 +151,10 @@ class HorusTask(BaseTask):
             return
 
         await self.target.mkdir(str(PurePosixPath(path).parent))
-        await self.target.put_file(
-            json.dumps(fingerprint, sort_keys=True).encode(), path
-        )
+        body = fingerprint.model_dump_json().encode()
+        await self.target.put_file(body, path)
 
-    async def _read_manifest(self) -> dict[str, str] | None:
+    async def _read_manifest(self) -> TaskFingerprint | None:
         """
         The fingerprint recorded by the last successful run, or ``None`` when
         there is none or it cannot be trusted. A broken manifest must mean
@@ -167,10 +166,11 @@ class HorusTask(BaseTask):
             return None
 
         try:
-            data = json.loads(await self.target.get_file(path))
+            return TaskFingerprint.model_validate_json(
+                await self.target.get_file(path)
+            )
         except Exception:
             return None
-        return data if isinstance(data, dict) else None
 
     async def is_complete(self) -> bool:
         """
