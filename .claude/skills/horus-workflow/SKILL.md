@@ -85,12 +85,14 @@ loads the plugin registries). Only one workflow may run at a time.
 | workflow | `horus_workflow`                                            |
 | task     | `horus_task`, `function_task` (Python-only)                 |
 | runtime  | `command`, `python`, `python_string`, `python_script`       |
-| executor | `shell`, `python_exec`, `python_fn`                         |
+| executor | `shell`, `python_exec`, `python_fn`, `python_function_external` |
 | artifact | `file`, `folder`, `json`, `pickle`                          |
 | target   | `local`                                                     |
 
 Compatible pairings: `command` runtime ↔ `shell` executor; `python`/string code
-↔ `python_exec`; in-memory function ↔ `python_fn`. Mismatches raise
+↔ `python_exec`; in-memory function ↔ `python_fn`, or
+`python_function_external` to run the same function in a subprocess **on the
+task's target** (opt-in; see below). Mismatches raise
 `IncompatibleRuntimeError` at construction.
 
 ## Gotchas

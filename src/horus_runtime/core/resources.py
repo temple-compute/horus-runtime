@@ -16,13 +16,19 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Portable, target-agnostic compute resource requests for tasks.
+Portable, target-agnostic compute resources for tasks.
 
-The model defined here is advisory: a task may declare the resources it would
-like, and resource-aware targets (Slurm, Terraform, etc.) translate those hints
-into their own provisioning primitives. Targets that ignore resources are
-unaffected, which keeps the field fully backwards compatible.
+Two halves that mirror each other:
+
+- :class:`ResourceRequest`: what a task *asks for*. Advisory: resource-aware
+  targets (Slurm, Terraform, etc.) translate the hints into their own
+  provisioning primitives, and targets that ignore them are unaffected.
+- :class:`ResourceScope`: where a task's work *actually runs*, so an observer
+  can find it and measure what it really used.
 """
+
+from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,3 +60,36 @@ class ResourceRequest(BaseModel):
     memory_gb: int | None = Field(default=None, ge=1)
     vram_gb: int | None = Field(default=None, ge=1)
     walltime: str | None = None
+
+
+@dataclass(frozen=True)
+class ResourceScope:
+    """
+    Where a task's work actually runs, so an observer can find and measure it.
+    """
+
+    #: Where the work runs, for observers to dispatch on.
+    kind: str
+
+    #: Scope-specific detail.
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProcessTreeScope(ResourceScope):
+    """
+    The work is a process and its descendants, on the target's host.
+    """
+
+    kind: str = "process_tree"
+    pid: int | None = None
+
+
+@dataclass(frozen=True)
+class InProcessScope(ResourceScope):
+    """
+    The work runs inside the orchestrator process itself.
+    """
+
+    kind: str = "in_process"
+    pid: int | None = None

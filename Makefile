@@ -102,6 +102,9 @@ babel-check:
 		fi; \
 	done
 	@echo "Success: All strings are translated."
+
+# Separate from babel-check: a check must not write files.
+babel-compile:
 	uv run pybabel compile -d $(LOCALE_DIR) -D $(DOMAIN) --statistics
 
 babel-add:

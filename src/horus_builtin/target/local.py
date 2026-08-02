@@ -60,6 +60,13 @@ class LocalChannelProcess(ChannelProcess):
         """Exit code, or ``None`` if the process has not yet terminated."""
         return self._proc.returncode
 
+    @property
+    def pid(self) -> int | None:
+        """
+        Pid of the spawned process, which is also its process-group id.
+        """
+        return self._proc.pid
+
     async def wait(self) -> int:
         """Wait for the process to finish and return its exit code."""
         return await self._proc.wait()
@@ -226,6 +233,10 @@ class LocalTarget(BaseTarget):
             txt = ec.read_text().strip()
             if txt:
                 return int(txt)
+        if handle.pid is None:
+            # No pid to probe for liveness, so the exit-code file is the only
+            # evidence there is; absent it, assume still running.
+            return None
         try:
             os.kill(handle.pid, 0)
         except ProcessLookupError:
@@ -250,6 +261,8 @@ class LocalTarget(BaseTarget):
         die with it (the launcher used ``start_new_session``, so the job's
         PGID is queryable via ``os.getpgid``).
         """
+        if handle.pid is None:
+            return
         try:
             if os.name == "posix":
                 os.killpg(os.getpgid(handle.pid), sig)

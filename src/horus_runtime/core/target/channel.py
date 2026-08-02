@@ -69,6 +69,13 @@ class ChannelProcess(ABC):
         Exit code of the process, or ``None`` if it has not yet terminated.
         """
 
+    @property
+    def pid(self) -> int | None:
+        """
+        Process id on the host where the command runs, when it is knowable.
+        """
+        return None
+
     @abstractmethod
     async def wait(self) -> int:
         """
@@ -171,7 +178,9 @@ class JobHandle:
     Opaque reference to a detached job launched by a target.
     """
 
-    pid: int
+    #: ``None`` when the target's unit of work is not an OS process it can
+    #: name: for example a SLURM job, whose id goes in :attr:`extra`.
+    pid: int | None
     job_dir: str
     extra: dict[str, str] | None = None
 
@@ -223,6 +232,13 @@ class PollingChannelProcess(ChannelProcess):
     def returncode(self) -> int | None:
         """Cached exit code; set once :meth:`wait` sees completion."""
         return self._returncode
+
+    @property
+    def pid(self) -> int | None:
+        """
+        Pid of the detached job on the target host.
+        """
+        return self._handle.pid
 
     async def wait(self) -> int:
         """Poll until the job finishes; return its exit code."""
