@@ -1210,7 +1210,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         this more than once for the same task is safe.
         """
         base = self._effective_base
-        run_root = self.run_directory
+        run_root = Path(task.working_dir)
         produced = self._produced_declared_paths()
 
         for artifact in (*task.inputs, *task.outputs):
