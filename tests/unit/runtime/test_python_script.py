@@ -106,6 +106,38 @@ async def test_python_script_quotes_remote_path_with_spaces(
 
 
 @pytest.mark.usefixtures("horus_context")
+async def test_python_script_quotes_args_with_spaces(
+    tmp_path: Path,
+) -> None:
+    """
+    An artifact path with a space substituted into ``args`` is shell-quoted
+    as one word, not split into two positional args (regression: this used
+    to reach argparse as separate, "unrecognized" tokens).
+    """
+    work = tmp_path / "my project"
+    work.mkdir()
+    script = tmp_path / "job.py"
+    script.write_text("print('hi')\n")
+
+    result = JSONArtifact(id="result", path=work / "result.json")
+    task = HorusTask(
+        id="run",
+        name="run",
+        runtime=PythonScriptRuntime(script=script, args="$result"),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=work.as_posix()),
+        outputs=[result],
+    )
+
+    cmd = await task.runtime.setup_runtime(task)
+
+    placed = Path(task.working_dir) / "job.py"
+    expected_args = shlex.quote(str(result.path))
+    assert cmd == f"python {shlex.quote(str(placed))} {expected_args}"
+    assert len(shlex.split(cmd)) == 3
+
+
+@pytest.mark.usefixtures("horus_context")
 async def test_python_script_templated_script_uses_input_artifact(
     tmp_path: Path,
 ) -> None:

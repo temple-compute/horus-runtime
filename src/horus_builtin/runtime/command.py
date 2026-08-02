@@ -63,7 +63,7 @@ class CommandRuntime(BaseRuntime[str]):
         Render ``$``/``${}`` placeholders in the command against *task*'s
         artifacts and task namespace, then emit a ``RuntimeEvent``.
         """
-        fmt = substitute(self.command, task)
+        fmt = substitute(self.command, task, quote=True)
 
         self.formatted_command = fmt
 

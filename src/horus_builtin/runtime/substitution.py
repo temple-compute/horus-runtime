@@ -35,6 +35,7 @@ Unknown ``$name`` references are left as-is (``safe_substitute`` semantics).
 Use ``$$`` to emit a literal ``$``.
 """
 
+import shlex
 from collections.abc import Iterator, Mapping
 from string import Template
 from typing import TYPE_CHECKING
@@ -98,12 +99,13 @@ class _Resolver(Mapping[str, str]):
     :exc:`KeyError` so ``safe_substitute`` leaves the placeholder intact.
     """
 
-    def __init__(self, task: "BaseTask") -> None:
+    def __init__(self, task: "BaseTask", *, quote: bool = False) -> None:
         self._roots: dict[str, object] = {
             a.id: _ArtifactRef(a, task.target)
             for a in (*task.inputs, *task.outputs)
         }
         self._roots["task"] = _TaskNamespace(task)
+        self._quote = quote
 
     def __getitem__(self, key: str) -> str:
         parts = key.split(".")
@@ -115,7 +117,7 @@ class _Resolver(Mapping[str, str]):
                 obj = getattr(obj, part)
             except AttributeError as exc:
                 raise KeyError(key) from exc
-        return str(obj)
+        return shlex.quote(str(obj)) if self._quote else str(obj)
 
     def __iter__(self) -> "Iterator[str]":
         return iter(self._roots)
@@ -139,7 +141,7 @@ def is_template(value: "str | PurePath") -> bool:
     return "$" in str(value).replace("$$", "")
 
 
-def substitute(template: str, task: "BaseTask") -> str:
+def substitute(template: str, task: "BaseTask", *, quote: bool = False) -> str:
     """
     Render *template* against *task* using ``string.Template`` ``$``/``${}``
     syntax.
@@ -149,6 +151,14 @@ def substitute(template: str, task: "BaseTask") -> str:
     * ``${task.attr}``     — attribute of the task
     * Unknown placeholders are left as-is (``safe_substitute`` semantics).
     * ``$$`` emits a literal ``$``.
+
+    ``quote`` shell-quotes each resolved value individually (via
+    ``shlex.quote``) before it is substituted in, so a path containing spaces
+    or shell metacharacters lands as a single word instead of being split by
+    the shell that later runs the rendered string. Pass it whenever the
+    result is handed to a shell unquoted; leave it off when the result is
+    itself wrapped in ``shlex.quote`` afterwards, or isn't shell text at all
+    (e.g. Python source).
 
     Raises :exc:`ValueError` if any artifact has the reserved id ``"task"``.
     """
@@ -160,4 +170,4 @@ def substitute(template: str, task: "BaseTask") -> str:
                 "Please rename this artifact."
             )
         )
-    return _DotTemplate(template).safe_substitute(_Resolver(task))
+    return _DotTemplate(template).safe_substitute(_Resolver(task, quote=quote))

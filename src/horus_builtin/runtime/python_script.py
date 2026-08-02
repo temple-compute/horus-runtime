@@ -97,7 +97,7 @@ class PythonScriptRuntime(CommandRuntime):
             # which the executor uses as cwd and where the outputs land.
             await task.target.put_file(self.script, remote_path)
 
-        args = substitute(self.args, task) if self.args else ""
+        args = substitute(self.args, task, quote=True) if self.args else ""
         cmd = f"{self.python} {shlex.quote(remote_path)} {args}".rstrip()
         self.formatted_command = cmd
 
