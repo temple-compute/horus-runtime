@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, ClassVar, final
 
 from pydantic import PrivateAttr
 
+from horus_runtime.core.resources import ResourceScope
 from horus_runtime.core.target.channel import (
     ChannelProcess,
     JobHandle,
@@ -63,8 +64,7 @@ def orchestrator_location_id() -> str:
 
     Deliberately built with the same ``local://{hostname}`` shape that
     ``LocalTarget`` reports, so the two compare equal without either side
-    knowing about the other. Cached because the hostname cannot change within
-    a process and this is consulted per task.
+    knowing about the other.
     """
     return f"local://{socket.gethostname()}"
 
@@ -154,13 +154,21 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         True when this target runs on the machine hosting the orchestrator.
 
-        The distinction an observer needs: work here can be inspected with
-        ordinary process APIs, while work anywhere else can only be reached
-        through the channel. Derived from :attr:`location_id` rather than from
-        the target's type, so a new local-ish target gets the right answer
-        without anyone updating an ``isinstance`` chain.
+        Derived from :attr:`location_id`, not the target's type, so a new
+        local-ish target needs no ``isinstance`` chain updated.
         """
         return self.location_id == orchestrator_location_id()
+
+    async def resource_scope(
+        self, task: "BaseTask", process: ChannelProcess | None = None
+    ) -> ResourceScope | None:
+        """
+        Where work dispatched through this target runs, or ``None`` to defer
+        to the executor. Override when the target reshapes the execution, as
+        a scheduler does by turning a command into a queued job.
+        """
+        del task, process
+        return None
 
     @property
     def task_or_raise(self) -> "BaseTask":

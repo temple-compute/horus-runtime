@@ -100,33 +100,12 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         """
         Declare where this executor's work actually runs.
 
-        Answers "if you wanted to watch this task, what would you watch?" — so
-        an observer (the resource-monitor plugin, a profiler) can find the work
-        without knowing anything about this executor.
-
-        The default is the truth for every executor that runs its work as a
-        command on the target: a process tree rooted at the spawned process.
-        Because it is a *default* and not a lookup table, an executor written
-        after the observer is measured correctly with no changes anywhere —
-        which is the entire reason this hook exists rather than the observer
-        branching on ``executor.kind``.
-
-        Override only when the work genuinely escapes the spawned tree:
-        a container executor (the real workload is reparented under the
-        container daemon) or an executor that runs work inside this very
-        process (nothing is spawned at all).
-
-        Args:
-            task: The task being executed.
-            process: The handle for the spawned command, when the caller has
-                one. ``None`` before the process exists, or for executors that
-                never spawn one.
-
-        Returns:
-            A :class:`~horus_runtime.core.resources.ResourceScope` describing
-            where to look.
+        The target is asked first, then the process-tree default. Override
+        only when the work genuinely escapes the spawned tree.
         """
-        del task
+        scope = await task.target.resource_scope(task, process)
+        if scope is not None:
+            return scope
         return ProcessTreeScope(
             pid=process.pid if process is not None else None
         )

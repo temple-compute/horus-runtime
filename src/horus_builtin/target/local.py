@@ -64,10 +64,6 @@ class LocalChannelProcess(ChannelProcess):
     def pid(self) -> int | None:
         """
         Pid of the spawned process, which is also its process-group id.
-
-        The subprocess is created with ``start_new_session=True``, so every
-        descendant it spawns inherits this pgid — making the whole tree
-        addressable from this one number.
         """
         return self._proc.pid
 
@@ -237,6 +233,10 @@ class LocalTarget(BaseTarget):
             txt = ec.read_text().strip()
             if txt:
                 return int(txt)
+        if handle.pid is None:
+            # No pid to probe for liveness, so the exit-code file is the only
+            # evidence there is; absent it, assume still running.
+            return None
         try:
             os.kill(handle.pid, 0)
         except ProcessLookupError:
@@ -261,6 +261,8 @@ class LocalTarget(BaseTarget):
         die with it (the launcher used ``start_new_session``, so the job's
         PGID is queryable via ``os.getpgid``).
         """
+        if handle.pid is None:
+            return
         try:
             if os.name == "posix":
                 os.killpg(os.getpgid(handle.pid), sig)

@@ -24,6 +24,7 @@ nobody has written yet is still findable by an observer nobody has written yet.
 
 import dataclasses
 import os
+from typing import ClassVar
 
 import pytest
 
@@ -35,9 +36,9 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.resources import (
-    ContainerScope,
     InProcessScope,
     ProcessTreeScope,
+    ResourceScope,
 )
 from horus_runtime.core.target.base import orchestrator_location_id
 from horus_runtime.core.target.channel import JobHandle, PollingChannelProcess
@@ -50,6 +51,29 @@ def _task(tmp_path: object) -> HorusTask:
         executor=ShellExecutor(),
         runtime=CommandRuntime(command="true"),
         target=LocalTarget(working_directory=str(tmp_path)),
+    )
+
+
+class _SchedulerTarget(LocalTarget):
+    """A target that owns the work itself, the way a scheduler does."""
+
+    add_to_registry: ClassVar[bool] = False
+
+    async def resource_scope(
+        self, task: object, process: object = None
+    ) -> ResourceScope | None:
+        """Report the queued job, not whatever the orchestrator spawned."""
+        del task, process
+        return ResourceScope(kind="batch_job", detail={"job": "42"})
+
+
+def _scheduler_task(tmp_path: object) -> HorusTask:
+    return HorusTask(
+        id="t",
+        name="t",
+        executor=ShellExecutor(),
+        runtime=CommandRuntime(command="true"),
+        target=_SchedulerTarget(working_directory=str(tmp_path)),
     )
 
 
@@ -114,6 +138,43 @@ class TestDefaultScope:
         assert scope.pid is None
 
 
+class TestTargetDeclaredScope:
+    """
+    A target can reshape the execution, and gets to say so.
+
+    A scheduler target turns a command into a queued job it owns, which the
+    executor above it cannot know. Without this, such a target inherits
+    ``ProcessTreeScope`` and an observer walks a process that is not the work.
+    """
+
+    @pytest.mark.asyncio
+    async def test_target_scope_overrides_the_default(
+        self, tmp_path: object
+    ) -> None:
+        """The target's answer replaces the executor's default."""
+        task = _scheduler_task(tmp_path)
+        scope = await ShellExecutor().resource_scope(task)
+        assert scope.kind == "batch_job"
+
+    @pytest.mark.asyncio
+    async def test_executor_override_beats_the_target(
+        self, tmp_path: object
+    ) -> None:
+        """
+        An executor that reparents its work knows more than the target under
+        it, so its override is never second-guessed.
+        """
+        task = _scheduler_task(tmp_path)
+        scope = await PythonExecExecutor().resource_scope(task)
+        assert isinstance(scope, InProcessScope)
+
+    @pytest.mark.asyncio
+    async def test_plain_target_defers(self, tmp_path: object) -> None:
+        """The default target answer changes nothing."""
+        target = LocalTarget(working_directory=str(tmp_path))
+        assert await target.resource_scope(_task(tmp_path)) is None
+
+
 class TestInProcessScope:
     """The two in-process executors declare that they cannot be attributed."""
 
@@ -140,10 +201,9 @@ class TestScopeVocabulary:
         """An observer dispatches on `kind`, so they must not collide."""
         kinds = {
             ProcessTreeScope().kind,
-            ContainerScope().kind,
             InProcessScope().kind,
         }
-        assert len(kinds) == 3
+        assert len(kinds) == 2
 
     def test_scopes_are_frozen_values(self) -> None:
         """
@@ -152,15 +212,6 @@ class TestScopeVocabulary:
         scope = ProcessTreeScope(pid=1)
         with pytest.raises(dataclasses.FrozenInstanceError):
             scope.pid = 2  # type: ignore[misc]
-
-    def test_container_scope_carries_a_cidfile(self) -> None:
-        """
-        A container id is often only knowable after the container starts, so
-        the scope can name where the runtime will write it instead.
-        """
-        scope = ContainerScope(cidfile="/w/.cid")
-        assert scope.container_id is None
-        assert scope.cidfile == "/w/.cid"
 
 
 class TestColocation:

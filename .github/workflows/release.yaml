@@ -25,8 +25,11 @@ jobs:
             - name: Sync project dependencies and activate environment
               run: uv sync --group dev
 
-            - name: Verify and compile translations
+            - name: Verify translations
               run: uv run make babel-check
+
+            - name: Compile translations
+              run: uv run make babel-compile
 
             - name: Build package
               run: uv run uv build
