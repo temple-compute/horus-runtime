@@ -35,7 +35,6 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.resources import (
-    ContainerScope,
     InProcessScope,
     ProcessTreeScope,
 )
@@ -140,10 +139,9 @@ class TestScopeVocabulary:
         """An observer dispatches on `kind`, so they must not collide."""
         kinds = {
             ProcessTreeScope().kind,
-            ContainerScope().kind,
             InProcessScope().kind,
         }
-        assert len(kinds) == 3
+        assert len(kinds) == 2
 
     def test_scopes_are_frozen_values(self) -> None:
         """
@@ -152,15 +150,6 @@ class TestScopeVocabulary:
         scope = ProcessTreeScope(pid=1)
         with pytest.raises(dataclasses.FrozenInstanceError):
             scope.pid = 2  # type: ignore[misc]
-
-    def test_container_scope_carries_a_cidfile(self) -> None:
-        """
-        A container id is often only knowable after the container starts, so
-        the scope can name where the runtime will write it instead.
-        """
-        scope = ContainerScope(cidfile="/w/.cid")
-        assert scope.container_id is None
-        assert scope.cidfile == "/w/.cid"
 
 
 class TestColocation:

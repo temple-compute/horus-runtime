@@ -111,25 +111,6 @@ class ProcessTreeScope(ResourceScope):
 
 
 @dataclass(frozen=True)
-class ContainerScope(ResourceScope):
-    """
-    The work runs inside a container, not in the spawned process tree.
-
-    A container runtime's CLI is a thin client: the real workload is reparented
-    under the container daemon's supervisor in a different process group, so
-    walking the spawned tree measures the client and nothing else. Executors
-    that launch containers must say so by returning this, and identify the
-    container so an observer can ask the daemon instead.
-    """
-
-    kind: str = "container"
-    container_id: str | None = None
-    #: Set when the id is not known yet but the runtime writes it to this path
-    #: on the target once the container starts (e.g. ``docker --cidfile``).
-    cidfile: str | None = None
-
-
-@dataclass(frozen=True)
 class InProcessScope(ResourceScope):
     """
     The work runs inside the orchestrator process itself.
