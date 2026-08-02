@@ -192,7 +192,12 @@ class JobHandle:
     Opaque reference to a detached job launched by a target.
     """
 
-    pid: int
+    #: Pid of the job on the target host, when the target actually knows one.
+    #: ``None`` when the target's unit of work is not an OS process it can
+    #: name — a scheduler job, say, whose identifier means something only to
+    #: the scheduler. Such a target puts its own identifier in :attr:`extra`
+    #: rather than here, so nothing downstream mistakes it for a pid.
+    pid: int | None
     job_dir: str
     extra: dict[str, str] | None = None
 

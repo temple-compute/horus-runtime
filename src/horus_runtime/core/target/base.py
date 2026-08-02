@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, ClassVar, final
 
 from pydantic import PrivateAttr
 
+from horus_runtime.core.resources import ResourceScope
 from horus_runtime.core.target.channel import (
     ChannelProcess,
     JobHandle,
@@ -63,8 +64,7 @@ def orchestrator_location_id() -> str:
 
     Deliberately built with the same ``local://{hostname}`` shape that
     ``LocalTarget`` reports, so the two compare equal without either side
-    knowing about the other. Cached because the hostname cannot change within
-    a process and this is consulted per task.
+    knowing about the other.
     """
     return f"local://{socket.gethostname()}"
 
@@ -161,6 +161,34 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         without anyone updating an ``isinstance`` chain.
         """
         return self.location_id == orchestrator_location_id()
+
+    async def resource_scope(
+        self, task: "BaseTask", process: ChannelProcess | None = None
+    ) -> ResourceScope | None:
+        """
+        Where work dispatched through this target actually runs.
+
+        ``None`` — the default — means "nothing to add", and the executor's
+        own answer stands. Override when the target itself changes the shape
+        of the execution, which is not something the executor above it can
+        know: a scheduler target turns a command into a queued job owned by
+        the scheduler, so the process the orchestrator can see is not the work.
+
+        The executor still wins when it overrides
+        :meth:`~horus_runtime.core.executor.base.BaseExecutor.resource_scope`
+        outright, because an executor that reparents its work (a container, or
+        running in this very process) knows more than the target beneath it.
+
+        Args:
+            task: The task about to run.
+            process: The handle for the spawned command, when one exists yet.
+
+        Returns:
+            A :class:`~horus_runtime.core.resources.ResourceScope`, or ``None``
+            to defer to the executor.
+        """
+        del task, process
+        return None
 
     @property
     def task_or_raise(self) -> "BaseTask":

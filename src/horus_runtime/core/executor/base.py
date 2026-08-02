@@ -116,6 +116,13 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         container daemon) or an executor that runs work inside this very
         process (nothing is spawned at all).
 
+        The target is asked first, because it can change the shape of the
+        execution in a way this executor cannot see: a scheduler target turns
+        the command into a queued job, so the handle the orchestrator holds
+        does not refer to the work. An executor that overrides this method
+        never reaches here, which is the right precedence — an executor that
+        reparents its work knows more than the target beneath it.
+
         Args:
             task: The task being executed.
             process: The handle for the spawned command, when the caller has
@@ -126,7 +133,9 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
             A :class:`~horus_runtime.core.resources.ResourceScope` describing
             where to look.
         """
-        del task
+        scope = await task.target.resource_scope(task, process)
+        if scope is not None:
+            return scope
         return ProcessTreeScope(
             pid=process.pid if process is not None else None
         )
