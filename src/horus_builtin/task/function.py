@@ -30,6 +30,7 @@ from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow
@@ -50,7 +51,14 @@ class FunctionTask(HorusTask):
     """
 
     runtime: PythonFunctionRuntime
-    executor: PythonFunctionExecutor = PythonFunctionExecutor()
+    executor: BaseExecutor = PythonFunctionExecutor()
+    """
+    In-process by default, unchanged. Typed as ``BaseExecutor`` (rather than
+    the concrete in-process one) so a function task can opt into another
+    executor that accepts this runtime. ``python_function_external`` runs the
+    same function on the target instead. Compatibility is still enforced by
+    ``BaseTask`` against ``executor.runtimes``.
+    """
 
     # Default to CLI transport for interactions in FunctionTasks.
     interaction: BaseInteractionTransport = CLIInteractionTransport()

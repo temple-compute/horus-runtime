@@ -11,6 +11,7 @@ classifiers = [
 ]
 dependencies = [
   "click>=8.3.3",
+  "cloudpickle>=3.0",
   "loguru~=0.7",
   "pydantic~=2.0",
   "pydantic_settings~=2.0",
@@ -34,6 +35,7 @@ pickle = "horus_builtin.artifact.pickle"
 shell = "horus_builtin.executor.shell"
 python_exec = "horus_builtin.executor.python_exec"
 python_fn = "horus_builtin.executor.python_fn"
+python_fn_external = "horus_builtin.executor.python_fn_external"
 
 [project.entry-points."horus.interaction"]
 common = "horus_builtin.interaction.common"
@@ -109,6 +111,10 @@ python_version = "3.13"
 strict = true
 exclude = ["build", "dist"]
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["cloudpickle.*"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_typed = true

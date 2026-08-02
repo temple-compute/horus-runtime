@@ -20,10 +20,11 @@ Python runtime implementation for in-memory workflows.
 """
 
 from collections.abc import Awaitable, Callable
+from importlib import import_module
 from inspect import Parameter, signature
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar, cast
 
-from pydantic import ConfigDict, Field
+from pydantic import BeforeValidator, ConfigDict, PlainSerializer
 
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.runtime.base import BaseRuntime
@@ -41,6 +42,112 @@ PythonFunctionSetupTuple = tuple[
 ]
 
 
+def import_callable(reference: str) -> Callable[..., Any]:
+    """
+    Import the callable named by a dotted *reference*.
+
+    Accepts ``package.module:function`` (preferred, unambiguous) and
+    ``package.module.function``; for the latter the last dotted component is
+    taken as the attribute, and attribute chains
+    (``module:Class.method``) work on either side.
+
+    Security note: importing by name runs the target module's top-level code,
+    so a workflow file can execute arbitrary Python. That is not a new
+    privilege (the same file can already declare a ``command`` runtime or a
+    ``python_string`` one, both of which run whatever they are given), so a
+    workflow document is trusted input either way and an import allowlist here
+    would only give the illusion of a boundary. The guardrail that does pay
+    for itself is a legible error: a typo must say which module or attribute
+    was missing instead of surfacing a bare ``ImportError`` from pydantic.
+
+    Raises:
+        ValueError: If *reference* is malformed, the module cannot be
+            imported, the attribute does not exist, or it is not callable.
+    """
+    module_name, separator, attribute = reference.partition(":")
+    if not separator:
+        module_name, _sep, attribute = reference.rpartition(".")
+    if not module_name or not attribute:
+        raise ValueError(
+            _(
+                "Invalid function reference %(ref)r: expected "
+                "'package.module:function' or 'package.module.function'."
+            )
+            % {"ref": reference}
+        )
+
+    try:
+        obj: Any = import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            _(
+                "Could not import module %(module)r for function reference "
+                "%(ref)r: %(err)s"
+            )
+            % {"module": module_name, "ref": reference, "err": exc}
+        ) from exc
+
+    for part in attribute.split("."):
+        try:
+            obj = getattr(obj, part)
+        except AttributeError as exc:
+            raise ValueError(
+                _(
+                    "Module %(module)r has no attribute %(attr)r "
+                    "(from function reference %(ref)r)."
+                )
+                % {
+                    "module": module_name,
+                    "attr": attribute,
+                    "ref": reference,
+                }
+            ) from exc
+
+    if not callable(obj):
+        raise ValueError(
+            _("Function reference %(ref)r resolved to a non-callable object.")
+            % {"ref": reference}
+        )
+    return cast(Callable[..., Any], obj)
+
+
+def _resolve_func(value: Any) -> Any:
+    """
+    Turn a dotted-path string into the callable it names, pass anything else
+    through untouched so handing over a real function keeps working.
+    """
+    return import_callable(value) if isinstance(value, str) else value
+
+
+def _serialize_func(func: Callable[..., Any]) -> str:
+    """
+    Dump a callable as the dotted path that imports it back.
+
+    A callable with no importable name (a lambda, a closure, a
+    ``functools.partial``) has no honest answer here; ``repr`` is emitted so
+    the dump *fails loudly on load* instead of silently omitting the field and
+    failing with "func is required", which said nothing about the cause.
+    """
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", None)
+    if module and qualname:
+        return f"{module}:{qualname}"
+    return repr(func)
+
+
+FunctionReference = Annotated[
+    Callable[..., PythonFunctionReturnType],
+    BeforeValidator(_resolve_func),
+    PlainSerializer(_serialize_func, return_type=str),
+]
+"""
+A callable, or the dotted path of one. Without the string form a function
+task cannot be written in YAML at all (a pydantic ``Callable`` field rejects
+strings), which kept them out of every tool that goes through the document:
+packaging, sanitising, import.
+"""
+
+
 class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     """
     Executes a python function.
@@ -55,7 +162,11 @@ class PythonFunctionRuntime(BaseRuntime[PythonFunctionSetupTuple]):
     # Allow callable types in the runtime configuration
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    func: Callable[..., PythonFunctionReturnType] = Field(..., exclude=True)
+    func: FunctionReference
+    """
+    The function to run: either the callable itself (Python workflows) or a
+    ``package.module:function`` string (YAML workflows).
+    """
 
     async def _setup_runtime(
         self, task: "BaseTask"

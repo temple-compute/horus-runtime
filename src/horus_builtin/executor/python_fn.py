@@ -38,6 +38,42 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
 
+async def parse_result_artifacts(
+    task: BaseTask, result: PythonFunctionReturnType
+) -> None:
+    """
+    Parse the result of a Python function execution to extract any declared
+    side-product artifacts.
+
+    Module-level so the out-of-process executor applies the exact same rules
+    to a result that came back over a pipe as the in-process one does to a
+    live return value.
+    """
+    if isawaitable(result):
+        result = await result
+
+    if result is None:
+        return
+    if isinstance(result, BaseArtifact):
+        task.side_artifacts = [result]
+        return
+    if isinstance(result, list) and all(
+        isinstance(r, BaseArtifact) for r in result
+    ):
+        task.side_artifacts = result
+        return
+
+    horus_logger.log.warning(
+        _(
+            "Task %(task_id)s returned an unexpected value from its "
+            "Python function runtime. Expected BaseArtifact, "
+            "list[BaseArtifact], or None; got: %(result)s. Skipping side "
+            "artifact handling."
+        )
+        % {"task_id": task.id, "result": result}
+    )
+
+
 class PythonFunctionExecutor(BaseExecutor):
     """
     Executor for running Python functions in-memory.
@@ -90,26 +126,4 @@ class PythonFunctionExecutor(BaseExecutor):
         Parse the result of a Python function execution to extract any declared
         side-product artifacts.
         """
-        if isawaitable(result):
-            result = await result
-
-        if result is None:
-            return
-        if isinstance(result, BaseArtifact):
-            task.side_artifacts = [result]
-            return
-        if isinstance(result, list) and all(
-            isinstance(r, BaseArtifact) for r in result
-        ):
-            task.side_artifacts = result
-            return
-
-        horus_logger.log.warning(
-            _(
-                "Task %(task_id)s returned an unexpected value from its "
-                "Python function runtime. Expected BaseArtifact, "
-                "list[BaseArtifact], or None; got: %(result)s. Skipping side "
-                "artifact handling."
-            )
-            % {"task_id": task.id, "result": result}
-        )
+        await parse_result_artifacts(task, result)
