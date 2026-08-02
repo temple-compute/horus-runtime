@@ -20,12 +20,15 @@ Defines the PythonExecExecutor class, which represents an executor that runs a
 a Python code task in-process in the Horus runtime.
 """
 
+import os
 from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.executor._cwd_lock import chdir_locked
 from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.core.resources import InProcessScope, ResourceScope
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.i18n import tr as _
 from horus_runtime.settings import runtime_settings
 
@@ -45,6 +48,15 @@ class PythonExecExecutor(BaseExecutor):
     )
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonCodeStringRuntime,)
+
+    async def resource_scope(
+        self, task: "BaseTask", process: ChannelProcess | None = None
+    ) -> ResourceScope:
+        """
+        Declare that the work runs inside the orchestrator process.
+        """
+        del task, process
+        return InProcessScope(pid=os.getpid())
 
     async def _execute(self, task: "BaseTask") -> None:
         """

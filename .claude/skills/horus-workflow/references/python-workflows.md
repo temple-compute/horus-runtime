@@ -83,6 +83,29 @@ Decorator signature:
 `FunctionTask.task(wf, *, id=None, name=None, inputs=None, outputs=None, target=None)`.
 `id`/`name` default to the function name; `target` defaults to `LocalTarget()`.
 
+### Running a function on the target (`python_function_external`)
+
+`python_fn` runs the function **in the orchestrator process** and ignores
+`task.target`, so a function task with a remote target still runs locally. Set
+`executor: {kind: python_function_external}` to ship the function (cloudpickle)
+to the target and run it there as a real subprocess: it honours the target and
+is resource-measurable. Two limits, both deliberate:
+
+- a function that takes `task` is **refused** (the live task cannot cross a
+  process boundary), which also means tasks calling `workflow.add_task()` /
+  `add_edge()` on the running DAG must stay on `python_fn`;
+- the target's interpreter needs `cloudpickle` and `horus_runtime`. Set
+  `python:` on the executor to pick it, e.g. point it at an environment built
+  by a `horus-environments` executor
+  (`python: .horus_python_environment/bin/python`).
+
+### Functions in YAML
+
+`runtime.func` accepts the callable itself (Python workflows) or a dotted path
+string (`my_package.steps:normalise`, also `my_package.steps.normalise`), which
+is what a YAML workflow uses. It is imported at validation time; a bad path
+fails with a message naming the module or attribute.
+
 ### Argument injection
 
 The `python_function` runtime inspects the function signature and injects

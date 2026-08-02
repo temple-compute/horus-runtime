@@ -30,7 +30,9 @@ from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_runtime.core.resources import ProcessTreeScope, ResourceScope
 from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.executor import (
@@ -91,6 +93,22 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     Which runtime types this executor can handle. By default, an executor can
     handle any runtime type.
     """
+
+    async def resource_scope(
+        self, task: "BaseTask", process: ChannelProcess | None = None
+    ) -> ResourceScope:
+        """
+        Declare where this executor's work actually runs.
+
+        The target is asked first, then the process-tree default. Override
+        only when the work genuinely escapes the spawned tree.
+        """
+        scope = await task.target.resource_scope(task, process)
+        if scope is not None:
+            return scope
+        return ProcessTreeScope(
+            pid=process.pid if process is not None else None
+        )
 
     def anchor_local_paths(self, base: Path) -> None:
         """
