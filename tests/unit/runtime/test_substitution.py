@@ -20,6 +20,7 @@ Unit tests for the shared ``substitute`` helper in
 ``horus_builtin.runtime.substitution``.
 """
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,25 @@ async def test_command_runtime_result_path_end_to_end(tmp_path: Path) -> None:
     formatted = await task.runtime.setup_runtime(task)
 
     assert formatted == f"cat {result.path}"
+
+
+@pytest.mark.usefixtures("horus_context")
+async def test_command_runtime_quotes_path_with_spaces(
+    tmp_path: Path,
+) -> None:
+    """
+    A workflow/artifact path with a space is shell-quoted as one word, not
+    split into two positional args by the shell that runs the command.
+    """
+    work = tmp_path / "my project"
+    work.mkdir()
+    result = JSONArtifact(id="result", path=work / "result.json")
+    task = _shell_task(tmp_path, "cat $result", result)
+
+    formatted = await task.runtime.setup_runtime(task)
+
+    assert formatted == f"cat {shlex.quote(str(result.path))}"
+    assert len(shlex.split(formatted)) == 2
 
 
 @pytest.mark.usefixtures("horus_context")
