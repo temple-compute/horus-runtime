@@ -204,10 +204,7 @@ async def _execute_ready_task(
     except Exception as exc:
         # Target acquisition, binding and artifact transfer all run outside
         # `BaseTask.run`, which is the only place that records FAILED and the
-        # only thing the task middleware wraps. A failure in any of them used
-        # to leave the task PENDING, so nothing downstream — the per-task
-        # status report, the terminal workflow snapshot, the UI — ever named
-        # the task that actually broke the run. `CancelledError` is a
+        # only thing the task middleware wraps. `CancelledError` is a
         # BaseException and deliberately not caught: the dispatch path above
         # already records CANCELED.
         if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
