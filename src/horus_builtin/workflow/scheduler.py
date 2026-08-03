@@ -120,6 +120,7 @@ class TargetPool:
 async def _execute_ready_task(
     workflow: BaseWorkflow,
     task: "BaseTask",
+    *,
     source_map: dict[tuple[str, str], _EdgeSource],
     pool: TargetPool,
     placement: PlacementManager,
@@ -200,6 +201,30 @@ async def _execute_ready_task(
         finally:
             task.target = declared_target
             pool.release(declared_target, target)
+    except Exception as exc:
+        # Target acquisition, binding and artifact transfer all run outside
+        # `BaseTask.run`, which is the only place that records FAILED and the
+        # only thing the task middleware wraps. A failure in any of them used
+        # to leave the task PENDING, so nothing downstream — the per-task
+        # status report, the terminal workflow snapshot, the UI — ever named
+        # the task that actually broke the run. `CancelledError` is a
+        # BaseException and deliberately not caught: the dispatch path above
+        # already records CANCELED.
+        if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
+            task.status = TaskStatus.FAILED
+            message = _("Task %(task_name)s failed: %(error)s") % {
+                "task_name": task.name,
+                "error": exc,
+            }
+            horus_logger.log.error(message)
+            HorusContext.get_context().bus.emit(
+                HorusTaskEvent(
+                    task_id=task.id,
+                    task_name=task.name,
+                    message=message,
+                )
+            )
+        raise
     finally:
         await placement.release(location_id, task.resources)
 
@@ -387,7 +412,12 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 dispatched.add(task_id)
                 wrapper = asyncio.create_task(
                     _execute_ready_task(
-                        workflow, task, source_map, pool, placement, liveness
+                        workflow,
+                        task,
+                        source_map=source_map,
+                        pool=pool,
+                        placement=placement,
+                        liveness=liveness,
                     )
                 )
                 running[wrapper] = task_id
