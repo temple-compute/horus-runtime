@@ -269,6 +269,39 @@ class TestHorusTaskExecution:
             # Verify that asyncio.create_subprocess_shell was called
             mock_run.assert_called_once()
 
+    async def test_each_invocation_uses_a_unique_working_directory(
+        self,
+        tmp_path: Path,
+        make_mock_subprocess: MakeMockSubprocessType,
+    ) -> None:
+        """Re-running a task must never reuse a prior job's cwd."""
+        task = HorusTask(
+            id="test_task_id",
+            name="test_task",
+            executor=ShellExecutor(),
+            runtime=CommandRuntime(command="echo 'Hello World'"),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+
+        with patch(
+            "asyncio.create_subprocess_shell",
+            side_effect=[
+                make_mock_subprocess(returncode=0),
+                make_mock_subprocess(returncode=0),
+            ],
+        ) as mock_run:
+            await task.run()
+            first_dir = Path(task.working_dir)
+            await task.run()
+            second_dir = Path(task.working_dir)
+
+        assert first_dir != second_dir
+        assert first_dir.parent == second_dir.parent == tmp_path / task.id
+        assert first_dir.is_dir()
+        assert second_dir.is_dir()
+        assert mock_run.call_args_list[0].kwargs["cwd"] == first_dir
+        assert mock_run.call_args_list[1].kwargs["cwd"] == second_dir
+
     async def test_horus_task_run_with_multiple_inputs_one_missing(
         self,
     ) -> None:

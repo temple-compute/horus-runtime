@@ -25,8 +25,9 @@ from abc import abstractmethod
 from asyncio import CancelledError
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
+from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext, running_task
@@ -172,16 +173,32 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The interaction transport currently associated with the task run.
     """
 
+    _execution_id: str | None = PrivateAttr(default=None)
+    """
+    Identifier for this task invocation's isolated working directory.
+
+    This stays runtime-only: a workflow definition names the task's base
+    directory, while every execution receives a fresh child directory below
+    it.  Keeping it private also prevents a historical run id from being
+    written back into workflow YAML or a hosted workflow snapshot.
+    """
+
     @property
     def working_dir(self) -> str:
         """
-        The task's working directory: a per-task folder under its target's
-        working directory. Inputs are materialized here and outputs and
-        side-products are written relative to it.
+        The task's working directory: a per-task, per-invocation folder under
+        its target's working directory. Inputs are materialized here and
+        outputs and side-products are written relative to it.
+
+        Before the task is invoked the legacy ``<target>/<task-id>`` path is
+        returned, which keeps setup and inspection code deterministic. Once
+        execution begins, the invocation id is appended so re-running a task
+        never reuses a previous job's directory.
         """
-        return (
-            Path(self.target.resolved_working_directory) / self.id
-        ).as_posix()
+        path = Path(self.target.resolved_working_directory) / self.id
+        if self._execution_id is not None:
+            path /= self._execution_id
+        return path.as_posix()
 
     @property
     def workflow(self) -> "BaseWorkflow | None":
@@ -248,6 +265,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
         # execution so code it invokes (notably ``BaseWorkflow.add_task``) can
         # discover its creator and gate any runtime-added task behind it.
         with running_task(self.id):
+            # Allocate this before the completion check too. A task that is
+            # forced to run, or whose cached outputs are invalidated, must not
+            # accidentally reuse the prior invocation's cwd.
+            self._execution_id = uuid4().hex
             if self.skip_if_complete and await self.is_complete():
                 ctx.bus.emit(
                     HorusTaskEvent(
@@ -272,6 +293,11 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 % {"task_name": self.name}
             )
             try:
+                # Every executor receives a real, empty directory for this
+                # invocation. This is intentionally here rather than in a
+                # specific executor so shell, Python, remote, and plugin
+                # executors all share the same isolation guarantee.
+                await self.target.mkdir(self.working_dir)
                 await TaskMiddleware.call_with_middleware(
                     TaskMiddlewareContext(task=self),
                     self._run,
