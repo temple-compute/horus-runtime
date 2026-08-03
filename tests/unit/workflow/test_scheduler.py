@@ -785,3 +785,68 @@ class TestResourcePlacement:
             pytest.raises(InsufficientCapacityError, match="gpus"),
         ):
             await asyncio.wait_for(wf.run(trigger_id="greedy"), timeout=5)
+
+
+@pytest.mark.unit
+class TestPreRunFailureIsAttributed:
+    """
+    A failure in the setup phase — target acquisition, binding, artifact
+    transfer — never reaches ``BaseTask.run``, which is the only place that
+    records FAILED and the only thing the task middleware wraps. The scheduler
+    has to attribute it to the task itself, or the run reports a bare workflow
+    failure with no indication of which task broke.
+    """
+
+    async def test_transfer_failure_marks_task_failed_and_emits_event(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        When ``transfer_artifacts`` raises (e.g. an SSH target whose host key
+        is not trusted), the consuming task ends FAILED and announces itself
+        on the bus, instead of staying IDLE and silent.
+        """
+        root = _task(
+            "root",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "root.out")],
+        )
+        consumer = _task(
+            "consumer",
+            tmp_path=tmp_path,
+            task_cls=_PassTask,
+            inputs=[FileArtifact(id="in", path=tmp_path / "root.out")],
+        )
+        wf = HorusWorkflow(
+            name="transfer_failure",
+            tasks=[root, consumer],
+            edges=[_edge("root", "root_out", "consumer", "in")],
+        )
+
+        async def fail_for_consumer(
+            task: HorusTask, _source_map: object
+        ) -> None:
+            if task.id == "consumer":
+                raise TaskExecutionError("host key is not trusted")
+
+        events: list[object] = []
+        with (
+            patch.object(
+                HorusWorkflow,
+                "transfer_artifacts",
+                new=AsyncMock(side_effect=fail_for_consumer),
+            ),
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            pytest.raises(TaskExecutionError, match="host key is not trusted"),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        # The task never ran, so without the scheduler recording it the status
+        # would still be IDLE and the terminal snapshot would name no task.
+        assert consumer.runs == 0
+        assert consumer.status == TaskStatus.FAILED
+        assert any(
+            getattr(event, "task_id", None) == "consumer"
+            and "host key is not trusted" in getattr(event, "message", "")
+            for event in events
+        )
