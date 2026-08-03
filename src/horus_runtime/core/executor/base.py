@@ -25,7 +25,7 @@ a command or running it inside a SLURM job, either remote or locally.
 
 import tempfile
 from abc import abstractmethod
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, ClassVar, final
 
 from horus_builtin.artifact.file import FileArtifact
@@ -138,8 +138,18 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         # their directory must exist beforehand. Only the *parent*: creating a
         # FolderArtifact's own path would make it exist() and the task would
         # skip itself forever.
+        #
+        # The directory is created *on the task's target*, so it has to be the
+        # target-side path. `artifact.path` is anchored to the orchestrator's
+        # run directory, which on a remote target names a directory that does
+        # not exist there (and is not creatable): a task on an SSH host failed
+        # with `mkdir -p '/app/…' failed with exit code 1` before it ever ran.
+        # `path_on_target` is what every other consumer of an output already
+        # uses — `${artifact}` substitution, ArtifactStore, transfer — and it
+        # returns `artifact.path` unchanged for co-located targets.
         for artifact in task.outputs:
-            await task.target.mkdir(str(artifact.path.parent))
+            on_target = PurePosixPath(task.target.path_on_target(artifact))
+            await task.target.mkdir(str(on_target.parent))
 
         try:
             await ExecutorMiddleware.call_with_middleware(

@@ -33,6 +33,7 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.task.exceptions import TaskExecutionError
@@ -285,3 +286,90 @@ class TestOutputDirectoriesAreCreated:
         assert out.parent.is_dir()
         assert not out.exists()
         assert not await task.is_complete()
+
+
+_MKDIRS: list[str] = []
+
+
+class _RelocatingTarget(LocalTarget):
+    """
+    A target that stores artifacts somewhere other than their declared path,
+    the way ``SSHTarget`` puts them under the remote working directory.
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "relocating"
+    relocated_root: str = ""
+
+    def path_on_target(self, artifact: BaseArtifact) -> str:
+        if not self.relocated_root:
+            return super().path_on_target(artifact)
+        return f"{self.relocated_root}/{Path(artifact.path).name}"
+
+    async def mkdir(self, path: str) -> None:
+        _MKDIRS.append(path)
+        await super().mkdir(path)
+
+
+@pytest.mark.unit
+class TestOutputDirectoriesAreCreatedOnTheTarget:
+    """
+    Declared outputs are written by the task itself, so their directory is
+    pre-created — on the *target*, which means it must be the target-side
+    path. ``artifact.path`` is anchored to the orchestrator's run directory
+    and names nothing that exists on a remote host.
+    """
+
+    @staticmethod
+    def _task(tmp_path: Path, out: Path, relocated_root: str) -> HorusTask:
+        return HorusTask(
+            name="t",
+            id="t",
+            outputs=[FileArtifact(id="out", path=out)],
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=_RelocatingTarget(
+                working_directory=tmp_path.as_posix(),
+                relocated_root=relocated_root,
+            ),
+        )
+
+    async def test_uses_path_on_target_not_the_anchored_path(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A target that relocates artifacts gets its *relocated* parent created,
+        never the orchestrator-side one. Regression: an SSH task died with
+        ``mkdir -p '/app/...' failed with exit code 1`` before it ever ran.
+        """
+        del horus_context
+        _MKDIRS.clear()
+        relocated = tmp_path / "on_target"
+        task = self._task(
+            tmp_path,
+            out=Path("/app/orch/results/o.tar.gz"),
+            relocated_root=relocated.as_posix(),
+        )
+
+        await task.executor.execute(task)
+
+        assert relocated.as_posix() in _MKDIRS
+        assert "/app/orch/results" not in _MKDIRS
+
+    async def test_colocated_target_still_uses_the_artifact_path(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The default ``path_on_target`` returns the artifact's own path, so a
+        co-located target keeps creating exactly the directory it always did.
+        """
+        del horus_context
+        _MKDIRS.clear()
+        out_dir = tmp_path / "results"
+        task = self._task(
+            tmp_path, out=out_dir / "o.tar.gz", relocated_root=""
+        )
+
+        await task.executor.execute(task)
+
+        assert out_dir.as_posix() in _MKDIRS
