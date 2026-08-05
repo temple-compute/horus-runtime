@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.artifact.number import NumberArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -442,6 +443,78 @@ class TestBoundaryWiring:
         wf.edges.append(edge)
         wf.subworkflow(id="sub", body=child)
         assert edge.transfer is False
+
+
+@pytest.mark.unit
+class TestValueRootsAcrossBoundary:
+    """Value roots travel through a subworkflow into the inner command."""
+
+    def _child_with_number_root(self) -> HorusWorkflow:
+        """A child whose in-port is a NumberArtifact, not a file."""
+        report = _shell_task(
+            "report",
+            "printf '%s' $n > $report_out",
+            inputs=[NumberArtifact(id="n", path=Path("n.json"))],
+            outputs=[FileArtifact(id="report_out", path=Path("report.txt"))],
+        )
+        return HorusWorkflow(
+            name="child",
+            tasks=[report],
+            artifacts=[NumberArtifact(id="n", path=Path("n.json"), value=42)],
+            edges=[
+                WorkflowEdge(
+                    source="artifact-n",
+                    source_output="n",
+                    target="report",
+                    target_input="n",
+                ),
+            ],
+        )
+
+    async def test_unfed_value_root_survives_and_renders(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """An unfed number root keeps its authored value in the child."""
+        del horus_context
+        child = self._child_with_number_root()
+        wf = _parent(tmp_path)
+        wf.subworkflow(id="sub", body=child)
+
+        await wf.run(trigger_id="sub")
+
+        assert wf.status.value == "completed"
+        assert any(a.id == "sub/n" for a in wf.artifacts)
+        report = _inner(wf, "sub/report")
+        assert report.outputs[0].path.read_text().strip() == "42"
+
+    async def test_value_root_can_be_fed_by_parent_value(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A parent root artifact feeds the child's number in-port."""
+        del horus_context
+        child = self._child_with_number_root()
+        wf = _parent(tmp_path)
+        wf.subworkflow(id="sub", body=child)
+        wf.artifacts.append(
+            NumberArtifact(id="n", path=Path("n.json"), value=7)
+        )
+        wf.edges.append(
+            WorkflowEdge(
+                source="artifact-n",
+                source_output="n",
+                target="sub",
+                target_input="n",
+                transfer=False,
+            )
+        )
+
+        await wf.run(trigger_id="sub")
+
+        assert wf.status.value == "completed"
+        report = _inner(wf, "sub/report")
+        assert report.outputs[0].path.read_text().strip() == "7"
+        # The child's own root is dropped: the parent supplies the value.
+        assert not any(a.id == "sub/n" for a in wf.artifacts)
 
 
 @pytest.mark.unit

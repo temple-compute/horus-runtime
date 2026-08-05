@@ -25,7 +25,10 @@ from pathlib import Path
 
 import pytest
 
+from horus_builtin.artifact.boolean import BooleanArtifact
 from horus_builtin.artifact.json import JSONArtifact
+from horus_builtin.artifact.number import NumberArtifact
+from horus_builtin.artifact.string import StringArtifact
 from horus_builtin.executor.python_exec import PythonExecExecutor
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
@@ -163,3 +166,63 @@ async def test_python_code_string_result_path_end_to_end(
     code = await task.runtime.setup_runtime(task)
 
     assert code == f"open('{result.path}')"
+
+
+def _value_task(
+    tmp_path: Path, inputs: list[object], command: str
+) -> HorusTask:
+    """A task whose command consumes only the given value artifacts."""
+    result = JSONArtifact(id="result", path=tmp_path / "result.json")
+    return HorusTask(
+        id="run",
+        name="my_task",
+        runtime=CommandRuntime(command=command),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=tmp_path.as_posix()),
+        inputs=inputs,  # type: ignore[arg-type]
+        outputs=[result],
+    )
+
+
+def test_value_artifact_renders_its_value(tmp_path: Path) -> None:
+    """$id for a value artifact renders the authored value, not a path."""
+    n = NumberArtifact(id="n", path=tmp_path / "n.json", value=42)
+    task = _value_task(tmp_path, [n], "--samples $n")
+
+    assert substitute("--samples $n", task) == "--samples 42"
+
+
+def test_boolean_renders_lowercase(tmp_path: Path) -> None:
+    """A boolean value renders true/false, matching its on-disk form."""
+    b = BooleanArtifact(id="flag", path=tmp_path / "flag.json", value=True)
+    task = _value_task(tmp_path, [b], "--use-msa $flag")
+
+    assert substitute("--use-msa $flag", task) == "--use-msa true"
+
+
+def test_string_value_is_quoted_with_spaces(tmp_path: Path) -> None:
+    """A string value is shell-quoted as one word when quote=True."""
+    s = StringArtifact(id="s", path=tmp_path / "s.txt", value="hello world")
+    task = _value_task(tmp_path, [s], "echo $s")
+
+    assert substitute("echo $s", task, quote=True) == (
+        f"echo {shlex.quote('hello world')}"
+    )
+
+
+def test_value_is_accessible_as_attribute(tmp_path: Path) -> None:
+    """${id.value} and ${id.path} still forward to the artifact itself."""
+    n = NumberArtifact(id="n", path=tmp_path / "n.json", value=42)
+    task = _value_task(tmp_path, [n], "echo ${n.value} ${n.path}")
+
+    rendered = substitute("echo ${n.value} ${n.path}", task)
+
+    assert rendered == f"echo 42 {n.path}"
+
+
+def test_file_artifact_still_renders_path(tmp_path: Path) -> None:
+    """Non-value artifacts keep rendering their on-target path."""
+    f = JSONArtifact(id="result", path=tmp_path / "result.json")
+    task = _shell_task(tmp_path, "cat $result", f)
+
+    assert substitute("cat $result", task) == f"cat {f.path}"

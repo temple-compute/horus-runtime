@@ -1090,7 +1090,29 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             # The consumer input keeps its own id (the template key); we only
             # point its path at the materialized result.
             src_artifact = source.artifact if source is not None else None
+
+            # A root artifact with an authored value has no producer: write
+            # its bytes the first time a consumer needs them, so the transfer
+            # below has something to move (see BaseArtifact.materialize).
+            if (
+                src_artifact is not None
+                and source is not None
+                and (source.target is None)
+            ):
+                src_artifact.materialize()
+
             transfer_art = (src_artifact or artifact).model_copy()
+
+            # A value root's authored value must reach the consumer's own
+            # input artifact, mirroring the path hand-off above: substitution
+            # renders ``$id`` from the consumer's artifact, so without this it
+            # would see the default value (0/False/"") instead of the root's.
+            if (
+                src_artifact is not None
+                and hasattr(src_artifact, "value")
+                and hasattr(artifact, "value")
+            ):
+                artifact.value = src_artifact.value
 
             # Look up the registered strategy for this (source, dest) pair,
             # falling back to the target-agnostic GenericTransfer when no

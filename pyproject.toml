@@ -30,6 +30,9 @@ file = "horus_builtin.artifact.file"
 folder = "horus_builtin.artifact.folder"
 json = "horus_builtin.artifact.json"
 pickle = "horus_builtin.artifact.pickle"
+number = "horus_builtin.artifact.number"
+boolean = "horus_builtin.artifact.boolean"
+string = "horus_builtin.artifact.string"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"

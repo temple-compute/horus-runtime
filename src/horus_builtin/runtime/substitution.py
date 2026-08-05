@@ -24,11 +24,12 @@ All runtimes that do string substitution (``command``, ``python_script``,
 supported and passes through unchanged.
 
 Supported placeholder forms
-----------------------------
-* ``$id``          — on-target path of the artifact whose id is *id*
+---------------------------
+* ``$id``          — on-target path of the artifact whose id is *id* (or its
+                     authored ``value`` for value-carrying artifacts)
 * ``${id}``        — same, braced form (use when a letter/digit follows)
 * ``${id.attr}``   — attribute of the artifact (e.g. ``${result.path}``,
-                     ``${result.id}``)
+                     ``${result.id}``, ``${result.value}``)
 * ``${task.attr}`` — attribute of the task (e.g. ``${task.name}``)
 
 Unknown ``$name`` references are left as-is (``safe_substitute`` semantics).
@@ -55,6 +56,12 @@ if TYPE_CHECKING:
 # ``${id.id}``, etc. still forward to the artifact.  This is what lets a
 # command or script be written once and run unchanged on a local or remote
 # target.
+#
+# A value-carrying artifact (NumberArtifact/BooleanArtifact/StringArtifact)
+# instead renders its authored ``value``: a task consuming ``$samples`` gets
+# ``10``, not a path to a file whose content happens to be ``10``. The value
+# still materializes to a file for anything that reads it directly; this only
+# changes how the placeholder renders.
 class _ArtifactRef:
     def __init__(self, artifact: "BaseArtifact", target: "BaseTarget") -> None:
         self._a = artifact
@@ -65,11 +72,21 @@ class _ArtifactRef:
             raise AttributeError(name)
         return getattr(self._a, name)
 
+    def _render(self) -> object:
+        value = getattr(self._a, "value", None)
+        if value is not None:
+            # Match the on-disk serialization (json.dump lowercases booleans)
+            # so ``$flag`` and ``cat $flag`` agree.
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            return value
+        return self._t.path_on_target(self._a)
+
     def __str__(self) -> str:
-        return str(self._t.path_on_target(self._a))
+        return str(self._render())
 
     def __format__(self, spec: str) -> str:
-        return format(self._t.path_on_target(self._a), spec)
+        return format(self._render(), spec)
 
 
 # Create a namespace object to allow for attribute-style access to task
@@ -146,7 +163,8 @@ def substitute(template: str, task: "BaseTask", *, quote: bool = False) -> str:
     Render *template* against *task* using ``string.Template`` ``$``/``${}``
     syntax.
 
-    * ``$id`` / ``${id}`` — on-target path of the artifact whose id is *id*
+    * ``$id`` / ``${id}`` — on-target path of the artifact whose id is *id*,
+      or its authored ``value`` for value-carrying artifacts
     * ``${id.attr}``       — attribute of that artifact
     * ``${task.attr}``     — attribute of the task
     * Unknown placeholders are left as-is (``safe_substitute`` semantics).
