@@ -293,14 +293,24 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 % {"task_name": self.name}
             )
             try:
-                # Every executor receives a real, empty directory for this
-                # invocation. This is intentionally here rather than in a
-                # specific executor so shell, Python, remote, and plugin
-                # executors all share the same isolation guarantee.
-                await self.target.mkdir(self.working_dir)
+
+                async def mkdir_and_run() -> None:
+                    # Every executor receives a real, empty directory for this
+                    # invocation. This is intentionally here rather than in a
+                    # specific executor so shell, Python, remote, and plugin
+                    # executors all share the same isolation guarantee.
+                    #
+                    # It runs *inside* the middleware chain so middleware that
+                    # retargets the task (e.g. an orchestrator re-anchoring a
+                    # runtime-added task's working directory) has already run:
+                    # creating the directory first would create it at the old
+                    # path and leave the new one missing.
+                    await self.target.mkdir(self.working_dir)
+                    await self._run()
+
                 await TaskMiddleware.call_with_middleware(
                     TaskMiddlewareContext(task=self),
-                    self._run,
+                    mkdir_and_run,
                 )
             except CancelledError:
                 self.status = TaskStatus.CANCELED

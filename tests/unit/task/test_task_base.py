@@ -33,6 +33,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
 )
@@ -296,6 +297,64 @@ class TestBaseTaskRun:
         await task.run()
 
         assert task.status == TaskStatus.SKIPPED
+
+    async def test_middleware_can_retarget_before_working_dir_is_created(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        The per-invocation working directory is created inside the middleware
+        chain, so middleware that repoints the task's target (the orchestrator
+        re-anchors runtime-added tasks that way) sees the directory created at
+        the new path -- not left behind at the old one.
+        """
+        anchored = tmp_path / "run-dir"
+        anchored.mkdir()
+        elsewhere = tmp_path / "cwd"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        seen: list[bool] = []
+        # Snapshot before the middleware class below exists: defining it
+        # registers it, and restoring a snapshot taken afterwards would leave
+        # it anchoring every later test's tasks at this tmp_path.
+        original_registry = list(TaskMiddleware.registry)
+
+        class RecordingTask(ConcreteTestTask):
+            """Records whether its working directory existed when it ran."""
+
+            kind: str = "recording_task"
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                seen.append(Path(self.working_dir).is_dir())
+
+        class AnchoringMiddleware(TaskMiddleware):
+            """Repoints the task at *anchored* just before it runs."""
+
+            add_to_registry: ClassVar[bool] = False
+
+            async def before(self, context: TaskMiddlewareContext) -> None:
+                context.task.target.working_directory = anchored.as_posix()
+
+        TaskMiddleware.registry = [*original_registry, AnchoringMiddleware]
+        try:
+            task = RecordingTask(
+                id="test_task_id",
+                name="test_task",
+                skip_if_complete=False,
+                runtime=CommandRuntime(command="echo test"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+            )
+            await task.run()
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert seen == [True]
+        assert Path(task.working_dir).is_dir()
+        assert anchored in Path(task.working_dir).parents
+        # No stray task directory left under the process CWD on the way there.
+        assert not (elsewhere / task.id).exists()
 
 
 @pytest.mark.unit
