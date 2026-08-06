@@ -152,6 +152,17 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
         Write the native artifact representation to its canonical path.
         """
 
+    def materialize(self) -> None:
+        """
+        Make the artifact's bytes available at :attr:`path`.
+
+        The default is a no-op: file-backed artifacts assume a producer (or
+        an upload) already wrote them. Value-carrying kinds override this to
+        write their inline ``value`` the first time a consumer needs them, so
+        a workflow-owned root artifact with an authored value is runnable
+        without any external step.
+        """
+
     def pack_command(self, src: str, pkg: str) -> str | None:
         """
         Return a portable shell command that produces the single-file package
