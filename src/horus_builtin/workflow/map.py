@@ -578,6 +578,7 @@ class MapExpander(HorusTask):
         """
         artifact.path = path
         artifact.declared_path = path
+        artifact.pinned = True
 
     def _set_input_path(
         self, clone: BaseTask, input_id: str, path: Path
@@ -789,6 +790,21 @@ def lower_map_entry(
             }
         )
 
+    # Gate the gather task behind the expander. Without it the gather task is
+    # ready from the start (its only real dependencies -- the clones -- do not
+    # exist until the expander runs), so the scheduler dispatches it alongside
+    # the expander and its not-yet-pinned fan-in input is mistaken for a root
+    # input and fetched from the orchestrator target.
+    edges.append(
+        {
+            "source": task_id,
+            "source_output": f"{task_id}{_FANOUT_SUFFIX}",
+            "target": gather_block["task"],
+            "target_input": gather_block["input"],
+            "transfer": False,
+        }
+    )
+
     return expander, edges
 
 
@@ -891,6 +907,17 @@ def map_task(
         kwargs["target"] = target
 
     expander = MapExpander(**kwargs)
+
+    # Same ordering edge lower_map_entry emits; see its comment.
+    edges.append(
+        WorkflowEdge(
+            source=id,
+            source_output=expander._fanout_marker_id,  # noqa: SLF001
+            target=gather_task,
+            target_input=gather_input,
+            transfer=False,
+        )
+    )
 
     wf.tasks.append(expander)
     wf.edges.extend(edges)

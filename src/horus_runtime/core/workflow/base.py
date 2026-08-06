@@ -853,23 +853,33 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         wiring them to an existing join task). If any check fails, nothing
         is appended — the workflow is left exactly as it was.
 
-        Validates, in order: task id uniqueness (existing + new), per-task
+        A batch **supersedes** what it re-derives: a new task whose id already
+        exists replaces it, together with every edge touching that id, and a
+        new root artifact replaces an existing one of the same id. This is
+        what makes an expander re-runnable. Every expander re-derives its
+        whole expansion on each trigger (``is_complete`` is hardcoded
+        ``False``), and a run resumed from a snapshot that already carries a
+        previous run's expansion — which is exactly what tc-os freezes when
+        re-running from an earlier run — would otherwise collide with itself.
+        The freshly derived task has to win regardless: its paths are pinned
+        under *this* run's root, while the snapshot's copy names the previous
+        run's directory. Duplicates *within* one batch are still an error.
+
+        Validates, in order: task id uniqueness (kept + new), per-task
         input/output id uniqueness for each new task, root artifact id
-        uniqueness (existing + new), every new edge resolving against the
+        uniqueness (kept + new), every new edge resolving against the
         combined tasks/artifacts with no duplicate ``(target, target_input)``
-        (existing or within the batch), and no cycle anywhere in the
-        resulting graph.
+        (kept or within the batch), and no cycle anywhere in the resulting
+        graph.
 
         On success, every new task is anchored exactly like
         :meth:`add_task` anchors a single task, everything is appended, and
         :attr:`_revision` is bumped once for the whole batch.
 
         Raises:
-            TaskIdsAreNotUniqueError: If a new task's id collides with an
-                existing task id or another new task.
+            TaskIdsAreNotUniqueError: If two tasks in the batch share an id.
             ArtifactIdsAreNotUniqueError: If a new task's own inputs/outputs
-                collide, or a new root artifact's id collides with an
-                existing or another new root artifact.
+                collide, or two new root artifacts share an id.
             UnknownEdgeEndpointError: If a new edge's target or source does
                 not resolve against the combined graph.
             DuplicateEdgeTargetError: If a new edge duplicates the
@@ -881,8 +891,25 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         new_edges = edges or []
         new_artifacts = artifacts or []
 
-        combined_tasks = [*self.tasks, *new_tasks]
-        combined_artifacts = [*self.artifacts, *new_artifacts]
+        # What this batch re-derives, and so replaces (see the docstring).
+        # Edges are dropped by *endpoint* rather than by equality: an expander
+        # re-emits every edge touching the tasks it owns, so any stale edge on
+        # a superseded id is one this batch is about to re-state.
+        superseded_tasks = {task.id for task in new_tasks}
+        superseded_artifacts = {artifact.id for artifact in new_artifacts}
+        kept_tasks = [t for t in self.tasks if t.id not in superseded_tasks]
+        kept_edges = [
+            e
+            for e in self.edges
+            if e.source not in superseded_tasks
+            and e.target not in superseded_tasks
+        ]
+        kept_artifacts = [
+            a for a in self.artifacts if a.id not in superseded_artifacts
+        ]
+
+        combined_tasks = [*kept_tasks, *new_tasks]
+        combined_artifacts = [*kept_artifacts, *new_artifacts]
 
         self._assert_unique_task_ids(combined_tasks)
         for task in new_tasks:
@@ -902,7 +929,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # many clone -> gather edges onto the same gather input in one
         # batch.
         seen_targets = {
-            (e.target, e.target_input) for e in self.edges if e.transfer
+            (e.target, e.target_input) for e in kept_edges if e.transfer
         }
         for edge in new_edges:
             self._assert_edge_target_resolves(edge, task_inputs)
@@ -923,13 +950,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # formed only by two-or-more new edges together, so validate the
         # whole resulting graph at once: topological_sort raises
         # CyclicDependencyError itself if any cycle exists anywhere in it.
-        combined_edges = [*self.edges, *new_edges]
+        combined_edges = [*kept_edges, *new_edges]
         dependencies = build_dependencies(combined_tasks, combined_edges)
         topological_sort(set(dependencies.keys()), dependencies)
 
-        self.tasks.extend(new_tasks)
-        self.artifacts.extend(new_artifacts)
-        self.edges.extend(new_edges)
+        # Slice assignment, not rebinding: the model's list objects are handed
+        # out elsewhere (the scheduler reads `workflow.tasks` every loop), and
+        # replacing the field would leave those holding the old list.
+        self.tasks[:] = combined_tasks
+        self.artifacts[:] = combined_artifacts
+        self.edges[:] = combined_edges
         for task in new_tasks:
             self._anchor_task(task)
         # Runs after edges are appended so a new task wired by one of the
@@ -1074,6 +1104,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             source_map = self._build_source_map()
 
         for artifact in task.inputs:
+            if artifact.pinned:
+                # Already materialized in place by an expander (map/loop);
+                # not a transfer edge and not a root input either.
+                continue
+
             source = source_map.get((task.id, artifact.id))
             # Resolve the source target.
             source_target = source.target if source is not None else None
