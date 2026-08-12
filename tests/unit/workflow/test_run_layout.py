@@ -277,6 +277,99 @@ class TestRuntimeAnchorLocalPaths:
 
 
 @pytest.mark.unit
+class TestRemoteTargetRunScope:
+    """A non-co-located target's own working_directory is left untouched by
+    anchoring, but the task nests its working_dir under wf.run_scope.
+    """
+
+    def _make_workflow(
+        self, tmp_path: Path, run_scope: str | None
+    ) -> tuple[HorusWorkflow, HorusTask, MagicMock]:
+        ssh_target = MagicMock(spec=BaseTarget)
+        ssh_target.working_directory = "/home/myuser/horus"
+        ssh_target.location_id = "remote-host"
+        ssh_target.resolved_working_directory = "/home/myuser/horus"
+
+        task = HorusTask(
+            id="prep",
+            name="prep",
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=ssh_target,
+        )
+        wf = HorusWorkflow(
+            name="layout",
+            tasks=[task],
+            orchestrator_target=LocalTarget(working_directory="results"),
+            run_scope=run_scope,
+        )
+        wf._base_directory = tmp_path
+        return wf, task, ssh_target
+
+    def test_task_working_dir_nests_under_run_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """The task's working_dir nests under the workflow's run_scope."""
+        wf, task, ssh_target = self._make_workflow(
+            tmp_path, run_scope="boltz_drugflow/run-123"
+        )
+        wf._resolve_run_paths()
+
+        expected = "/home/myuser/horus/boltz_drugflow/run-123/prep"
+        assert task.working_dir == expected
+        # The author-declared base is never mutated.
+        assert ssh_target.working_directory == "/home/myuser/horus"
+
+    def test_no_run_scope_leaves_working_dir_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        """Without a run_scope the legacy target/task layout is kept."""
+        wf, task, ssh_target = self._make_workflow(tmp_path, run_scope=None)
+        wf._resolve_run_paths()
+
+        assert task.working_dir == "/home/myuser/horus/prep"
+        assert ssh_target.working_directory == "/home/myuser/horus"
+
+    def test_anchoring_twice_does_not_double_nest(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-anchoring must not nest run_scope more than once."""
+        wf, task, ssh_target = self._make_workflow(
+            tmp_path, run_scope="boltz_drugflow/run-123"
+        )
+        wf._resolve_run_paths()
+        wf._anchor_task(task)
+
+        expected = "/home/myuser/horus/boltz_drugflow/run-123/prep"
+        assert task.working_dir == expected
+        assert ssh_target.working_directory == "/home/myuser/horus"
+
+    def test_colocated_target_unaffected_by_run_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """LocalTarget tasks keep their existing full-overwrite behavior;
+        run_scope is only consulted for non-co-located targets.
+        """
+        task = HorusTask(
+            id="prep",
+            name="prep",
+            runtime=CommandRuntime(command="echo hi"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+        )
+        wf = HorusWorkflow(
+            name="layout",
+            tasks=[task],
+            orchestrator_target=LocalTarget(working_directory="results"),
+            run_scope="boltz_drugflow/run-123",
+        )
+        wf._base_directory = tmp_path
+        wf._resolve_run_paths()
+
+        assert task.working_dir == (tmp_path / "results" / "prep").as_posix()
+
+
+@pytest.mark.unit
 class TestFromYamlBaseDirectory:
     """from_yaml anchors the run at the workflow file's own directory."""
 
