@@ -20,8 +20,10 @@ Unit tests for BaseTransferStrategy abstract base class.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
+from pydantic import Field
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.target.local import LocalTarget
@@ -277,3 +279,116 @@ class TestSameFilesystemShortCircuit:
 
         with pytest.raises(AssertionError, match="same-filesystem"):
             await _ExplodingTransfer().transfer(artifact, source, destination)
+
+
+class _PresenceProbeTarget(_OtherUnregisteredTarget):
+    """Target whose ``path_exists`` reports a canned answer."""
+
+    present: bool = False
+    probed: list[str] = Field(default_factory=list)
+
+    @property
+    def location_id(self) -> str:
+        return "test://probe"
+
+    async def path_exists(self, path: str) -> bool:
+        self.probed.append(path)
+        return self.present
+
+
+class _RecordingTransfer(BaseTransferStrategy):
+    """A strategy that records the destination it transferred to."""
+
+    add_to_registry = False
+    runs: ClassVar[list[tuple[str, str]]] = []
+
+    async def _transfer(
+        self,
+        artifact: BaseArtifact,
+        source: BaseTarget,
+        destination: BaseTarget,
+    ) -> None:
+        del source
+        _RecordingTransfer.runs.append(
+            (artifact.id, destination.path_on_target(artifact))
+        )
+
+
+@pytest.mark.unit
+class TestSkipIfPresent:
+    """
+    ``skip_if_present`` lets a transfer skip when the artifact already exists
+    on the destination, using only the destination's own ``path_exists`` and
+    ``path_on_target`` primitives.
+    """
+
+    async def test_skip_if_present_skips_transfer_and_repoints(self) -> None:
+        """
+        When the destination already has the artifact, ``_transfer`` is not
+        run and the artifact is repointed at the existing on-target path.
+        """
+        _RecordingTransfer.runs = []
+        source = _UnregisteredTarget()
+        destination = _PresenceProbeTarget(present=True)
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        await _RecordingTransfer().transfer(
+            artifact, source, destination, skip_if_present=True
+        )
+
+        assert _RecordingTransfer.runs == []
+        assert artifact.path == Path(destination.path_on_target(artifact))
+        assert destination.probed == [destination.path_on_target(artifact)]
+
+    async def test_missing_artifact_still_transfers(self) -> None:
+        """
+        When the destination does not have the artifact, ``skip_if_present``
+        leaves the transfer to run as normal.
+        """
+        _RecordingTransfer.runs = []
+        source = _UnregisteredTarget()
+        destination = _PresenceProbeTarget(present=False)
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        await _RecordingTransfer().transfer(
+            artifact, source, destination, skip_if_present=True
+        )
+
+        assert _RecordingTransfer.runs == [
+            (artifact.id, destination.path_on_target(artifact))
+        ]
+
+    async def test_default_never_probes_existence(self) -> None:
+        """
+        Without ``skip_if_present`` no existence probe happens and the
+        transfer always runs, even when the file already exists on the
+        destination. Keeping this opt-in is what stops a stale file from
+        silently standing in for fresh input bytes.
+        """
+        _RecordingTransfer.runs = []
+        source = _UnregisteredTarget()
+        destination = _PresenceProbeTarget(present=True)
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        await _RecordingTransfer().transfer(artifact, source, destination)
+
+        assert _RecordingTransfer.runs == [
+            (artifact.id, destination.path_on_target(artifact))
+        ]
+        assert destination.probed == []
+
+    async def test_same_location_shortcut_wins_over_probe(self) -> None:
+        """
+        Equal ``location_id`` short-circuits before any existence probe, even
+        with ``skip_if_present=True``.
+        """
+        source = _PresenceProbeTarget(present=False)
+        destination = _PresenceProbeTarget(present=False)
+        assert source.location_id == destination.location_id
+        artifact = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        await _ExplodingTransfer().transfer(
+            artifact, source, destination, skip_if_present=True
+        )
+
+        assert destination.probed == []

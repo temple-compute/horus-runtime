@@ -31,6 +31,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
 
+from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.transfer import (
     TransferMiddleware,
     TransferMiddlewareContext,
@@ -69,6 +70,8 @@ class BaseTransferStrategy[
         artifact: "BaseArtifact",
         source: S,
         destination: D,
+        *,
+        skip_if_present: bool = False,
     ) -> None:
         """
         Transfer *artifact* from *source* target to *destination* target.
@@ -79,10 +82,35 @@ class BaseTransferStrategy[
         same-filesystem shortcut lives here, at the single entry point every
         transfer goes through, so no individual strategy has to re-implement
         it.
+
+        ``skip_if_present`` asks the strategy to check whether the artifact
+        already exists on the destination and, if so, to skip the transfer
+        entirely (repointing the artifact at the existing on-target path).
+        The check uses the destination target's own primitives
+        (``path_exists`` + ``path_on_target``), so it works uniformly across
+        every target kind.
+
+        ``skip_if_present`` is deliberately *opt-in* and defaults to off: an
+        existence check is only safe when the caller can prove the existing
+        copy is not stale (e.g. a cache restore guarded by an input
+        fingerprint). Skipping a transfer because a *stale* file happens to
+        sit at the destination path would silently hand a consumer outdated
+        bytes, so ordinary input materialization must keep transferring.
         """
         if source.location_id == destination.location_id:
             artifact.path = Path(destination.path_on_target(artifact))
             return
+
+        if skip_if_present:
+            on_target = destination.path_on_target(artifact)
+            if await destination.path_exists(on_target):
+                artifact.path = Path(on_target)
+                horus_logger.log.debug(
+                    f"Artifact '{artifact.id}' already present on "
+                    f"{destination.kind} target '{destination.location_id}' "
+                    f"at {on_target}; skipping transfer"
+                )
+                return
 
         await TransferMiddleware.call_with_middleware(
             TransferMiddlewareContext(
