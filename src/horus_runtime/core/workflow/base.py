@@ -147,6 +147,24 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     free text and may contain path separators.
     """
 
+    workflow_slug: str | None = None
+    """
+    Filesystem-safe, caller-assigned identifier for this workflow, distinct
+    from :attr:`name`. Populated from the stored workflow's slug when a
+    snapshot is validated into a ``BaseWorkflow`` instance; ``None`` when a
+    workflow is built without one (e.g. from a bare YAML document).
+    """
+
+    run_scope: str | None = None
+    """
+    Opaque, caller-set relative path fragment nested under a non-co-located
+    target's own working directory when anchoring tasks (see
+    :meth:`_anchor_task`). This class does not interpret its contents -- a
+    caller such as the orchestrator composes it (e.g. ``f"{workflow_slug}/
+    {run_id}"``) and assigns it before :meth:`run`. Transient: never part of
+    a persisted snapshot's meaning, only ever read fresh at anchor time.
+    """
+
     tasks: list[BaseTask] = Field(
         default_factory=list,
     )
@@ -1262,6 +1280,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
           orchestrator target's working directory, mirroring what
           :meth:`_propagate_orchestrator_working_directory` used to do
           inline.
+        - A non-co-located task target (e.g. a remote SSH-style target) keeps
+          its own author-declared ``working_directory`` untouched, but the
+          task records :attr:`run_scope` on itself (``task._run_scope``) so
+          :attr:`BaseTask.working_dir` nests under it. The target's field is
+          deliberately never mutated here: it is part of the persisted
+          snapshot, and a rerun starts from an earlier run's snapshot, so
+          appending onto it in place would compound across reruns. Recording
+          the scope on the task instead means it is always recomputed fresh
+          from this run's :attr:`run_scope`, never from stale serialized
+          state.
 
         Every step here only rewrites still-relative/unset state, so calling
         this more than once for the same task is safe.
@@ -1287,6 +1315,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     == self.orchestrator_target.location_id
                 ):
                     target.working_directory = orchestrator_wd
+                elif (
+                    target.location_id != self.orchestrator_target.location_id
+                ):
+                    task._run_scope = self.run_scope  # noqa: SLF001
 
     @final
     def _resolve_run_paths(self) -> Path:

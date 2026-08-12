@@ -183,6 +183,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
     written back into workflow YAML or a hosted workflow snapshot.
     """
 
+    _run_scope: str | None = PrivateAttr(default=None)
+    """
+    Opaque relative path fragment nested under the target's own working
+    directory, set by :meth:`BaseWorkflow._anchor_task` for tasks whose
+    target is not co-located with the orchestrator. Private for the same
+    reason as :attr:`_execution_id`: it must be recomputed fresh from the
+    current run every time, never round-tripped through a stored snapshot.
+    """
+
     @property
     def working_dir(self) -> str:
         """
@@ -190,12 +199,17 @@ class BaseTask(AutoRegistry, entry_point="task"):
         its target's working directory. Inputs are materialized here and
         outputs and side-products are written relative to it.
 
+        A non-co-located target's own directory is further scoped by
+        :attr:`_run_scope` (workflow/run isolation) before the task id.
         Before the task is invoked the legacy ``<target>/<task-id>`` path is
         returned, which keeps setup and inspection code deterministic. Once
         execution begins, the invocation id is appended so re-running a task
         never reuses a previous job's directory.
         """
-        path = Path(self.target.resolved_working_directory) / self.id
+        path = Path(self.target.resolved_working_directory)
+        if self._run_scope:
+            path /= self._run_scope
+        path /= self.id
         if self._execution_id is not None:
             path /= self._execution_id
         return path.as_posix()
