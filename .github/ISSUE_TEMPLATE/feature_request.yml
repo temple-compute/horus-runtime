@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest a capability or improvement for horus-runtime.
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. For open-ended ideas you would like to talk through
+        first, [Discussions](https://github.com/temple-compute/horus-runtime/discussions)
+        is often the better place.
+
+        Note that new targets, runtimes, executors, and artifact kinds can usually be
+        added as a plugin without changing this repo. See the
+        [plugin template](https://github.com/temple-compute/horus-runtime-plugin).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >
+        Describe the situation you hit, not just the feature you want. What are you
+        doing today, and where does it break down?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: >
+        What should Horus do? If it changes a workflow file, sketch the YAML you would
+        like to write.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you have tried, or other designs you rejected and why.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the runtime does this touch?
+      options:
+        - Workflow / DAG semantics
+        - Targets (where tasks run)
+        - Runtimes (what runs)
+        - Executors (how it runs)
+        - Artifacts and transfer
+        - CLI or TUI
+        - Plugin API / SDK
+        - Not sure
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you be willing to contribute this?
+      options:
+        - label: I would be interested in opening a PR for this.
+          required: false

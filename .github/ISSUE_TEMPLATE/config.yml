@@ -1,0 +1,17 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/temple-compute/horus-runtime/discussions
+    about: Ask how to do something, or talk through an idea before opening an issue.
+  - name: Documentation
+    url: https://docs.templecompute.com
+    about: CLI reference, SDK guides, and workflow authoring docs.
+  - name: Workflow library (Pantheon)
+    url: https://github.com/temple-compute/pantheon
+    about: Ready-made scientific workflows, and where to report issues with them.
+  - name: Report a security vulnerability
+    url: https://github.com/temple-compute/horus-runtime/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.
+  - name: Commercial licensing and support
+    url: mailto:christian@templecompute.com
+    about: Contact Temple Compute about commercial use, support, or partnerships.

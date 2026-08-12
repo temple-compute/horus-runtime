@@ -1,0 +1,95 @@
+name: Bug report
+description: Something in horus-runtime does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please upgrade to the latest release first and
+        check whether it still happens there.
+
+        For questions and "how do I ...", use
+        [Discussions](https://github.com/temple-compute/horus-runtime/discussions).
+        For security issues, follow
+        [SECURITY.md](https://github.com/temple-compute/horus-runtime/blob/main/SECURITY.md)
+        instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+      placeholder: |
+        Expected: the consumer task to receive the producer's output.
+        Actual: the run fails with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Minimal workflow
+      description: >
+        The smallest workflow YAML (or Python) that reproduces the problem. This is
+        by far the most useful thing you can include.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Save the workflow above as workflow.yaml
+        2. Run `horus run workflow.yaml --no-tui`
+        3. See the error
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Output of `horus run workflow.yaml --no-tui --debug`. Please remove anything
+        sensitive such as hostnames, paths, or credentials.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: horus-runtime version
+      description: Output of `horus --version`.
+      placeholder: "0.3.2"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.13.5"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04 / macOS 15.2"
+    validations:
+      required: true
+
+  - type: input
+    id: plugins
+    attributes:
+      label: Plugins installed
+      description: >
+        Any horus-* plugins in the environment, such as horus-slurm or horus-docker,
+        with versions. Write "none" if there are none.
+      placeholder: "horus-slurm 0.2.0"
+    validations:
+      required: false
