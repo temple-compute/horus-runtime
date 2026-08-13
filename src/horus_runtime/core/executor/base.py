@@ -41,6 +41,7 @@ from horus_runtime.middleware.executor import (
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
 from horus_runtime.settings import runtime_settings
+from pydantic import PrivateAttr
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -92,6 +93,16 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     """
     Which runtime types this executor can handle. By default, an executor can
     handle any runtime type.
+    """
+
+    _side_landing: dict[str, Path] = PrivateAttr(default_factory=dict)
+    """
+    Local landing directory per task id for collected side artifacts.
+
+    Allocated on first collection and reused afterwards, so collecting again
+    mid-task refreshes the same files instead of scattering copies across
+    fresh temp directories. Keyed by task id because map expansion can run
+    several tasks through one executor instance.
     """
 
     async def resource_scope(
@@ -200,6 +211,11 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         ``runtime_settings.MAX_SIDE_ARTIFACT_BYTES`` are skipped with a
         warning; large data should be declared as task inputs/outputs, which
         have their own transfer strategies.
+
+        Safe to call repeatedly while the task is still running, so a long
+        task's log and resource trace can be surfaced before it ends: the
+        landing directory is allocated once per task and each artifact is
+        refreshed in place rather than registered a second time.
         """
         try:
             entries = await task.target.list_dir(task.side_artifacts_dir)
@@ -220,7 +236,15 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         safe_id = "".join(
             c if (c.isalnum() or c in "-_.") else "_" for c in task.id
         )
-        landing = Path(tempfile.mkdtemp(prefix=f"horus-side-{safe_id}-"))
+        landing = self._side_landing.get(task.id)
+        if landing is None:
+            landing = Path(tempfile.mkdtemp(prefix=f"horus-side-{safe_id}-"))
+            self._side_landing[task.id] = landing
+
+        # Artifacts already registered for this task, so a repeat collection
+        # refreshes their contents instead of appending a second copy. Ids are
+        # unique per task by construction below.
+        known = {artifact.id for artifact in task.side_artifacts}
 
         for entry in entries:
             try:
@@ -230,15 +254,16 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
                         % {"name": entry.name}
                     )
                     continue
+                artifact_id = f"{task.id}_{entry.name}"
                 if entry.is_dir:
                     local_path = await self._pull_tree(
                         task, entry.path, landing / entry.name, cap
                     )
-                    task.side_artifacts.append(
-                        FolderArtifact(
-                            id=f"{task.id}_{entry.name}", path=local_path
+                    if artifact_id not in known:
+                        task.side_artifacts.append(
+                            FolderArtifact(id=artifact_id, path=local_path)
                         )
-                    )
+                        known.add(artifact_id)
                 else:
                     if entry.size > cap:
                         horus_logger.log.warning(
@@ -253,11 +278,11 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
                     local_path.write_bytes(
                         await task.target.get_file(entry.path)
                     )
-                    task.side_artifacts.append(
-                        FileArtifact(
-                            id=f"{task.id}_{entry.name}", path=local_path
+                    if artifact_id not in known:
+                        task.side_artifacts.append(
+                            FileArtifact(id=artifact_id, path=local_path)
                         )
-                    )
+                        known.add(artifact_id)
             except Exception as exc:
                 horus_logger.log.warning(
                     _("Failed to collect side artifact %(name)s: %(err)s")
