@@ -88,6 +88,66 @@ class TestCollectLocalSideArtifacts:
         assert isinstance(empty, FolderArtifact)
         assert empty.path.is_dir()
 
+    async def test_repeat_collection_refreshes_in_place(
+        self, make_shell_task: MakeTaskType
+    ) -> None:
+        """
+        Collecting twice updates the same artifacts instead of duplicating.
+
+        A long task's log is collected while it still runs, so this happens on
+        every publish tick; a fresh landing dir per call would scatter copies
+        and re-register every artifact each time.
+        """
+        task = make_shell_task()
+        sad = Path(task.side_artifacts_dir)
+        sad.mkdir(parents=True)
+        (sad / "log.txt").write_text("first line\n")
+        (sad / "sub").mkdir()
+        (sad / "sub" / "nested.txt").write_text("one")
+
+        await task.executor.collect_side_artifacts(task)
+        first_ids = [a.id for a in task.side_artifacts]
+        log_path = {a.id: a for a in task.side_artifacts}[
+            "test_task_id_log.txt"
+        ].path
+
+        # The task keeps writing, then we collect again mid-run.
+        (sad / "log.txt").write_text("first line\nsecond line\n")
+        (sad / "sub" / "nested.txt").write_text("two")
+        await task.executor.collect_side_artifacts(task)
+
+        assert [a.id for a in task.side_artifacts] == first_ids
+        by_id = {a.id: a for a in task.side_artifacts}
+        # Same path, refreshed contents.
+        assert by_id["test_task_id_log.txt"].path == log_path
+        assert log_path.read_text() == "first line\nsecond line\n"
+        assert (
+            by_id["test_task_id_sub"].path / "nested.txt"
+        ).read_text() == "two"
+
+    async def test_new_artifact_appears_on_a_later_collection(
+        self, make_shell_task: MakeTaskType
+    ) -> None:
+        """A file the task writes later is picked up by the next collection."""
+        task = make_shell_task()
+        sad = Path(task.side_artifacts_dir)
+        sad.mkdir(parents=True)
+        (sad / "log.txt").write_text("hello")
+
+        await task.executor.collect_side_artifacts(task)
+        (sad / "resource-usage.csv").write_text("epoch,rss_kb\n1,2\n")
+        await task.executor.collect_side_artifacts(task)
+
+        by_id = {a.id: a for a in task.side_artifacts}
+        assert set(by_id) == {
+            "test_task_id_log.txt",
+            "test_task_id_resource-usage.csv",
+        }
+        assert (
+            by_id["test_task_id_resource-usage.csv"].path.read_text()
+            == "epoch,rss_kb\n1,2\n"
+        )
+
     async def test_skips_files_over_cap(
         self, make_shell_task: MakeTaskType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
