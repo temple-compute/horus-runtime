@@ -27,7 +27,9 @@ a root value artifact materializes itself (``materialize()``) the first time
 a task consumes it, because no producer ever wrote its bytes.
 """
 
-from typing import ClassVar
+import tempfile
+from pathlib import Path
+from typing import Any, ClassVar
 
 from horus_runtime.core.artifact.base import BaseArtifact
 
@@ -62,3 +64,31 @@ class ValueArtifact[T: object](BaseArtifact[T]):
         """
         if not self.path.exists():
             self.write(self.value)
+
+    def encode_value(self, value: Any) -> bytes | None:
+        """
+        Return the bytes this kind persists for *value*, or ``None`` if
+        *value* does not fit this kind's ``write``.
+
+        The value is round-tripped through this kind's own ``write`` into a
+        throwaway file, so a caller never has to know any per-kind
+        serialization: a ``StringArtifact`` yields plain text, a
+        number/boolean yields a bare JSON scalar, and any future value kind
+        with a bespoke on-disk form is handled for free. This is the
+        counterpart to ``materialize``, which writes this artifact's own
+        ``value`` to ``path``; here an arbitrary candidate value is encoded
+        to that same on-disk form without touching ``path``.
+
+        A type mismatch (e.g. a non-string handed to a ``StringArtifact``,
+        whose ``write`` calls ``write_text`` and raises ``TypeError``)
+        returns ``None`` so the caller can fall back rather than propagate a
+        hard error.
+        """
+        scratch = self.model_copy(deep=True)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                scratch.path = Path(tmp) / "item"
+                scratch.write(value)
+                return scratch.path.read_bytes()
+        except (TypeError, ValueError):
+            return None

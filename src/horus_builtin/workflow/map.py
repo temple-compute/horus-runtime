@@ -67,7 +67,6 @@ import json
 import shlex
 import shutil
 import tarfile
-import tempfile
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -320,6 +319,13 @@ class MapExpander(HorusTask):
             clone = self._build_clone(clone_id)
 
             if self.over.item_input is not None:
+                # Resolve the artifact the clone declares for its item input
+                # so _materialize_item can serialize the element through that
+                # kind's own on-disk form -- plain text for a StringArtifact,
+                # a bare JSON scalar for a number/boolean -- instead of a
+                # blanket json.dumps that reaches a StringArtifact quoted
+                # (#168). None means the item input is untyped; the JSON
+                # fallback then applies.
                 item_artifact = next(
                     (a for a in clone.inputs if a.id == self.over.item_input),
                     None,
@@ -514,7 +520,7 @@ class MapExpander(HorusTask):
             return dest
 
         if isinstance(item_artifact, ValueArtifact):
-            encoded = self._encode_value_item(item_artifact, items[i])
+            encoded = item_artifact.encode_value(items[i])
             if encoded is not None:
                 # No ``.json`` suffix: the bytes are the value kind's own
                 # on-disk form, which is not necessarily a JSON document.
@@ -532,35 +538,6 @@ class MapExpander(HorusTask):
             json.dumps(items[i]).encode("utf-8"), str(dest)
         )
         return dest
-
-    @staticmethod
-    def _encode_value_item(
-        item_artifact: ValueArtifact[Any], element: Any
-    ) -> bytes | None:
-        """
-        Return the bytes *item_artifact*'s own kind persists for *element*,
-        or ``None`` if the element does not fit that kind.
-
-        The element is round-tripped through that kind's real ``write`` into
-        a throwaway file, so this module never hardcodes any per-kind
-        serialization: a ``StringArtifact`` item stays plain text, a
-        number/boolean item stays a bare JSON scalar, and any future value
-        kind with a bespoke on-disk form becomes a valid map item for free.
-
-        A type mismatch (e.g. a non-string element handed to a
-        ``StringArtifact``, whose ``write`` calls ``write_text`` and would
-        raise ``TypeError``) returns ``None`` so the caller can fall back to
-        the legacy JSON encoding, preserving the pre-fix behaviour where any
-        JSON element could be materialized without error.
-        """
-        scratch = item_artifact.model_copy(deep=True)
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                scratch.path = Path(tmp) / "item"
-                scratch.write(element)
-                return scratch.path.read_bytes()
-        except (TypeError, ValueError):
-            return None
 
     @staticmethod
     async def _materialize_index(
