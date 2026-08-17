@@ -32,6 +32,8 @@ from pydantic import ValidationError
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.json import JSONArtifact
+from horus_builtin.artifact.number import NumberArtifact
+from horus_builtin.artifact.string import StringArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -252,6 +254,144 @@ class TestCollectionMapEndToEnd:
         assert wf.status.value == "completed"
         gathered = tmp_path / "score.gathered"
         assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+
+    async def test_json_list_string_item_materializes_unquoted(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A JSON string element fanned into a ``StringArtifact`` item is
+        materialized through the string kind's own plain-text on-disk form,
+        so the clone reads back ``benzene`` (``StringArtifact.read()`` is a
+        plain ``read_text()``) -- not the JSON-quoted ``"benzene"`` the map's
+        hardcoded ``json.dumps`` used to write. The pinned item file also
+        drops the ``.json`` suffix, since it is no longer a JSON document.
+        """
+        del horus_context
+        split = _json_split_task(tmp_path, ["benzene", "toluene"])
+        gather = _gather_task(tmp_path)
+
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        template = HorusTask(
+            id="template",
+            name="template",
+            runtime=CommandRuntime(command="mkdir -p $scored"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[StringArtifact(id="item", path=Path("item_in"))],
+            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+        )
+        wf.map(
+            id="score",
+            template=template,
+            over=("split", "batches", "item"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        items_root = tmp_path / "score.items"
+        # The clone that consumes item i reads exactly these bytes back via
+        # StringArtifact.read(); no surrounding JSON quotes, no .json suffix.
+        assert (items_root / "0").read_text() == "benzene"
+        assert (items_root / "1").read_text() == "toluene"
+        assert not (items_root / "0.json").exists()
+        assert not (items_root / "1.json").exists()
+        probe = StringArtifact(id="i", path=items_root / "0")
+        assert probe.read() == "benzene"
+
+    async def test_json_list_number_item_stays_byte_identical(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A JSON number element fanned into a ``NumberArtifact`` item keeps
+        its bare-JSON-scalar on-disk form, so kinds whose serialization
+        already matches ``json.dumps`` are unchanged by the string fix -- only
+        the ``.json`` suffix is dropped, consistently with every value kind.
+        """
+        del horus_context
+        split = _json_split_task(tmp_path, [10, 20])
+        gather = _gather_task(tmp_path)
+
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        template = HorusTask(
+            id="template",
+            name="template",
+            runtime=CommandRuntime(command="mkdir -p $scored"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[NumberArtifact(id="item", path=Path("item_in"))],
+            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+        )
+        wf.map(
+            id="score",
+            template=template,
+            over=("split", "batches", "item"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        items_root = tmp_path / "score.items"
+        assert (items_root / "0").read_text() == "10"
+        assert (items_root / "1").read_text() == "20"
+        assert NumberArtifact(id="i", path=items_root / "0").read() == 10
+
+    async def test_json_number_into_string_item_falls_back_not_raises(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A type mismatch -- a JSON *number* fanned into a ``StringArtifact``
+        item, whose ``write`` needs a ``str`` -- must not become a hard error.
+        It falls back to the historical ``{i}.json`` + ``json.dumps``
+        encoding, exactly as it materialized before value kinds were taught
+        to the map, so the run still completes.
+        """
+        del horus_context
+        split = _json_split_task(tmp_path, [1, 2])
+        gather = _gather_task(tmp_path)
+
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        template = HorusTask(
+            id="template",
+            name="template",
+            runtime=CommandRuntime(command="mkdir -p $scored"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[StringArtifact(id="item", path=Path("item_in"))],
+            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+        )
+        wf.map(
+            id="score",
+            template=template,
+            over=("split", "batches", "item"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        items_root = tmp_path / "score.items"
+        # Legacy JSON fallback: the number is materialized as a bare JSON
+        # scalar at the historical .json path, unchanged from pre-fix.
+        assert (items_root / "0.json").read_text() == "1"
+        assert (items_root / "1.json").read_text() == "2"
 
     async def test_gather_wired_to_trigger_still_waits_for_expander(
         self, tmp_path: Path, horus_context: HorusContext

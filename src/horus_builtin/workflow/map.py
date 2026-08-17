@@ -67,6 +67,7 @@ import json
 import shlex
 import shutil
 import tarfile
+import tempfile
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -76,6 +77,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -318,6 +320,10 @@ class MapExpander(HorusTask):
             clone = self._build_clone(clone_id)
 
             if self.over.item_input is not None:
+                item_artifact = next(
+                    (a for a in clone.inputs if a.id == self.over.item_input),
+                    None,
+                )
                 item_path = await self._materialize_item(
                     source_task,
                     source_artifact,
@@ -325,6 +331,7 @@ class MapExpander(HorusTask):
                     items_root,
                     i,
                     items,
+                    item_artifact,
                 )
                 self._set_input_path(clone, self.over.item_input, item_path)
 
@@ -475,12 +482,23 @@ class MapExpander(HorusTask):
         items_root: Path,
         i: int,
         items: list[Any] | None,
+        item_artifact: BaseArtifact | None = None,
     ) -> Path:
         """
         Materialize the i-th item on the orchestrator's filesystem and
         return its absolute path: a copy of the i-th child directory for a
-        folder collection, or a small JSON file holding the i-th element
-        for a JSON-list collection.
+        folder collection, or a small file holding the i-th element for a
+        JSON-list collection.
+
+        For a JSON-list collection the bytes depend on the kind the clone
+        declares for its item input (*item_artifact*). A
+        :class:`~horus_builtin.artifact.value.ValueArtifact` element is
+        written through that kind's own on-disk form -- plain text for a
+        :class:`~horus_builtin.artifact.string.StringArtifact`, a bare JSON
+        scalar for a number/boolean -- so the clone reads back the value as
+        authored rather than the JSON-quoted string a blanket ``json.dumps``
+        produced. Everything else (``JSONArtifact``, untyped consumers) keeps
+        the historical ``{i}.json`` + ``json.dumps`` encoding, byte for byte.
         """
         assert source_task is not None
         assert source_artifact is not None
@@ -495,11 +513,54 @@ class MapExpander(HorusTask):
             )
             return dest
 
+        if isinstance(item_artifact, ValueArtifact):
+            encoded = self._encode_value_item(item_artifact, items[i])
+            if encoded is not None:
+                # No ``.json`` suffix: the bytes are the value kind's own
+                # on-disk form, which is not necessarily a JSON document.
+                dest = items_root / str(i)
+                await orchestrator.put_file(encoded, str(dest))
+                return dest
+            # The element does not fit the declared value kind (e.g. a
+            # number fanned into a StringArtifact, whose write() needs a
+            # str). Fall through to the historical JSON encoding so such a
+            # mismatch behaves exactly as it did before this fix -- it never
+            # raised -- rather than turning into a hard error.
+
         dest = items_root / f"{i}.json"
         await orchestrator.put_file(
             json.dumps(items[i]).encode("utf-8"), str(dest)
         )
         return dest
+
+    @staticmethod
+    def _encode_value_item(
+        item_artifact: ValueArtifact[Any], element: Any
+    ) -> bytes | None:
+        """
+        Return the bytes *item_artifact*'s own kind persists for *element*,
+        or ``None`` if the element does not fit that kind.
+
+        The element is round-tripped through that kind's real ``write`` into
+        a throwaway file, so this module never hardcodes any per-kind
+        serialization: a ``StringArtifact`` item stays plain text, a
+        number/boolean item stays a bare JSON scalar, and any future value
+        kind with a bespoke on-disk form becomes a valid map item for free.
+
+        A type mismatch (e.g. a non-string element handed to a
+        ``StringArtifact``, whose ``write`` calls ``write_text`` and would
+        raise ``TypeError``) returns ``None`` so the caller can fall back to
+        the legacy JSON encoding, preserving the pre-fix behaviour where any
+        JSON element could be materialized without error.
+        """
+        scratch = item_artifact.model_copy(deep=True)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                scratch.path = Path(tmp) / "item"
+                scratch.write(element)
+                return scratch.path.read_bytes()
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     async def _materialize_index(
