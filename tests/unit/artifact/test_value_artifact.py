@@ -190,3 +190,50 @@ class TestValueArtifactMaterialize:
             )
             artifact.materialize()
             assert not target.exists()
+
+
+@pytest.mark.unit
+class TestValueArtifactEncodeValue:
+    """
+    encode_value() returns a candidate value's on-disk bytes for this kind,
+    or None when the value does not fit -- the serialization map fan-out
+    uses to materialize a JSON-list item through the clone's declared kind.
+    """
+
+    def test_string_item_is_encoded_unquoted(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A StringArtifact encodes text as plain, unquoted UTF-8 bytes."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = StringArtifact(id="s", path=Path(temp_dir) / "s.txt")
+            assert artifact.encode_value("benzene") == b"benzene"
+
+    def test_number_item_is_byte_identical_to_json(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A NumberArtifact encodes a number as its bare JSON scalar."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = NumberArtifact(id="n", path=Path(temp_dir) / "n.json")
+            assert artifact.encode_value(10) == b"10"
+
+    def test_does_not_touch_backing_path(
+        self, horus_context: HorusContext
+    ) -> None:
+        """Encoding a candidate value leaves the artifact's path untouched."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "s.txt"
+            artifact = StringArtifact(id="s", path=target, value="authored")
+            artifact.encode_value("candidate")
+            assert not target.exists()
+
+    def test_type_mismatch_returns_none(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A value the kind's write() rejects yields None, not an error."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = StringArtifact(id="s", path=Path(temp_dir) / "s.txt")
+            assert artifact.encode_value(10) is None
