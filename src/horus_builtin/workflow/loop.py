@@ -456,6 +456,7 @@ class LoopController(HorusTask):
         clone_id = f"{self.loop_id}#{iteration}"
         data["id"] = clone_id
         data["name"] = clone_id
+        data["expanded_from"] = self.loop_id
         clone = BaseTask.model_validate(data)
         clone.target = clone.target.model_copy(deep=True)
 
@@ -515,6 +516,7 @@ class LoopController(HorusTask):
         return LoopController(
             id=checker_id,
             name=checker_id,
+            expanded_from=self.loop_id,
             target=target,
             loop_id=self.loop_id,
             iteration=iteration,

@@ -301,6 +301,7 @@ class SubworkflowExpander(HorusTask):
             task = entry.model_copy(deep=True)
             task.id = self._prefixed(entry.id)
             task.name = task.id
+            task.expanded_from = self.id
             # A forced re-run of the expander (e.g. CLI --no-skip-all)
             # must reach the tasks it inlines.
             if not self.skip_if_complete:

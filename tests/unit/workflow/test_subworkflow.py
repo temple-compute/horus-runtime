@@ -325,6 +325,8 @@ class TestSubworkflowInliningEndToEnd:
         assert {"sub", "sub/upper", "sub/report"} == ids
         for task in wf.tasks:
             assert task.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+        # Inlined inner tasks remember the expander that derived them.
+        assert all(t.id == "sub" or t.expanded_from == "sub" for t in wf.tasks)
 
     async def test_no_ordering_edges_are_emitted_to_inner_tasks(
         self, tmp_path: Path, horus_context: HorusContext

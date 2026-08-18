@@ -88,6 +88,16 @@ class BaseTask(AutoRegistry, entry_point="task"):
     ``None`` for ad-hoc tasks not sourced from the catalog.
     """
 
+    expanded_from: str | None = Field(default=None, exclude=True)
+    """
+    Id of the expander task (``map_expander``, ``loop_controller``,
+    ``subworkflow``) that derived this task at run time as one clone of a
+    template. ``None`` for user-authored tasks. Excluded from serialization:
+    clones are runtime objects re-derived deterministically by their expander
+    on every run, so the field is transient display metadata (fan-out
+    aggregation in the TUI) rather than workflow definition.
+    """
+
     name: str
     """
     Human-readable name for this task.

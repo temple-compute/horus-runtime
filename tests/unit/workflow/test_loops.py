@@ -182,6 +182,12 @@ class TestConditionalLoopEndToEnd:
         assert body_ids == ["loop#1", "loop#2", "loop#3"]
         for task in wf.tasks:
             assert task.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+        # Body clones and injected checkers both remember the loop that
+        # derived them (TUI aggregation).
+        injected = [
+            t for t in wf.tasks if t.id != "loop" and t.expanded_from == "loop"
+        ]
+        assert len(injected) == 6  # 3 body clones + 3 controller checks
 
     async def test_loop_stops_immediately_when_first_body_signals_stop(
         self, tmp_path: Path, horus_context: HorusContext

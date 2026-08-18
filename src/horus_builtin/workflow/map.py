@@ -63,6 +63,7 @@ if its own output already exists, which is what makes a partially
 completed map resumable.
 """
 
+import asyncio
 import json
 import shlex
 import shutil
@@ -529,8 +530,13 @@ class MapExpander(HorusTask):
         target too.
         """
         if src_target.location_id == dst_target.location_id:
-            shutil.rmtree(dst_path, ignore_errors=True)
-            shutil.copytree(src_path, dst_path)
+            # Offload the (potentially large) recursive copy off the event
+            # loop so a big fan-out doesn't stall a concurrently-running
+            # dashboard (see horus_builtin.event.tui_subscriber).
+            await asyncio.to_thread(
+                shutil.rmtree, dst_path, ignore_errors=True
+            )
+            await asyncio.to_thread(shutil.copytree, src_path, dst_path)
             return
 
         pkg_name = f"horus-map-slice-{uuid.uuid4().hex[:8]}.tar.gz"
@@ -550,9 +556,12 @@ class MapExpander(HorusTask):
         finally:
             await src_target.remove(pkg_path)
 
-        dst_path.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(fileobj=BytesIO(data)) as tf:
-            tf.extractall(dst_path)
+        def _extract(payload: bytes, dest: Path) -> None:
+            dest.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(fileobj=BytesIO(payload)) as tf:
+                tf.extractall(dest)
+
+        await asyncio.to_thread(_extract, data, dst_path)
 
     def _build_clone(self, clone_id: str) -> BaseTask:
         """Reconstruct a fresh, independent clone task from ``template``."""
@@ -560,6 +569,7 @@ class MapExpander(HorusTask):
         data.setdefault("kind", "horus_task")
         data["id"] = clone_id
         data["name"] = clone_id
+        data["expanded_from"] = self.id
         # Propagate a forced re-run (e.g. CLI ``--no-skip-all``/``--no-skip``,
         # which flips the expander's own ``skip_if_complete``) onto each clone.
         if not self.skip_if_complete:

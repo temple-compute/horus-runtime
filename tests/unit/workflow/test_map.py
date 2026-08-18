@@ -201,6 +201,12 @@ class TestCollectionMapEndToEnd:
         assert clone_ids == ["score[0]", "score[1]", "score[2]"]
         for task in wf.tasks:
             assert task.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+        # Clones remember the expander that derived them (TUI aggregation).
+        assert all(
+            t.expanded_from == "score"
+            for t in wf.tasks
+            if t.id.startswith("score[")
+        )
 
         gathered = tmp_path / "score.gathered"
         assert sorted(p.name for p in gathered.iterdir()) == [
@@ -418,6 +424,11 @@ class TestRangeMapEndToEnd:
         assert wf.status.value == "completed"
         clone_ids = sorted(t.id for t in wf.tasks if t.id.startswith("rmap["))
         assert clone_ids == ["rmap[0]", "rmap[1]", "rmap[2]"]
+        assert all(
+            t.expanded_from == "rmap"
+            for t in wf.tasks
+            if t.id.startswith("rmap[")
+        )
         gathered = tmp_path / "rmap.gathered"
         assert sorted(p.name for p in gathered.iterdir()) == [
             "0",
