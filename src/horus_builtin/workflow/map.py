@@ -20,7 +20,9 @@ Declarative map / fan-out / fan-in construct.
 
 A ``map`` task expands, once its (optional) source collection is ready,
 into N clones of a template task, dispatches them, then fans their outputs
-into a pre-existing "gather" task. It is expressed either as a ``map:``
+into a pre-existing "gather" task. The collection is either an upstream
+task's output, a workflow *root* artifact, or simply an integer range (see
+:class:`MapOver`). It is expressed either as a ``map:``
 block in YAML (lowered by :func:`lower_map_entry`, hooked into
 :class:`~horus_runtime.core.workflow.base.BaseWorkflow`'s ``model_validate``
 pipeline) or via the :func:`map_task` Python builder (``wf.map(...)``).
@@ -118,16 +120,20 @@ class MapOver(BaseModel):
     Exactly one mode applies:
 
     - **Collection mode** (``source_task``, ``source_output`` and
-      ``item_input`` all set, ``range`` unset): fan out over the items of
-      an upstream task's output collection. A :class:`.FolderArtifact`
-      collection fans out over its children, sorted by name; a JSON-list
-      collection fans out over its elements, in list order.
-    - **Range mode** (``range`` set; ``source_task``, ``source_output`` and
-      ``item_input`` all unset): fan out over ``range(0, range)``, feeding
-      each clone only its integer index via ``index_input``.
+      ``item_input`` all set): fan out over the items of an upstream task's
+      output collection. A :class:`.FolderArtifact` collection fans out over
+      its children, sorted by name; a JSON-list collection fans out over its
+      elements, in list order.
+    - **Artifact mode** (``source_artifact`` and ``item_input`` set): fan out
+      over the items of a workflow *root* artifact, enumerated exactly as in
+      collection mode. This is the canvas's "fan out over a folder or list
+      already on the board" case, where no producer task exists.
+    - **Range mode** (``range`` set, every source field unset): fan out over
+      ``range(0, range)``, feeding each clone only its integer index via
+      ``index_input``.
 
-    ``index_input`` may additionally be set in collection mode to also
-    give each clone its own numeric index alongside its sliced item.
+    ``index_input`` may additionally be set in collection or artifact mode to
+    also give each clone its own numeric index alongside its sliced item.
     """
 
     source_task: str | None = None
@@ -135,6 +141,10 @@ class MapOver(BaseModel):
 
     source_output: str | None = None
     """Output artifact id on ``source_task`` holding the collection."""
+
+    source_artifact: str | None = None
+    """Id of the workflow root artifact holding the collection (artifact
+    mode). Mutually exclusive with ``source_task``/``source_output``."""
 
     item_input: str | None = None
     """Input id on the template that receives the i-th sliced item."""
@@ -147,30 +157,55 @@ class MapOver(BaseModel):
 
     @model_validator(mode="after")
     def _check_mode(self) -> Self:
-        """Enforce collection-mode xor range-mode, never both or neither."""
-        collection_fields = (
-            self.source_task,
-            self.source_output,
-            self.item_input,
-        )
-        has_any_collection = any(f is not None for f in collection_fields)
-        has_all_collection = all(f is not None for f in collection_fields)
+        """
+        Enforce exactly one of collection / artifact / range mode.
 
-        if self.range is not None:
-            if has_any_collection:
-                raise ValueError(
-                    _(
-                        "MapOver cannot combine 'range' with "
-                        "'source_task'/'source_output'/'item_input'; "
-                        "choose collection mode or range mode, not both."
-                    )
-                )
-        elif not has_all_collection:
+        The three are mutually exclusive rather than merely pairwise
+        distinct: naming both a producer task and a root artifact would
+        leave the collection to enumerate genuinely ambiguous, and pairing
+        either with ``range`` would make the clone count so.
+        """
+        picked = [
+            mode
+            for mode, chosen in (
+                (
+                    "collection",
+                    self.source_task is not None
+                    or self.source_output is not None,
+                ),
+                ("artifact", self.source_artifact is not None),
+                ("range", self.range is not None),
+            )
+            if chosen
+        ]
+        if len(picked) != 1:
             raise ValueError(
                 _(
-                    "MapOver requires 'source_task', 'source_output' and "
-                    "'item_input' together (collection mode), or 'range' "
-                    "alone (range mode)."
+                    "MapOver needs exactly one of collection mode "
+                    "('source_task' + 'source_output' + 'item_input'), "
+                    "artifact mode ('source_artifact' + 'item_input') or "
+                    "range mode ('range' alone); got: %(picked)s."
+                )
+                % {"picked": ", ".join(picked) if picked else _("none")}
+            )
+
+        if picked[0] == "collection" and not all(
+            f is not None
+            for f in (self.source_task, self.source_output, self.item_input)
+        ):
+            raise ValueError(
+                _(
+                    "MapOver collection mode requires 'source_task', "
+                    "'source_output' and 'item_input' together."
+                )
+            )
+        if picked[0] == "artifact" and self.item_input is None:
+            raise ValueError(_("MapOver artifact mode requires 'item_input'."))
+        if picked[0] == "range" and self.item_input is not None:
+            raise ValueError(
+                _(
+                    "MapOver range mode has no collection to slice, so it "
+                    "cannot set 'item_input'; use 'index_input'."
                 )
             )
         return self
@@ -179,6 +214,16 @@ class MapOver(BaseModel):
     def is_range(self) -> bool:
         """Whether this spec is in range mode."""
         return self.range is not None
+
+    @property
+    def is_artifact(self) -> bool:
+        """Whether this spec enumerates a workflow root artifact."""
+        return self.source_artifact is not None
+
+    @property
+    def is_collection(self) -> bool:
+        """Whether this spec enumerates an upstream task's output."""
+        return self.source_task is not None
 
 
 class MapExpander(HorusTask):
@@ -235,12 +280,24 @@ class MapExpander(HorusTask):
 
     @property
     def _source_marker_id(self) -> str | None:
-        """The synthetic input used only to order collection enumeration."""
-        # `source_artifact` is a forward-compatible extension used by newer
-        # map documents.  This runtime revision still supports the original
-        # task-output and range modes, so tolerate its absence while retaining
-        # the same port derivation when a newer document supplies it.
-        return getattr(self.over, "source_artifact", None) or self.over.source_output
+        """
+        The synthetic input used only to order collection enumeration.
+
+        In artifact mode it is deliberately the root artifact's own id, so
+        the ``artifact-<id>`` edge convention
+        (:meth:`~horus_runtime.core.workflow.base.BaseWorkflow.
+        _assert_edge_source_resolves`) resolves against it unchanged.
+        """
+        return self.over.source_artifact or self.over.source_output
+
+    @property
+    def _source_label(self) -> str:
+        """How to name this map's collection in an error message."""
+        if self.over.is_artifact:
+            return _("root artifact '%(id)s'") % {
+                "id": self.over.source_artifact
+            }
+        return f"{self.over.source_task}.{self.over.source_output}"
 
     def _shared_template_inputs(self) -> list[BaseArtifact]:
         """Return the template inputs that every clone receives unchanged."""
@@ -298,7 +355,9 @@ class MapExpander(HorusTask):
                 raise MapConfigurationError(
                     _(
                         "Map task '%(id)s' uses '%(input)s' both as its "
-                        "collection marker and as a shared template input."
+                        "collection marker (the source output or root "
+                        "artifact it fans out over) and as a shared "
+                        "template input."
                     )
                     % {"id": self.id, "input": artifact.id}
                 )
@@ -352,8 +411,10 @@ class MapExpander(HorusTask):
 
         self.runs += 1
 
-        source_task, source_artifact = self._resolve_source(wf)
-        items, count = await self._resolve_count(source_task, source_artifact)
+        source_target, source_artifact = self._resolve_source(wf)
+        items, count = await self._resolve_count(
+            source_target, source_artifact
+        )
         width = max(1, len(str(max(count - 1, 0))))
 
         run_root = wf.run_directory
@@ -373,7 +434,9 @@ class MapExpander(HorusTask):
 
         clones: list[BaseTask] = []
         edges: list[WorkflowEdge] = []
-        shared_inputs = {artifact.id for artifact in self._shared_template_inputs()}
+        shared_inputs = {
+            artifact.id for artifact in self._shared_template_inputs()
+        }
         # These edges deliberately arrive as transfer=False: the expander only
         # needs their ordering relationship.  Their actual data transfer is
         # recreated below for each clone, whose inputs have their own paths.
@@ -389,7 +452,7 @@ class MapExpander(HorusTask):
 
             if self.over.item_input is not None:
                 item_path = await self._materialize_item(
-                    source_task,
+                    source_target,
                     source_artifact,
                     orchestrator,
                     items_root,
@@ -446,13 +509,44 @@ class MapExpander(HorusTask):
 
     def _resolve_source(
         self, wf: "BaseWorkflow"
-    ) -> tuple[BaseTask | None, BaseArtifact | None]:
+    ) -> tuple[BaseTarget | None, BaseArtifact | None]:
         """
-        Resolve the upstream source task/output in collection mode, or
-        ``(None, None)`` in range mode.
+        Resolve the collection to enumerate, as the ``(target, artifact)``
+        pair everything downstream actually needs: the target it can be read
+        off, and the artifact naming it. ``(None, None)`` in range mode.
+
+        A root artifact is read straight off the orchestrator, where
+        ``_resolve_run_paths`` has already anchored it, rather than being
+        transferred to the expander first. That is why the expander's
+        incoming ``artifact-<id>`` edge is ordering-only: enumerating a
+        collection must not copy it, and copying it here would move the same
+        bytes a second time on the way to each clone.
         """
         if self.over.is_range:
             return None, None
+
+        if self.over.is_artifact:
+            if wf.orchestrator_target is None:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' requires workflow.orchestrator_"
+                        "target to enumerate root artifact '%(artifact)s'."
+                    )
+                    % {"id": self.id, "artifact": self.over.source_artifact}
+                )
+            artifact = next(
+                (a for a in wf.artifacts if a.id == self.over.source_artifact),
+                None,
+            )
+            if artifact is None:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' references unknown root artifact "
+                        "'%(artifact)s'."
+                    )
+                    % {"id": self.id, "artifact": self.over.source_artifact}
+                )
+            return wf.orchestrator_target, artifact
 
         source_task = next(
             (t for t in wf.tasks if t.id == self.over.source_task), None
@@ -485,67 +579,61 @@ class MapExpander(HorusTask):
                     "source_task": self.over.source_task,
                 }
             )
-        return source_task, source_artifact
+        return source_task.target, source_artifact
 
     async def _resolve_count(
         self,
-        source_task: BaseTask | None,
+        source_target: BaseTarget | None,
         source_artifact: BaseArtifact | None,
     ) -> tuple[list[Any] | None, int]:
         """
-        Resolve the fan-out count and, in collection mode, the ordered list
+        Resolve the fan-out count and, outside range mode, the ordered list
         of item descriptors: sorted child names for a
         :class:`.FolderArtifact` collection, or the raw JSON elements for a
         JSON-list collection. Returns ``(items, count)``; ``items`` is
         ``None`` in range mode.
+
+        Collection and artifact mode share this whole body: by this point a
+        collection is just an artifact plus the target it lives on.
         """
         if self.over.is_range:
             assert self.over.range is not None
             return None, self.over.range
 
-        assert source_task is not None
+        assert source_target is not None
         assert source_artifact is not None
 
-        store = ArtifactStore(source_task.target)
+        store = ArtifactStore(source_target)
         if not await store.exists(source_artifact):
             raise MapConfigurationError(
                 _(
-                    "Map task '%(id)s' source collection "
-                    "'%(source_task)s.%(output)s' does not exist yet."
+                    "Map task '%(id)s' source collection %(source)s does "
+                    "not exist yet."
                 )
-                % {
-                    "id": self.id,
-                    "source_task": self.over.source_task,
-                    "output": self.over.source_output,
-                }
+                % {"id": self.id, "source": self._source_label}
             )
 
-        target_path = source_task.target.path_on_target(source_artifact)
+        target_path = source_target.path_on_target(source_artifact)
         if isinstance(source_artifact, FolderArtifact):
-            entries = await source_task.target.list_dir(target_path)
+            entries = await source_target.list_dir(target_path)
             names = sorted(entry.name for entry in entries)
             return names, len(names)
 
-        raw = await source_task.target.get_file(target_path)
+        raw = await source_target.get_file(target_path)
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
             raise MapConfigurationError(
                 _(
-                    "Map task '%(id)s' source collection "
-                    "'%(source_task)s.%(output)s' must be a "
-                    "FolderArtifact or a JSON list."
+                    "Map task '%(id)s' source collection %(source)s must be "
+                    "a FolderArtifact or a JSON list."
                 )
-                % {
-                    "id": self.id,
-                    "source_task": self.over.source_task,
-                    "output": self.over.source_output,
-                }
+                % {"id": self.id, "source": self._source_label}
             )
         return parsed, len(parsed)
 
     async def _materialize_item(
         self,
-        source_task: BaseTask | None,
+        source_target: BaseTarget | None,
         source_artifact: BaseArtifact | None,
         orchestrator: BaseTarget,
         items_root: Path,
@@ -558,16 +646,16 @@ class MapExpander(HorusTask):
         folder collection, or a small JSON file holding the i-th element
         for a JSON-list collection.
         """
-        assert source_task is not None
+        assert source_target is not None
         assert source_artifact is not None
         assert items is not None
 
         if isinstance(source_artifact, FolderArtifact):
-            base = source_task.target.path_on_target(source_artifact)
+            base = source_target.path_on_target(source_artifact)
             child_path = f"{base}/{items[i]}"
             dest = items_root / str(i)
             await self._copy_folder(
-                source_task.target, child_path, orchestrator, dest
+                source_target, child_path, orchestrator, dest
             )
             return dest
 
@@ -811,6 +899,7 @@ def lower_map_entry(
     over: dict[str, Any] = {
         "source_task": over_block.get("source_task"),
         "source_output": over_block.get("source_output"),
+        "source_artifact": over_block.get("source_artifact"),
         "item_input": over_block.get("item_input"),
         "index_input": index_input,
         "range": range_value,
@@ -847,21 +936,27 @@ def lower_map_entry(
 
     edges: list[dict[str, Any]] = []
     if range_value is None:
-        source_task = over["source_task"]
-        source_output = over["source_output"]
+        # Both collection and artifact mode need the same ordering edge into
+        # the same marker port; only the id and the endpoint naming it differ
+        # (a root artifact sources via the ``artifact-<id>`` convention).
+        marker_id = over["source_artifact"] or over["source_output"]
         expander["inputs"] = [
             {
                 "kind": "file",
-                "id": source_output,
+                "id": marker_id,
                 "path": f"{task_id}.over.marker",
             }
         ]
         edges.append(
             {
-                "source": source_task,
-                "source_output": source_output,
+                "source": (
+                    f"artifact-{marker_id}"
+                    if over["source_artifact"]
+                    else over["source_task"]
+                ),
+                "source_output": marker_id,
                 "target": task_id,
-                "target_input": source_output,
+                "target_input": marker_id,
                 "transfer": False,
             }
         )
@@ -891,6 +986,7 @@ def map_task(
     template: BaseTask,
     gather: tuple[str, str],
     over: tuple[str, str, str] | None = None,
+    over_artifact: tuple[str, str] | None = None,
     range: int | None = None,
     index_input: str | None = None,
     name: str | None = None,
@@ -916,8 +1012,12 @@ def map_task(
         gather: ``(gather_task_id, gather_input_id)`` of the pre-existing
             task that fans clone outputs in.
         over: ``(source_task_id, source_output_id, item_input_id)`` for
-            collection mode. Mutually exclusive with *range*.
-        range: Clone count for range mode. Mutually exclusive with *over*.
+            collection mode. Mutually exclusive with *over_artifact* and
+            *range*.
+        over_artifact: ``(root_artifact_id, item_input_id)`` for artifact
+            mode. Mutually exclusive with *over* and *range*.
+        range: Clone count for range mode. Mutually exclusive with the two
+            *over* arguments.
         index_input: Input id on *template* that receives each clone's
             integer index. Required in range mode; optional in collection
             mode (alongside *over*'s item).
@@ -929,14 +1029,14 @@ def map_task(
         The appended :class:`MapExpander`.
 
     Raises:
-        MapConfigurationError: If neither or both of *over*/*range* are
-            given.
+        MapConfigurationError: Unless exactly one of *over*,
+            *over_artifact* and *range* is given.
     """
-    if (over is None) == (range is None):
+    if sum(arg is not None for arg in (over, over_artifact, range)) != 1:
         raise MapConfigurationError(
             _(
-                "wf.map(id='%(id)s', ...) requires exactly one of 'over' "
-                "or 'range'."
+                "wf.map(id='%(id)s', ...) requires exactly one of 'over', "
+                "'over_artifact' or 'range'."
             )
             % {"id": id}
         )
@@ -947,23 +1047,36 @@ def map_task(
     inputs: list[BaseArtifact] = []
     edges: list[WorkflowEdge] = []
 
-    if over is not None:
-        source_task, source_output, item_input = over
-        map_over = MapOver(
-            source_task=source_task,
-            source_output=source_output,
-            item_input=item_input,
-            index_input=index_input,
-        )
+    if over is not None or over_artifact is not None:
+        if over is not None:
+            source_task, marker_id, item_input = over
+            map_over = MapOver(
+                source_task=source_task,
+                source_output=marker_id,
+                item_input=item_input,
+                index_input=index_input,
+            )
+            source_id = source_task
+        else:
+            assert over_artifact is not None
+            marker_id, item_input = over_artifact
+            map_over = MapOver(
+                source_artifact=marker_id,
+                item_input=item_input,
+                index_input=index_input,
+            )
+            # Root artifacts are sourced through the `artifact-<id>`
+            # convention rather than by a producing task's id.
+            source_id = f"artifact-{marker_id}"
         inputs.append(
-            FileArtifact(id=source_output, path=Path(f"{id}.over.marker"))
+            FileArtifact(id=marker_id, path=Path(f"{id}.over.marker"))
         )
         edges.append(
             WorkflowEdge(
-                source=source_task,
-                source_output=source_output,
+                source=source_id,
+                source_output=marker_id,
                 target=id,
-                target_input=source_output,
+                target_input=marker_id,
                 transfer=False,
             )
         )

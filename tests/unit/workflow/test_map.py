@@ -134,33 +134,74 @@ def _json_split_task(tmp_path: Path, items: list[object]) -> HorusTask:
 
 @pytest.mark.unit
 class TestMapOver:
-    """MapOver enforces collection-mode xor range-mode."""
+    """MapOver enforces exactly one of collection / artifact / range mode."""
 
     def test_collection_mode_valid(self) -> None:
-        """All three collection fields together, no range: valid."""
+        """All three collection fields together: valid."""
         over = MapOver(
             source_task="split", source_output="batches", item_input="batch"
         )
+        assert over.is_collection
         assert not over.is_range
+        assert not over.is_artifact
+
+    def test_artifact_mode_valid(self) -> None:
+        """A root artifact plus an item input: valid."""
+        over = MapOver(source_artifact="items", item_input="batch")
+        assert over.is_artifact
+        assert not over.is_range
+        assert not over.is_collection
 
     def test_range_mode_valid(self) -> None:
-        """Range alone, no collection fields: valid."""
+        """Range alone, no source fields: valid."""
         over = MapOver(range=3, index_input="idx")
         assert over.is_range
+        assert not over.is_artifact
+        assert not over.is_collection
 
-    def test_range_with_collection_fields_raises(self) -> None:
-        """Range combined with any collection field is rejected."""
-        with pytest.raises(ValueError, match="cannot combine"):
-            MapOver(source_task="split", range=3)
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param(
+                {"source_task": "split", "range": 3}, id="collection+range"
+            ),
+            pytest.param(
+                {"source_artifact": "items", "range": 3}, id="artifact+range"
+            ),
+            pytest.param(
+                {
+                    "source_task": "split",
+                    "source_output": "batches",
+                    "source_artifact": "items",
+                    "item_input": "batch",
+                },
+                id="collection+artifact",
+            ),
+        ],
+    )
+    def test_combined_modes_raise(self, kwargs: dict[str, object]) -> None:
+        """Any two modes at once leaves the fan-out ambiguous: rejected."""
+        with pytest.raises(ValueError, match="exactly one"):
+            MapOver(**kwargs)  # type: ignore[arg-type]
 
     def test_partial_collection_fields_raises(self) -> None:
-        """Only some collection fields set, no range: rejected."""
-        with pytest.raises(ValueError, match="requires"):
+        """Only some collection fields set: rejected."""
+        with pytest.raises(ValueError, match="collection mode requires"):
             MapOver(source_task="split", source_output="batches")
 
+    def test_artifact_mode_without_item_input_raises(self) -> None:
+        """A root artifact with nowhere to put each slice: rejected."""
+        with pytest.raises(ValueError, match="artifact mode requires"):
+            MapOver(source_artifact="items")
+
+    def test_range_mode_with_item_input_raises(self) -> None:
+        """Range mode has no collection to slice, so no item input."""
+        with pytest.raises(ValueError, match="cannot set 'item_input'"):
+            MapOver(range=3, item_input="batch")
+
     def test_neither_mode_raises(self) -> None:
-        """Neither range nor collection fields set: rejected."""
-        with pytest.raises(ValueError, match="requires"):
+        """No mode at all: rejected."""
+        with pytest.raises(ValueError, match="exactly one"):
             MapOver()
 
 
@@ -229,10 +270,13 @@ class TestCollectionMapEndToEnd:
         clone_edges = [
             edge
             for edge in wf.edges
-            if edge.source == "split" and edge.source_output == "script"
+            if edge.source == "split"
+            and edge.source_output == "script"
             and edge.target.startswith("score[")
         ]
-        assert [(edge.target_input, edge.transfer) for edge in clone_edges] == [
+        assert [
+            (edge.target_input, edge.transfer) for edge in clone_edges
+        ] == [
             ("script", True),
             ("script", True),
         ]
@@ -456,6 +500,169 @@ class TestCollectionMapEndToEnd:
         assert resumed.status.value == "completed"
         clone_ids = [t.id for t in resumed.tasks if t.id.startswith("score[")]
         assert clone_ids == ["score[0]", "score[1]", "score[2]"]
+
+
+@pytest.mark.unit
+class TestArtifactMapEndToEnd:
+    """Fan-out over a workflow root artifact, with no producer task."""
+
+    async def test_root_folder_artifact_fans_out_and_gathers(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A root FolderArtifact fans out over its children exactly as a
+        producer task's folder output does, with no producer in the graph.
+        """
+        del horus_context
+        batches = tmp_path / "items"
+        for name in ("a", "b", "c"):
+            child = batches / name
+            child.mkdir(parents=True, exist_ok=True)
+            (child / "data.txt").write_text(name)
+
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[gather],
+            artifacts=[FolderArtifact(id="items", path=batches)],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=_template_task(),
+            over_artifact=("items", "batch"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="score")
+
+        assert wf.status.value == "completed"
+        clone_ids = [t.id for t in wf.tasks if t.id.startswith("score[")]
+        assert clone_ids == ["score[0]", "score[1]", "score[2]"]
+
+        gathered = tmp_path / "score.gathered"
+        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1", "2"]
+        for i in range(3):
+            assert (gathered / str(i) / "out.txt").exists()
+
+    async def test_root_json_list_artifact_fans_out(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A root JSON-list artifact fans out one clone per element."""
+        del horus_context
+        artifact = JSONArtifact(id="items", path=tmp_path / "items.json")
+        artifact.write(["x", "y"])
+
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[gather],
+            artifacts=[artifact],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.map(
+            id="score",
+            template=_template_task(
+                command="mkdir -p $scored && cp $batch $scored/out.json"
+            ),
+            over_artifact=("items", "batch"),
+            gather=("gather", "results"),
+        )
+
+        await wf.run(trigger_id="score")
+
+        assert wf.status.value == "completed"
+        clone_ids = [t.id for t in wf.tasks if t.id.startswith("score[")]
+        assert clone_ids == ["score[0]", "score[1]"]
+
+    async def test_marker_port_is_the_root_artifact_id(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The marker port is named after the root artifact, so the
+        ``artifact-<id>`` edge convention resolves against it, and shared
+        template inputs still become ports alongside it.
+        """
+        del horus_context
+        gather = _gather_task(tmp_path)
+        template = _template_task()
+        template.inputs.append(
+            FileArtifact(id="script", path=Path("shared.py"))
+        )
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[gather],
+            artifacts=[FolderArtifact(id="items", path=tmp_path / "items")],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        expander = wf.map(
+            id="score",
+            template=template,
+            over_artifact=("items", "batch"),
+            gather=("gather", "results"),
+        )
+
+        assert {a.id for a in expander.inputs} == {"items", "script"}
+        source_edge = next(
+            edge for edge in wf.edges if edge.target_input == "items"
+        )
+        assert source_edge.source == "artifact-items"
+        assert source_edge.transfer is False
+
+    async def test_unknown_root_artifact_raises(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A map naming an artifact the workflow does not declare fails."""
+        del horus_context
+        gather = _gather_task(tmp_path)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[gather],
+            artifacts=[FolderArtifact(id="items", path=tmp_path / "items")],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        expander = wf.map(
+            id="score",
+            template=_template_task(),
+            over_artifact=("items", "batch"),
+            gather=("gather", "results"),
+        )
+        expander.over.source_artifact = "nope"
+
+        with pytest.raises(MapConfigurationError, match="unknown root"):
+            expander._resolve_source(wf)
+
+    async def test_artifact_mode_without_orchestrator_raises(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Enumerating a root artifact needs somewhere to read it from."""
+        del horus_context
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[_gather_task(tmp_path)],
+            artifacts=[FolderArtifact(id="items", path=tmp_path / "items")],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        expander = wf.map(
+            id="score",
+            template=_template_task(),
+            over_artifact=("items", "batch"),
+            gather=("gather", "results"),
+        )
+        wf.orchestrator_target = None
+
+        with pytest.raises(MapConfigurationError, match="orchestrator_"):
+            expander._resolve_source(wf)
 
 
 @pytest.mark.unit
@@ -766,6 +973,34 @@ class TestYamlLowering:
                 "transfer": False,
             },
         ]
+
+    def test_lower_artifact_entry(self) -> None:
+        """Artifact-mode ``map:`` lowers to the same marker port, sourced
+        through the ``artifact-<id>`` root-artifact convention.
+        """
+        entry = {
+            "id": "score",
+            "map": {
+                "over": {
+                    "source_artifact": "items",
+                    "item_input": "batch",
+                },
+                "template": {"kind": "horus_task"},
+                "gather": {"task": "gather", "input": "results"},
+            },
+        }
+        expander, edges = lower_map_entry(entry)
+
+        assert expander["over"]["source_artifact"] == "items"
+        assert expander["over"]["source_task"] is None
+        assert expander["inputs"][0]["id"] == "items"
+        assert edges[0] == {
+            "source": "artifact-items",
+            "source_output": "items",
+            "target": "score",
+            "target_input": "items",
+            "transfer": False,
+        }
 
     def test_lower_range_entry(self) -> None:
         """Range-mode ``map:`` lowers with no source edge and no placeholder
