@@ -199,6 +199,16 @@ class TestMapOver:
         with pytest.raises(ValueError, match="cannot set 'item_input'"):
             MapOver(range=3, item_input="batch")
 
+    def test_item_and_index_on_one_input_raises(self) -> None:
+        """One input cannot carry both the slice and the index."""
+        with pytest.raises(ValueError, match="would overwrite the other"):
+            MapOver(
+                source_task="split",
+                source_output="batches",
+                item_input="batch",
+                index_input="batch",
+            )
+
     def test_neither_mode_raises(self) -> None:
         """No mode at all: rejected."""
         with pytest.raises(ValueError, match="exactly one"):

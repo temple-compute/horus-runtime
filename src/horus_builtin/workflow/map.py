@@ -208,6 +208,18 @@ class MapOver(BaseModel):
                     "cannot set 'item_input'; use 'index_input'."
                 )
             )
+        if self.item_input is not None and self.item_input == self.index_input:
+            # _run pins the slice, then pins the index over the same artifact,
+            # so a clone would silently receive its index where its slice
+            # should be -- wrong results with nothing to notice.
+            raise ValueError(
+                _(
+                    "MapOver cannot send both the item and the index to "
+                    "'%(input)s': one would overwrite the other. Give the "
+                    "index its own template input, or drop it."
+                )
+                % {"input": self.item_input}
+            )
         return self
 
     @property
