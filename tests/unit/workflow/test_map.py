@@ -168,6 +168,76 @@ class TestMapOver:
 class TestCollectionMapEndToEnd:
     """Fan-out over a FolderArtifact collection, then fan-in."""
 
+    async def test_shared_template_input_is_rewired_to_every_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A direct edge into the map supplies the same input to all clones."""
+        del horus_context
+        split = _split_task(tmp_path, ["a", "b"])
+        script_path = tmp_path / "shared.py"
+        script_path.write_text("shared")
+        split.outputs.append(FileArtifact(id="script", path=script_path))
+        gather = _gather_task(tmp_path)
+        template = HorusTask(
+            id="template",
+            name="template",
+            runtime=CommandRuntime(
+                command=(
+                    "test -f $script && mkdir -p $scored && "
+                    "cp $batch/data.txt $scored/out.txt"
+                )
+            ),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[
+                FolderArtifact(id="batch", path=Path("batch_in")),
+                FileArtifact(id="script", path=Path("shared.py")),
+            ],
+            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+        )
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, gather],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        expander = wf.map(
+            id="score",
+            template=template,
+            over=("split", "batches", "batch"),
+            gather=("gather", "results"),
+        )
+
+        # This is the edge a user draws from a normal task into the mapped
+        # task's "shared" port.  It must be valid before any clones exist.
+        assert {artifact.id for artifact in expander.inputs} == {
+            "batches",
+            "script",
+        }
+        wf.add_edge(
+            WorkflowEdge(
+                source="split",
+                source_output="script",
+                target="score",
+                target_input="script",
+            )
+        )
+
+        await wf.run(trigger_id="split")
+
+        clone_edges = [
+            edge
+            for edge in wf.edges
+            if edge.source == "split" and edge.source_output == "script"
+            and edge.target.startswith("score[")
+        ]
+        assert [(edge.target_input, edge.transfer) for edge in clone_edges] == [
+            ("script", True),
+            ("script", True),
+        ]
+        assert wf.status.value == "completed"
+
     async def test_three_item_folder_fans_out_and_gathers(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

@@ -61,6 +61,14 @@ and always re-runs, deterministically re-deriving the same clone set; each
 clone is independently skipped via ordinary ``skip_if_complete`` behaviour
 if its own output already exists, which is what makes a partially
 completed map resumable.
+
+Template inputs other than the per-item and per-index inputs are different:
+they are *shared* inputs.  The expander exposes those inputs as ordinary
+ports, so an author can wire a script, environment, parameter file, or any
+other common dependency directly to the map on the workflow canvas.  The
+incoming edge is ordering-only on the expander itself (the expander does not
+consume the artifact); when it expands, it is re-emitted as a data-carrying
+edge onto every clone.
 """
 
 import json
@@ -225,6 +233,25 @@ class MapExpander(HorusTask):
         """Id of this expander's internal wiring-only output marker."""
         return f"{self.id}{_FANOUT_SUFFIX}"
 
+    @property
+    def _source_marker_id(self) -> str | None:
+        """The synthetic input used only to order collection enumeration."""
+        # `source_artifact` is a forward-compatible extension used by newer
+        # map documents.  This runtime revision still supports the original
+        # task-output and range modes, so tolerate its absence while retaining
+        # the same port derivation when a newer document supplies it.
+        return getattr(self.over, "source_artifact", None) or self.over.source_output
+
+    def _shared_template_inputs(self) -> list[BaseArtifact]:
+        """Return the template inputs that every clone receives unchanged."""
+        template = self._build_clone(f"{self.id}[template]")
+        per_clone = {self.over.item_input, self.over.index_input}
+        return [
+            artifact
+            for artifact in template.inputs
+            if artifact.id not in per_clone
+        ]
+
     @model_validator(mode="after")
     def _ensure_fanout_marker(self) -> Self:
         """
@@ -244,6 +271,40 @@ class MapExpander(HorusTask):
             self.outputs.append(
                 FileArtifact(id=marker_id, path=Path(f"{marker_id}.marker"))
             )
+        return self
+
+    @model_validator(mode="after")
+    def _ensure_template_ports(self) -> Self:
+        """Expose the map source and every shared template input as ports.
+
+        The marker is deliberately a file regardless of the collection's
+        concrete kind: it is never transferred through the ordinary edge path.
+        Shared inputs retain their exact declared artifact shape so normal
+        workflow edge validation and transfer keep working for them.
+        """
+        marker_id = self._source_marker_id
+        declared = {artifact.id for artifact in self.inputs}
+        if marker_id is not None and marker_id not in declared:
+            self.inputs.append(
+                FileArtifact(
+                    id=marker_id,
+                    path=Path(f"{self.id}.over.marker"),
+                )
+            )
+            declared.add(marker_id)
+
+        for artifact in self._shared_template_inputs():
+            if artifact.id == marker_id:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' uses '%(input)s' both as its "
+                        "collection marker and as a shared template input."
+                    )
+                    % {"id": self.id, "input": artifact.id}
+                )
+            if artifact.id not in declared:
+                self.inputs.append(artifact.model_copy(deep=True))
+                declared.add(artifact.id)
         return self
 
     async def is_complete(self) -> bool:
@@ -312,6 +373,15 @@ class MapExpander(HorusTask):
 
         clones: list[BaseTask] = []
         edges: list[WorkflowEdge] = []
+        shared_inputs = {artifact.id for artifact in self._shared_template_inputs()}
+        # These edges deliberately arrive as transfer=False: the expander only
+        # needs their ordering relationship.  Their actual data transfer is
+        # recreated below for each clone, whose inputs have their own paths.
+        shared_edges = [
+            edge
+            for edge in wf.edges
+            if edge.target == self.id and edge.target_input in shared_inputs
+        ]
 
         for i in range(count):
             clone_id = f"{self.id}[{i:0{width}d}]"
@@ -348,6 +418,12 @@ class MapExpander(HorusTask):
                     transfer=False,
                 )
             )
+            for shared_edge in shared_edges:
+                edges.append(
+                    shared_edge.model_copy(
+                        update={"target": clone.id, "transfer": True}
+                    )
+                )
             edges.append(
                 WorkflowEdge(
                     source=clone.id,
