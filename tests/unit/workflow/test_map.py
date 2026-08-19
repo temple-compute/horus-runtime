@@ -1368,6 +1368,71 @@ class TestPythonBuilderParity:
 
 
 @pytest.mark.unit
+class TestUnwiredMap:
+    """A freshly converted map carries no gather wiring yet."""
+
+    def test_gather_fields_accept_none(self, tmp_path: Path) -> None:
+        """
+        The lowered form the canvas writes may leave ``gather_task`` /
+        ``gather_input`` null -- the fan-in edge has not been drawn yet.
+        That document must still load (and round-trip), because the canvas
+        saves on every edit; only *running* the map requires them.
+        """
+        del tmp_path
+        expander = MapExpander(
+            id="score",
+            name="score",
+            over=MapOver(
+                source_task="split",
+                source_output="batches",
+                item_input="batch",
+            ),
+            template=_template_task().model_dump(mode="json"),
+            inputs=[FolderArtifact(id="batches", path=Path("marker"))],
+        )
+        assert expander.gather_task is None
+        assert expander.gather_input is None
+
+        reloaded = MapExpander.model_validate(expander.model_dump(mode="json"))
+        assert reloaded.gather_task is None
+        assert reloaded.gather_input is None
+
+    async def test_unwired_gather_raises_on_run_not_on_load(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Running a map whose fan-in edge was never drawn fails with a
+        sentence naming the map and saying its results have nowhere to
+        gather -- on run, with something you can act on, not at load with
+        a Pydantic trace.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a"])
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        wf.tasks.append(
+            MapExpander(
+                id="score",
+                name="score",
+                over=MapOver(
+                    source_task="split",
+                    source_output="batches",
+                    item_input="batch",
+                ),
+                template=_template_task().model_dump(mode="json"),
+                inputs=[FolderArtifact(id="batches", path=Path("marker"))],
+            )
+        )
+        with pytest.raises(MapConfigurationError, match="nowhere to gather"):
+            await wf.run(trigger_id="score")
+
+
+@pytest.mark.unit
 class TestMapExpanderErrors:
     """MapExpander._run raises clear errors for common misconfigurations."""
 

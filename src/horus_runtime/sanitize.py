@@ -139,11 +139,14 @@ def find_root_inputs(
     }
     # A map's fan-in input is wired by MapExpander at run time, not by a
     # static edge, so it would otherwise look like an author-supplied root
-    # input and get promoted to one.
+    # input and get promoted to one. An unwired map (a freshly converted
+    # one, whose fan-in edge has not been drawn yet) has no such input.
     wired |= {
         (task.gather_task, task.gather_input)
         for task in workflow.tasks
         if isinstance(task, MapExpander)
+        and task.gather_task is not None
+        and task.gather_input is not None
     }
     # Reuses the runtime's own produced-vs-external rule rather than
     # restating it here, so sanitizing can never drift from packaging.

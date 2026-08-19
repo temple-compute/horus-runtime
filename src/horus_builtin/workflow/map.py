@@ -278,12 +278,15 @@ class MapExpander(HorusTask):
     ``over.item_input``/``over.index_input``.
     """
 
-    gather_task: str
+    gather_task: str | None = None
     """Id of the pre-existing, user-authored task that fans clone outputs
-    in."""
+    in. ``None`` on a freshly converted, not-yet-wired map: the canvas
+    writes it off the fan-in edge, and it is only required by the time
+    the map runs."""
 
-    gather_input: str
-    """Input id on ``gather_task`` that receives the fan-in folder."""
+    gather_input: str | None = None
+    """Input id on ``gather_task`` that receives the fan-in folder. Like
+    ``gather_task``, wired on the canvas and only required at run time."""
 
     @property
     def _fanout_marker_id(self) -> str:
@@ -420,6 +423,21 @@ class MapExpander(HorusTask):
                 )
                 % {"id": self.id}
             )
+        # A freshly converted map may sit unwired indefinitely (it loads
+        # and saves fine); only running it with nowhere to fan into is the
+        # mistake, so it fails here -- on run, with a sentence you can act
+        # on -- rather than at load with a Pydantic trace.
+        gather_task = self.gather_task
+        gather_input = self.gather_input
+        if gather_task is None or gather_input is None:
+            raise MapConfigurationError(
+                _(
+                    "Map task '%(id)s' results have nowhere to gather: "
+                    "wire its fan-in edge into a gather task's input on "
+                    "the canvas before running it."
+                )
+                % {"id": self.id}
+            )
 
         self.runs += 1
 
@@ -503,8 +521,8 @@ class MapExpander(HorusTask):
                 WorkflowEdge(
                     source=clone.id,
                     source_output=self._clone_output_id(clone),
-                    target=self.gather_task,
-                    target_input=self.gather_input,
+                    target=gather_task,
+                    target_input=gather_input,
                     transfer=False,
                 )
             )
@@ -832,6 +850,9 @@ class MapExpander(HorusTask):
         ``{id}.gathered/`` folder every clone writes its own ``{i}/``
         subdirectory under.
         """
+        # ``_run`` rejects an unwired map before reaching here.
+        assert self.gather_task is not None
+        assert self.gather_input is not None
         gather = next((t for t in wf.tasks if t.id == self.gather_task), None)
         if gather is None:
             raise MapConfigurationError(
