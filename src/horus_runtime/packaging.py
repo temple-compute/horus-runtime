@@ -61,9 +61,9 @@ def collect_bundle_paths(
 
     *artifacts* are external input artifacts (not produced by any task). These
     are only *probably* input files: a plugin may re-pin a path into the run
-    root when it expands (``map:`` does exactly this for its ``.gathered``
-    folder and ``.over.marker``), which is not knowable before a run. A
-    missing one is therefore reported as a warning, not an error.
+    root when it expands (subworkflow port placeholders and a loop's
+    per-iteration markers do exactly this), which is not knowable before a
+    run. A missing one is therefore reported as a warning, not an error.
 
     Absolute paths are skipped throughout: they name a location on this
     machine, cannot travel, and are the author's responsibility.

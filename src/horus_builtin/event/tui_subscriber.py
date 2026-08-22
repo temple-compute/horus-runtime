@@ -198,6 +198,77 @@ def _fmt_resources(task: BaseTask) -> str:
     return " ".join(parts)
 
 
+def _dag_children(
+    workflow: BaseWorkflow,
+) -> tuple[dict[str, list[str]], dict[str, list[str]], list[str]]:
+    """
+    Children of each task (inverse of ``build_dependencies``), the subset of
+    those that are the task's own fan-out, and the roots. Shared by the
+    Tasks table (row order) and the Dependencies tree (nesting + grouping)
+    so a ``horus_map``'s clones (or a subworkflow's inlined tasks) read as
+    coming from the task that created them in both, rather than wherever
+    ``workflow.tasks`` lists them (``expand()`` always appends new tasks at
+    the end -- see ``BaseWorkflow.expand``).
+
+    A task's own fan-out (a horus_map's clones, a loop's body/checker -- see
+    MapTask._execute, LoopController._run) is wired by an ordering-only edge
+    (transfer=False): no artifact actually crosses it, unlike a real,
+    data-carrying successor. Returning that subset separately -- instead of
+    just sorting it first, as before -- lets the tree render it as a
+    distinct group under the task rather than a sibling of its real
+    successors.
+    """
+    deps = build_dependencies(workflow.tasks, workflow.edges)
+    children: dict[str, list[str]] = {tid: [] for tid in deps}
+    for tid, upstream in deps.items():
+        for up in upstream:
+            children[up].append(tid)
+
+    carries_data = {
+        (edge.source, edge.target) for edge in workflow.edges if edge.transfer
+    }
+    fanout: dict[str, list[str]] = {}
+    for parent, kids in children.items():
+        kids.sort(key=lambda tid: (parent, tid) in carries_data)
+        fanout[parent] = [
+            tid for tid in kids if (parent, tid) not in carries_data
+        ]
+
+    roots = [tid for tid, up in deps.items() if not up]
+    return children, fanout, roots
+
+
+def _dag_order(workflow: BaseWorkflow) -> list[BaseTask]:
+    """
+    Tasks depth-first from the DAG's roots, each one's children grouped
+    right after it. A task unreachable from any root (should not happen
+    for a valid DAG) is still appended, in ``workflow.tasks`` order, so
+    nothing is ever silently dropped from the table.
+    """
+    tasks_by_id = {t.id: t for t in workflow.tasks}
+    children, _fanout, roots = _dag_children(workflow)
+
+    ordered: list[BaseTask] = []
+    seen: set[str] = set()
+
+    def visit(tid: str) -> None:
+        if tid in seen:  # guard against cycles
+            return
+        seen.add(tid)
+        task = tasks_by_id.get(tid)
+        if task is not None:
+            ordered.append(task)
+        for child in children.get(tid, []):
+            visit(child)
+
+    for root in roots:
+        visit(root)
+    for task in workflow.tasks:
+        if task.id not in seen:
+            ordered.append(task)
+    return ordered
+
+
 def _fmt_target(task: BaseTask) -> str:
     """``kind`` of the task's target (plus location when cheaply available)."""
     target = task.target
@@ -280,12 +351,12 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         Ids in the run's execution scope, re-planned from *workflow*'s
         current tasks and edges.
 
-        A ``map:`` or ``sub:`` expander adds its clones, and the edges that
-        reach the gather task, only when it runs (see
+        A ``sub:`` expander, a loop controller, or a ``horus_map`` task adds
+        its generated tasks only when it runs (see
         :meth:`~horus_runtime.core.workflow.base.BaseWorkflow.expand`), so a
         plan frozen before the run undercounts every fan-out: a five-clone
-        loop map reported ``1/1 tasks``. Re-planning per frame counts the
-        DAG as it actually is.
+        map reported ``1/1 tasks``. Re-planning per frame counts the DAG as
+        it actually is.
         """
         if self._trigger is None:
             return {t.id for t in workflow.tasks}
@@ -533,7 +604,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         table.add_column(_("Resources"), style="dim")
         table.add_column(_("Elapsed"), justify="right")
         table.add_column(_("Runs"), justify="right", style="dim")
-        for task in workflow.tasks:
+        for task in _dag_order(workflow):
             style = _STATUS_STYLE.get(task.status, "white")
             if task.status is TaskStatus.RUNNING:
                 glyph = Text(_spinner_frame(), style=style)
@@ -550,16 +621,18 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         return table
 
     def _render_tree(self, workflow: BaseWorkflow) -> RenderableType:
-        """Dependency DAG, nodes colored by current status."""
-        deps = build_dependencies(workflow.tasks, workflow.edges)
+        """Dependency DAG, nodes colored by current status.
+
+        A task's own fan-out (a horus_map's clones, a loop's body/checker)
+        nests under a dim "fan-out" group instead of listing as a plain
+        sibling of the task's real, data-carrying successors -- those are
+        two different relationships (spawned-by vs. depends-on) and reading
+        them off the same branch made a map's clones look like just another
+        step in the dependency chain ahead of whatever consumes its output.
+        """
         names = {t.id: t.name for t in workflow.tasks}
         status = {t.id: t.status for t in workflow.tasks}
-        # Children of each task (inverse of dependencies) + the roots.
-        children: dict[str, list[str]] = {tid: [] for tid in deps}
-        for tid, upstream in deps.items():
-            for up in upstream:
-                children[up].append(tid)
-        roots = [tid for tid, up in deps.items() if not up]
+        children, fanout, roots = _dag_children(workflow)
 
         tree = Tree(_("Dependencies"), style="bold")
 
@@ -571,8 +644,17 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
                 status.get(tid, TaskStatus.IDLE), "white"
             )
             branch = node.add(Text(names.get(tid, tid), style=style))
+
+            fanout_kids = fanout.get(tid, [])
+            if fanout_kids:
+                group = branch.add(Text(_("fan-out"), style="dim italic"))
+                for child in fanout_kids:
+                    add(group, child, seen)
+
+            fanout_set = set(fanout_kids)
             for child in children.get(tid, []):
-                add(branch, child, seen)
+                if child not in fanout_set:
+                    add(branch, child, seen)
 
         for root in roots:
             add(tree, root, set())

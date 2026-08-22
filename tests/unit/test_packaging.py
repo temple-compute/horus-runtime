@@ -138,8 +138,9 @@ def test_missing_input_artifact_is_skipped_not_fatal(
     workflow_dir: Path,
 ) -> None:
     """
-    A plugin may pin an input path into the run root when it expands (``map:``
-    does this), so an absent input artifact is reported, not fatal.
+    A plugin may pin an input path into the run root when it expands
+    (subworkflow/loop do this), so an absent input artifact is reported,
+    not fatal.
     """
     (workflow_dir / "configs" / "run.yaml").unlink()
 

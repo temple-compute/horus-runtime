@@ -51,9 +51,11 @@ declares one output, named by ``signal_output``, that the body task itself
 writes as small JSON object shaped ``{"continue": <bool>}`` — ``true`` to run
 another iteration, ``false`` to stop. The controller reads this file
 directly off the completed body task's target (via
-``target.get_file``, mirroring how :class:`.MapExpander` reads its source
-collection) once that iteration finishes, and uses it to decide whether to
-inject the next one. This keeps the predicate itself pure data (no code),
+``target.get_file``, mirroring how
+:class:`~horus_builtin.workflow.map.MapTask` reads a non-folder collection
+via its items' own ``read()``) once that iteration finishes, and uses it to
+decide whether to inject the next one. This keeps the predicate itself pure
+data (no code),
 so a loop round-trips through YAML exactly like any other declarative
 construct.
 
@@ -70,8 +72,10 @@ new nodes: the next body clone (id ``f"{loop_id}#{k}"``) and a fresh
 "controller-check" :class:`LoopController` instance (id
 ``f"{loop_id}~{k}"``) that will run after that body clone completes and
 decide whether to keep going. Every edge added is ``transfer=False``
-(ordering-only, exactly like :class:`.MapExpander`'s wiring): it exists
-purely so the new nodes fall inside the scheduler's trigger-reachable scope
+(ordering-only, exactly like
+:class:`~horus_builtin.workflow.subworkflow.expander.SubworkflowExpander`'s
+inlining wiring): it exists purely so the new nodes fall inside the
+scheduler's trigger-reachable scope
 (which only follows real task-to-task edges), never to source a generic
 artifact transfer. Because injection only ever adds edges *forward* — from
 an already-existing node to a brand new one — it can never close a cycle, so
@@ -177,8 +181,9 @@ class LoopController(HorusTask):
     index_input: str | None = None
     """
     Optional input id on ``body_template`` that receives the iteration's
-    0-based integer index as a small JSON file, materialized the same way
-    :class:`.MapExpander` materializes a range-mode clone's index.
+    0-based integer index as a small JSON file, materialized directly on the
+    orchestrator's filesystem the same way every other never-declared
+    per-iteration input here is.
     """
 
     iteration: int = Field(default=0, ge=0)
@@ -445,8 +450,10 @@ class LoopController(HorusTask):
         the real per-iteration index the body reads), or an internal
         never-referenced input synthesized for this purpose otherwise. It is
         always materialized with real content — never left to a
-        never-written marker like :class:`.MapExpander`'s fanout marker —
-        because, unlike :class:`LoopController` (whose ``_run`` is fully
+        never-written marker like
+        :class:`~horus_builtin.workflow.subworkflow.expander.
+        SubworkflowExpander`'s port placeholders — because, unlike
+        :class:`LoopController` (whose ``_run`` is fully
         overridden), a body clone is an ordinary
         :class:`~horus_builtin.task.horus_task.HorusTask`, whose own
         ``_run`` raises unless every declared input already exists.
@@ -542,10 +549,9 @@ def lower_loop_entry(entry: dict[str, Any]) -> dict[str, Any]:
     Lower one raw YAML task-dict carrying a ``loop:`` block into a
     ``loop_controller`` task-dict.
 
-    Unlike :func:`~horus_builtin.workflow.map.lower_map_entry`, this needs
-    no construction-time edges: a loop has no upstream source collection to
-    gate on, so the original controller is typically used directly as the
-    run's trigger (exactly like a range-mode ``map:``).
+    This needs no construction-time edges: a loop has no upstream source
+    collection to gate on, so the original controller is typically used
+    directly as the run's trigger.
 
     Args:
         entry: The raw task dict as parsed from YAML, carrying ``id`` and a
@@ -591,10 +597,11 @@ def loop_task(
     """
     Append a declarative conditional-repeat loop task to *wf*.
 
-    Mirrors :func:`~horus_builtin.workflow.map.map_task`'s ergonomics for
-    the loop construct: builds and appends the same :class:`LoopController`
-    that YAML's ``loop:`` block lowers to via :func:`lower_loop_entry`, so
-    the two authoring paths produce structurally equivalent tasks.
+    Mirrors :func:`~horus_builtin.workflow.subworkflow.expander.
+    subworkflow_task`'s ergonomics for the loop construct: builds and
+    appends the same :class:`LoopController` that YAML's ``loop:`` block
+    lowers to via :func:`lower_loop_entry`, so the two authoring paths
+    produce structurally equivalent tasks.
 
     Args:
         wf: The workflow to append to.

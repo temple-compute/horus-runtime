@@ -327,39 +327,46 @@ tasks:
       command: cp ${items} ${batches}
     target:
       kind: local
-  - id: score
-    map:
-      over:
-        source_task: split
-        source_output: batches
-        item_input: item
-      template:
-        kind: horus_task
-        inputs:
-          - id: item
-            kind: file
-            path: item_in.json
-        outputs:
-          - id: scored
-            kind: file
-            path: scored.txt
-        executor:
-          kind: shell
-        runtime:
-          kind: command
-          command: cp ${item} ${scored}
-        target:
-          kind: local
-      gather:
-        task: gather
-        input: results
+  - kind: horus_map
+    id: score
+    name: Score
+    over: batches
+    item_input: item
+    inputs:
+      - id: batches
+        kind: json
+        path: batches_in.json
+    outputs:
+      - id: scored
+        kind: folder
+        path: score.out
+    task:
+      kind: horus_task
+      inputs:
+        - id: item
+          kind: file
+          path: item_in.json
+        - id: receptor
+          kind: file
+          path: receptor_in.json
+      outputs:
+        - id: result
+          kind: file
+          path: result.txt
+      executor:
+        kind: shell
+      runtime:
+        kind: command
+        command: cp ${item} ${result}
+      target:
+        kind: local
   - kind: horus_task
     id: gather
     name: Gather
     inputs:
       - id: results
         kind: folder
-        path: score.gathered
+        path: score.out
     outputs:
       - id: summary
         kind: file
@@ -372,6 +379,16 @@ tasks:
     target:
       kind: local
 
+edges:
+  - source: split
+    source_output: batches
+    target: score
+    target_input: batches
+  - source: score
+    source_output: scored
+    target: gather
+    target_input: results
+
 orchestrator_target:
   kind: local
 """
@@ -379,7 +396,7 @@ orchestrator_target:
 
 @pytest.fixture
 def map_workflow_dir(tmp_path: Path) -> Path:
-    """A map: + gather workflow, laid out the way w01 is."""
+    """A horus_map + gather workflow, laid out the way w01 is."""
     (tmp_path / "examples").mkdir()
     (tmp_path / "examples" / "items.json").write_text("[]\n")
     (tmp_path / "workflow.yaml").write_text(MAP_WORKFLOW)
@@ -387,22 +404,27 @@ def map_workflow_dir(tmp_path: Path) -> Path:
 
 
 @pytest.mark.usefixtures("horus_context")
-def test_map_gather_input_is_not_a_root_input(map_workflow_dir: Path) -> None:
-    """The gather task's fan-in input is wired by MapExpander at run time,
-    not by a static edge, so it must not be mistaken for an author-supplied
-    root input or a missing edge.
+def test_map_workflow_sanitizes_like_any_other(map_workflow_dir: Path) -> None:
+    """
+    ``horus_map`` is an ordinary DAG node: its own unwired input is
+    promoted like any other task's, and its wired inputs/outputs are not
+    mistaken for root inputs or missing edges. The wrapped task's
+    ``receptor`` input, adopted as a map port because the author never
+    declared it, is promoted too -- no map-specific special-casing needed.
     """
     workflow = BaseWorkflow.from_yaml(map_workflow_dir / "workflow.yaml")
     roots, missing = find_root_inputs(workflow)
 
-    assert all(r.path.name != "score.gathered" for r in roots)
-    assert all(m.task_id != "gather" for m in missing)
-    assert {r.path.as_posix() for r in roots} == {"examples/items.json"}
+    assert missing == []
+    assert {r.path.as_posix() for r in roots} == {
+        "examples/items.json",
+        "receptor_in.json",
+    }
 
 
 def test_apply_promotions_creates_missing_edges_block() -> None:
-    """A map:-only workflow has no top-level edges: block of its own; the
-    rewrite must create one rather than raising.
+    """A freshly-authored workflow with no top-level edges: block of its
+    own yet; the rewrite must create one rather than raising.
     """
     text = (
         "kind: horus_workflow\n"

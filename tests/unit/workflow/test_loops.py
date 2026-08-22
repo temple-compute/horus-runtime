@@ -18,11 +18,6 @@
 """
 Unit tests for the conditional-repeat loop construct: LoopController, the
 ``loop:`` YAML lowering hook, and the ``wf.loop(...)`` Python builder.
-
-The bounded/counted loop ("run exactly N times") is covered by the range
-map in ``test_map.py``; :class:`TestBoundedLoopViaRangeMap` re-asserts that
-acceptance here so #116's "bounded loop" criterion is visibly met alongside
-the conditional loop.
 """
 
 from pathlib import Path
@@ -31,7 +26,6 @@ import pytest
 import yaml
 
 from horus_builtin.artifact.file import FileArtifact
-from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -595,59 +589,3 @@ class TestPythonBuilderParity:
         )
         assert [t.id for t in wf.tasks] == ["loop"]
         assert wf.edges == []
-
-
-@pytest.mark.unit
-class TestBoundedLoopViaRangeMap:
-    """
-    #116's "bounded loop" acceptance: a counted, run-exactly-N-times loop is
-    the range map from #122. This re-asserts that here so bounded and
-    conditional loops are both covered in one place; see test_map.py's
-    TestRangeMapEndToEnd for the full range-map fan-out/fan-in coverage.
-    """
-
-    async def test_range_map_is_the_bounded_loop(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """range=3 runs the body exactly 3 times, indexed 0/1/2."""
-        del horus_context
-        gather = HorusTask(
-            id="gather",
-            name="gather",
-            runtime=CommandRuntime(command="true"),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            inputs=[FolderArtifact(id="results", path=Path("gather_in"))],
-            outputs=[FileArtifact(id="done", path=tmp_path / "done.txt")],
-        )
-        template = HorusTask(
-            id="template",
-            name="template",
-            runtime=CommandRuntime(
-                command="mkdir -p $scored && cp $idx $scored/idx.json"
-            ),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            inputs=[FileArtifact(id="idx", path=Path("idx_in"))],
-            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
-        )
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="rmap",
-            template=template,
-            range=3,
-            index_input="idx",
-            gather=("gather", "results"),
-        )
-
-        await wf.run(trigger_id="rmap")
-
-        assert wf.status.value == "completed"
-        clone_ids = sorted(t.id for t in wf.tasks if t.id.startswith("rmap["))
-        assert clone_ids == ["rmap[0]", "rmap[1]", "rmap[2]"]

@@ -60,11 +60,10 @@ from horus_builtin.workflow.loop import (
     loop_task,
     lower_loop_entry,
 )
-from horus_builtin.workflow.map import MapExpander, lower_map_entry, map_task
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.placement import ResourceCapacity
+from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.exceptions import (
@@ -93,7 +92,7 @@ if TYPE_CHECKING:
     from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
 
 
-class _EdgeSource(NamedTuple):
+class EdgeSource(NamedTuple):
     """
     Where a consumer input is sourced from, resolved from the workflow edges.
 
@@ -278,71 +277,27 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     without any changes to the scheduler itself.
     """
 
-    @model_validator(mode="before")
-    @classmethod
-    def _lower_map_tasks(cls, data: object) -> object:
+    _placement: PlacementManager | None = PrivateAttr(default=None)
+    """
+    Lazily-constructed, shared :class:`~horus_runtime.core.placement.
+    PlacementManager` for this workflow instance. Backing store for
+    :attr:`placement`.
+    """
+
+    @property
+    def placement(self) -> PlacementManager:
         """
-        Lower any task carrying a ``map:`` block into a ``map_expander``
-        task plus its construction-time wiring edge, before normal
-        per-task ``kind``-discriminated parsing runs.
+        The single :class:`~horus_runtime.core.placement.PlacementManager`
+        for this workflow run, built from :attr:`capacity` on first access.
 
-        See :func:`horus_builtin.workflow.map.lower_map_entry`. A no-op for
-        workflows with no ``map:`` tasks, including already-lowered,
-        round-tripped ones (``to_yaml`` dumps a ``MapExpander`` in its
-        native ``kind: map_expander`` form, not back into ``map:`` block
-        syntax) and direct Python construction with real task objects.
+        Shared by the scheduler and every composite task that dispatches its
+        own sub-tasks (e.g. a ``horus_map`` task awaiting its clones), so
+        capacity accounting for a given ``location_id`` stays global across
+        the whole run rather than being reset per dispatcher.
         """
-        if not isinstance(data, dict):
-            return data
-        tasks = data.get("tasks")
-        if not isinstance(tasks, list):
-            return data
-        if not any(isinstance(t, dict) and "map" in t for t in tasks):
-            return data
-
-        new_tasks: list[object] = []
-        new_edges: list[object] = list(data.get("edges") or [])
-        for entry in tasks:
-            if isinstance(entry, dict) and "map" in entry:
-                expander, edges = lower_map_entry(entry)
-                new_tasks.append(expander)
-                new_edges.extend(edges)
-            else:
-                new_tasks.append(entry)
-
-        return {**data, "tasks": new_tasks, "edges": new_edges}
-
-    def map(
-        self,
-        *,
-        id: str,
-        template: BaseTask,
-        gather: tuple[str, str],
-        over: tuple[str, str, str] | None = None,
-        range: int | None = None,
-        index_input: str | None = None,
-        name: str | None = None,
-        target: BaseTarget | None = None,
-    ) -> MapExpander:
-        """
-        Append a declarative map (fan-out/fan-in) task to this workflow.
-
-        Thin delegate to :func:`horus_builtin.workflow.map.map_task`; see
-        its docstring for the full parameter reference. Equivalent to
-        authoring a ``map:`` block in YAML (see
-        :func:`horus_builtin.workflow.map.lower_map_entry`).
-        """
-        return map_task(
-            self,
-            id=id,
-            template=template,
-            gather=gather,
-            over=over,
-            range=range,
-            index_input=index_input,
-            name=name,
-            target=target,
-        )
+        if self._placement is None:
+            self._placement = PlacementManager(self.capacity)
+        return self._placement
 
     @model_validator(mode="before")
     @classmethod
@@ -1024,12 +979,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         with Path(path).open("w", encoding="utf-8") as fh:
             yaml.safe_dump(self.model_dump(mode="json"), fh)
 
-    def _build_source_map(self) -> dict[tuple[str, str], _EdgeSource]:
+    def _build_source_map(self) -> dict[tuple[str, str], EdgeSource]:
         """
         Resolve, for the whole workflow, where each consumer input is sourced.
 
         Returns a map keyed by (target task id, input id) to an
-        :class:`_EdgeSource`. Edges are validated at construction
+        :class:`EdgeSource`. Edges are validated at construction
         (see :meth:`check_edges_resolve`), so every entry resolves to a real
         producer output or root artifact.
 
@@ -1044,7 +999,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         }
         roots_by_id = {a.id: a for a in self.artifacts}
 
-        source_map: dict[tuple[str, str], _EdgeSource] = {}
+        source_map: dict[tuple[str, str], EdgeSource] = {}
         for edge in self.edges:
             # (The id checks are implied by `transfer`, and are spelled out to
             # narrow the types for the key and lookups below.)
@@ -1058,21 +1013,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             producer_target = targets_by_task.get(edge.source)
             if producer_target is not None:
                 # Task source: producer's target + its output artifact.
-                source_map[key] = _EdgeSource(
+                source_map[key] = EdgeSource(
                     producer_target,
                     outputs_by_task.get((edge.source, edge.source_output)),
                 )
             else:
                 # Root source ("artifact-<id>"): sourced from orchestrator.
-                source_map[key] = _EdgeSource(
+                source_map[key] = EdgeSource(
                     None, roots_by_id.get(edge.source_output)
                 )
         return source_map
 
     def cached_source_map(
         self,
-        cached: tuple[int, dict[tuple[str, str], _EdgeSource]] | None,
-    ) -> tuple[int, dict[tuple[str, str], _EdgeSource]]:
+        cached: tuple[int, dict[tuple[str, str], EdgeSource]] | None,
+    ) -> tuple[int, dict[tuple[str, str], EdgeSource]]:
         """
         Return ``(self._revision, source_map)``, rebuilding the source map
         only when ``_revision`` has advanced past *cached*.
@@ -1089,7 +1044,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     async def transfer_artifacts(
         self,
         task: BaseTask,
-        source_map: dict[tuple[str, str], _EdgeSource] | None = None,
+        source_map: dict[tuple[str, str], EdgeSource] | None = None,
     ) -> None:
         """
         Transfer the input artifacts of the given task to the target where the

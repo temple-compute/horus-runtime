@@ -64,6 +64,17 @@ class TaskStatus(Enum):
     """
 
 
+TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset(
+    {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELED,
+        TaskStatus.SKIPPED,
+    }
+)
+"""Statuses a task never leaves once reached."""
+
+
 class SkipReason(Enum):
     """
     Why a ``SKIPPED`` task was skipped.
