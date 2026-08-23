@@ -28,6 +28,8 @@ from abc import abstractmethod
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, ClassVar, final
 
+from pydantic import PrivateAttr
+
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.resources import ProcessTreeScope, ResourceScope
@@ -41,7 +43,6 @@ from horus_runtime.middleware.executor import (
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
 from horus_runtime.settings import runtime_settings
-from pydantic import PrivateAttr
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask

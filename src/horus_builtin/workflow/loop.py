@@ -34,14 +34,14 @@ unlike a Python-closure task, whose function cannot serialize
 (``PythonFunctionRuntime.func`` is ``exclude=True``).
 
 The bounded/counted case ("run this exactly N times") is already covered by
-:mod:`horus_builtin.workflow.map` in range mode (``map: {range: N, ...}``):
-it fans N clones out *concurrently* with a known count. This module instead
-covers the *conditional* case — repeat while a predicate holds, discovered
-only as each iteration completes — which is inherently sequential: iteration
-``k + 1`` cannot be built until iteration ``k`` has run and reported whether
-to continue. ``max_iterations`` remains a hard, always-enforced upper bound
-on top of the predicate, so a runaway predicate cannot grow the graph
-unboundedly.
+:mod:`horus_builtin.workflow.map`: a ``horus_map`` task fans one clone out
+*concurrently* per item of a known-size collection (e.g. a JSON list of N
+elements). This module instead covers the *conditional* case, repeating
+while a predicate holds, discovered only as each iteration completes, which
+is inherently sequential: iteration ``k + 1`` cannot be built until
+iteration ``k`` has run and reported whether to continue.
+``max_iterations`` remains a hard, always-enforced upper bound on top of
+the predicate, so a runaway predicate cannot grow the graph unboundedly.
 
 Predicate convention (the "sentinel artifact")
 -----------------------------------------------
@@ -52,8 +52,10 @@ writes as small JSON object shaped ``{"continue": <bool>}`` — ``true`` to run
 another iteration, ``false`` to stop. The controller reads this file
 directly off the completed body task's target (via
 ``target.get_file``, mirroring how
-:class:`~horus_builtin.workflow.map.MapTask` reads a non-folder collection
-via its items' own ``read()``) once that iteration finishes, and uses it to
+:class:`~horus_builtin.workflow.map.MapTask` reads a JSON collection through
+its :class:`~horus_runtime.core.artifact.iterable.IterableArtifact.items`
+implementation, over the target channels rather than local filesystem
+calls) once that iteration finishes, and uses it to
 decide whether to inject the next one. This keeps the predicate itself pure
 data (no code),
 so a loop round-trips through YAML exactly like any other declarative

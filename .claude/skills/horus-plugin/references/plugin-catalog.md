@@ -31,6 +31,22 @@ Overridable: `exists()`, `hash` (property → `str | None`), `delete()`,
 (`FolderArtifact(BaseArtifact[Path])`, `kind="folder"`, overrides
 `hash`/`package`/`unpackage`).
 
+Iterable collections additionally mix in `IterableArtifact`
+(`core/artifact/iterable.py`; plain ABC, not a registry root, not a kind).
+Implement:
+
+```python
+@abstractmethod
+async def items(self, target: "BaseTarget") -> list[ArtifactItem]: ...
+```
+
+Return a deterministic `(slot, item)` list reading strictly through *target*'s
+channels (`ArtifactItem(slot, path=...)` for a pre-materialized on-target
+path, or `(slot, value=...)` for an in-memory value); raise
+`ArtifactIterationError` when enumeration is impossible. **Refs:**
+`artifact/folder.py` (children sorted by name; slot = child name),
+`artifact/json.py` (parsed list; zero-padded index slots).
+
 ## Runtime — `horus.runtime`
 
 `BaseRuntime[T]` (`core/runtime/base.py`), `registry_key="kind"`. Describes *what*
@@ -111,6 +127,9 @@ that every edge resolves. `transfer_artifacts(task, source_map)` moves inputs vi
 the matching transfer strategy. **Ref:** `workflow/horus_workflow.py`
 (`HorusWorkflow`, `kind="horus_workflow"`, DAG execution via
 `dag.execution_plan`). See the `horus-workflow` skill for authoring workflows.
+Composite-task **Ref:** `workflow/map.py` (`MapTask`, `kind="horus_map"`:
+wraps a per-clone `task`, fans out over an iterable input or a `fan_out:`
+transform product, optional `gather:` fold into a single output).
 
 ## Target — `horus.target`
 

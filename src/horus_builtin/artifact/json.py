@@ -26,9 +26,16 @@ from typing import Any, ClassVar, cast
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.iterable import (
+    ArtifactItem,
+    ArtifactIterationError,
+    IterableArtifact,
+)
+from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.i18n import tr as _
 
 
-class JSONArtifact[T: Any = Any](BaseArtifact[T]):
+class JSONArtifact[T: Any = Any](BaseArtifact[T], IterableArtifact):
     """
     Represents a JSON-serializable Python object artifact.
     The artifact is materialized as a JSON file on disk.
@@ -37,6 +44,48 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T]):
     kind: str = "json"
     kind_name: ClassVar[str] = "JSON"
     kind_description: ClassVar[str] = "A JSON-serializable data artifact."
+
+    async def items(self, target: BaseTarget) -> list[ArtifactItem]:
+        """
+        One item per element of the JSON list this artifact holds, read
+        strictly through *target*'s channels (never the local filesystem, so
+        a remote target's file is fetched over the channel); each slot is a
+        zero-padded index into the list.
+
+        Raises:
+            ArtifactIterationError: When the target-side document is not
+                valid JSON or does not hold a JSON list.
+        """
+        raw = await target.get_file(target.path_on_target(self))
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ArtifactIterationError(
+                _(
+                    "JSON artifact '%(id)s' at %(path)s is not valid JSON: "
+                    "%(err)s"
+                )
+                % {
+                    "id": self.id,
+                    "path": target.path_on_target(self),
+                    "err": exc,
+                }
+            ) from exc
+
+        if not isinstance(value, list):
+            raise ArtifactIterationError(
+                _(
+                    "JSON artifact '%(id)s' must hold a JSON list to be "
+                    "iterable; got %(type)s."
+                )
+                % {"id": self.id, "type": type(value).__name__}
+            )
+
+        width = max(1, len(str(max(len(value) - 1, 0))))
+        return [
+            ArtifactItem(slot=f"{i:0{width}d}", value=element)
+            for i, element in enumerate(value)
+        ]
 
     def read(self) -> T:
         """

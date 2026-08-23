@@ -32,6 +32,7 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.python_string import PythonCodeStringRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
@@ -877,3 +878,308 @@ class TestVinaShapedEndToEnd:
         report = (tmp_path / "report.txt").read_text()
         assert "ligand_A.pdbqt" in report
         assert "ligand_B.pdbqt" in report
+
+
+FAN_OUT_TRANSFORM_WORKFLOW = """
+kind: horus_workflow
+name: Transform Fanout
+artifacts:
+  - id: ligand
+    kind: string
+    path: ligand.txt
+    value: LIGAND
+tasks:
+  - kind: horus_map
+    id: expand
+    name: Expand ligands
+    over: ligand
+    item_input: ligand
+    fan_out: {kind: json, id: batches, path: batches.json}
+    inputs:
+      - {kind: string, id: ligand, path: ligand_in.txt}
+    outputs:
+      - {kind: folder, id: scored, path: scored_out}
+    runtime:
+      kind: command
+      command: printf '[\\"a\\",\\"b\\"]' > $batches
+    executor: {kind: shell}
+    target: {kind: local}
+    task:
+      kind: horus_task
+      inputs:
+        - {kind: file, id: ligand, path: lig.pdbqt}
+      outputs:
+        - {kind: file, id: result, path: result.txt}
+      runtime:
+        kind: command
+        command: "cat $ligand > $result"
+      executor: {kind: shell}
+      target: {kind: local}
+
+edges:
+  - source: artifact-ligand
+    source_output: ligand
+    target: expand
+    target_input: ligand
+"""
+
+
+@pytest.mark.unit
+class TestFanOutTransform:
+    """A non-iterable 'over' input is legal when a ``fan_out`` transform
+    body produces the iterable collection the clones fan out over.
+    """
+
+    async def test_body_produces_the_collection_that_drives_the_fan_out(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The body's JSON list becomes one clone per element; the
+        non-iterable string input never needs iterating itself.
+        """
+        del horus_context
+        wf_path = tmp_path / "wf.yaml"
+        wf_path.write_text(FAN_OUT_TRANSFORM_WORKFLOW)
+
+        wf = BaseWorkflow.from_yaml(wf_path)
+        assert isinstance(wf, HorusWorkflow)
+        expand = next(t for t in wf.tasks if t.id == "expand")
+        assert isinstance(expand, MapTask)
+        assert expand.fan_out is not None
+        assert expand.fan_out.id == "batches"
+
+        await wf.run(trigger_id="expand")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        slots = sorted(p.name for p in scored.iterdir())
+        assert slots == ["0", "1"]
+        assert (scored / "0" / "result.txt").read_text() == "a"
+        assert (scored / "1" / "result.txt").read_text() == "b"
+
+
+def _gather_map_task(gather_command: str) -> MapTask:
+    """A ``horus_map`` folding its clones into a single file output."""
+    return MapTask(
+        id="score",
+        name="score",
+        over="batches",
+        item_input="item",
+        inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+        outputs=[FileArtifact(id="merged", path=Path("merged.txt"))],
+        task=_template_task(),
+        gather=CommandRuntime(command=gather_command),
+    )
+
+
+@pytest.mark.unit
+class TestGather:
+    """With ``gather``, clones re-root under an internal ``slots`` folder
+    and a second transform folds it into the single declared output.
+    """
+
+    async def test_gather_folds_slots_into_the_single_output(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Every clone's output lands under the slots folder, which the
+        gather command concatenates into the declared file output.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _gather_map_task("cat $slots/*/result.txt > $merged")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert (tmp_path / "merged.txt").read_text() == "a.txtb.txt"
+
+    async def test_slots_folder_is_reported_as_a_side_artifact(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The internal re-root survives as an inspectable side artifact."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt"])
+        map_task = _gather_map_task("cat $slots/*/result.txt > $merged")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        score = next(t for t in wf.tasks if t.id == "score")
+        side_ids = [a.id for a in score.side_artifacts]
+        # Other side artifacts (per-task logs) may ride along; the internal
+        # slots folder lands exactly once among them.
+        assert side_ids.count("slots") == 1
+        slots_artifact = next(
+            a for a in score.side_artifacts if a.id == "slots"
+        )
+        assert isinstance(slots_artifact, FolderArtifact)
+        assert sorted(p.name for p in Path(slots_artifact.path).iterdir()) == [
+            "a.txt"
+        ]
+
+    async def test_failing_gather_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A gather error propagates as an ordinary executor failure."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt"])
+        map_task = _gather_map_task("exit 3")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "failed"
+
+
+@pytest.mark.unit
+class TestTransformPorts:
+    """Wiring rules for the optional fan-out/gather transforms."""
+
+    @staticmethod
+    def _over() -> list[BaseArtifact]:
+        return [FolderArtifact(id="batches", path=Path("batches_in"))]
+
+    @staticmethod
+    def _outputs() -> list[BaseArtifact]:
+        return [FolderArtifact(id="scored", path=Path("scored_out"))]
+
+    def _map(self, **kwargs: object) -> MapTask:
+        base: dict[str, object] = {
+            "id": "score",
+            "name": "score",
+            "over": "batches",
+            "item_input": "item",
+            "inputs": self._over(),
+            "outputs": self._outputs(),
+            "task": _template_task(),
+        }
+        return MapTask(**{**base, **kwargs})  # type: ignore[arg-type]
+
+    def test_non_iterable_over_requires_fan_out(self) -> None:
+        """A plain file over-input is rejected unless fan_out produces the
+        collection.
+        """
+        with pytest.raises(ValidationError, match="cannot be iterated"):
+            self._map(
+                inputs=[FileArtifact(id="batches", path=Path("b.txt"))],
+                over="batches",
+            )
+
+    def test_fan_out_must_be_iterable(self) -> None:
+        """A fan_out of a non-iterable kind is rejected."""
+        with pytest.raises(ValidationError, match="'fan_out'"):
+            self._map(fan_out=FileArtifact(id="mid", path=Path("m.txt")))
+
+    def test_fan_out_id_may_not_collide_with_inputs(self) -> None:
+        """The intermediate's id must not shadow any port."""
+        with pytest.raises(ValidationError, match="collides"):
+            self._map(
+                fan_out=JSONArtifact(id="batches", path=Path("batches.json")),
+            )
+
+    def test_fan_out_id_may_not_collide_with_outputs(self) -> None:
+        """The same collision rule covers outputs."""
+        with pytest.raises(ValidationError, match="collides"):
+            self._map(
+                fan_out=JSONArtifact(id="scored", path=Path("s.json")),
+            )
+
+    def test_gather_reserves_the_slots_input_id(self) -> None:
+        """No author-declared input may use the reserved id 'slots'."""
+        with pytest.raises(ValidationError, match="reserved"):
+            self._map(
+                gather=CommandRuntime(command="cat $slots > $scored"),
+                inputs=[
+                    *self._over(),
+                    FileArtifact(id="slots", path=Path("s.txt")),
+                ],
+            )
+
+    def test_gather_allows_any_single_output_kind(self) -> None:
+        """With gather the sole output may be a file instead of a folder;
+        without it, the folder rule still holds.
+        """
+        gathered = self._map(
+            outputs=[FileArtifact(id="merged", path=Path("merged.txt"))],
+            gather=CommandRuntime(command="cat $slots > $merged"),
+        )
+        assert isinstance(gathered.outputs[0], FileArtifact)
+
+        with pytest.raises(ValidationError, match="exactly one output"):
+            self._map(
+                outputs=[
+                    FileArtifact(id="a", path=Path("a.txt")),
+                    FileArtifact(id="b", path=Path("b.txt")),
+                ],
+                gather=CommandRuntime(command="true"),
+            )
+
+    def test_gather_runtime_must_satisfy_executor_runtimes(self) -> None:
+        """A python gather behind a shell-only executor is loud at load
+        time, not mid-run.
+        """
+        with pytest.raises(ValidationError, match="not compatible"):
+            self._map(
+                gather=PythonCodeStringRuntime(code="pass"),
+            )
+
+
+@pytest.mark.unit
+class TestFingerprintSensitivity:
+    """The fingerprint covers both transforms, so editing either one
+    invalidates memoization like editing the inner task does.
+    """
+
+    async def _config_hash(self, **kwargs: object) -> str:
+        kwargs.setdefault(
+            "fan_out", JSONArtifact(id="intermediate", path=Path("items.json"))
+        )
+        kwargs.setdefault(
+            "gather", CommandRuntime(command="cat $slots/* > $merged")
+        )
+        map_task = MapTask(
+            id="score",
+            name="score",
+            over="batches",
+            item_input="item",
+            inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+            outputs=[FileArtifact(id="merged", path=Path("merged.txt"))],
+            task=_template_task(),
+            **kwargs,  # type: ignore[arg-type]
+        )
+        return (await map_task._fingerprint()).config_hash
+
+    async def test_identical_transform_configs_hash_equal(
+        self,
+    ) -> None:
+        """Same fan_out and gather, same hash."""
+        assert await self._config_hash() == await self._config_hash()
+
+    async def test_editing_fan_out_changes_the_hash(self) -> None:
+        """Moving the intermediate's declared path changes the hash."""
+        assert await self._config_hash() != await self._config_hash(
+            fan_out=JSONArtifact(id="intermediate", path=Path("other.json"))
+        )
+
+    async def test_editing_gather_changes_the_hash(self) -> None:
+        """Editing the gather command changes the hash."""
+        assert await self._config_hash() != await self._config_hash(
+            gather=CommandRuntime(command="tar czf $merged $slots")
+        )
+
+    async def test_adding_either_transform_changes_the_hash(self) -> None:
+        """Absent transforms hash differently from present ones."""
+        plain = MapTask(
+            id="score",
+            name="score",
+            over="batches",
+            item_input="item",
+            inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+            task=_template_task(),
+        )
+        transformed = await self._config_hash()
+
+        assert (await plain._fingerprint()).config_hash != transformed
