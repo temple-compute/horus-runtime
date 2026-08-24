@@ -330,36 +330,27 @@ tasks:
   - kind: horus_map
     id: score
     name: Score
-    over: batches
-    item_input: item
+    over:
+      input_id: batches
+      as: batch
     inputs:
       - id: batches
         kind: json
         path: batches_in.json
+      - id: receptor
+        kind: file
+        path: receptor_in.json
     outputs:
       - id: scored
         kind: folder
         path: score.out
-    task:
-      kind: horus_task
-      inputs:
-        - id: item
-          kind: file
-          path: item_in.json
-        - id: receptor
-          kind: file
-          path: receptor_in.json
-      outputs:
-        - id: result
-          kind: file
-          path: result.txt
-      executor:
-        kind: shell
-      runtime:
-        kind: command
-        command: cp ${item} ${result}
-      target:
-        kind: local
+    executor:
+      kind: shell
+    runtime:
+      kind: command
+      command: cp ${batch} ${scored}/result.txt
+    target:
+      kind: local
   - kind: horus_task
     id: gather
     name: Gather
@@ -396,7 +387,7 @@ orchestrator_target:
 
 @pytest.fixture
 def map_workflow_dir(tmp_path: Path) -> Path:
-    """A horus_map + gather workflow, laid out the way w01 is."""
+    """A horus_map + downstream gather workflow, laid out the way w01 is."""
     (tmp_path / "examples").mkdir()
     (tmp_path / "examples" / "items.json").write_text("[]\n")
     (tmp_path / "workflow.yaml").write_text(MAP_WORKFLOW)
@@ -406,11 +397,10 @@ def map_workflow_dir(tmp_path: Path) -> Path:
 @pytest.mark.usefixtures("horus_context")
 def test_map_workflow_sanitizes_like_any_other(map_workflow_dir: Path) -> None:
     """
-    ``horus_map`` is an ordinary DAG node: its own unwired input is
-    promoted like any other task's, and its wired inputs/outputs are not
-    mistaken for root inputs or missing edges. The wrapped task's
-    ``receptor`` input, adopted as a map port because the author never
-    declared it, is promoted too -- no map-specific special-casing needed.
+    ``horus_map`` is an ordinary DAG node: its own unwired ``receptor``
+    input is promoted like any other task's, and its wired inputs/outputs
+    are not mistaken for root inputs or missing edges -- no map-specific
+    special-casing needed.
     """
     workflow = BaseWorkflow.from_yaml(map_workflow_dir / "workflow.yaml")
     roots, missing = find_root_inputs(workflow)

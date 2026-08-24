@@ -16,27 +16,24 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-horus_map: a task that wraps another task and runs it once per item of a
-collection, fanning the clones' outputs into a single folder output.
+horus_map: an ordinary task that runs its own body once per item of an
+iterable input.
+
+The task declares one iterable input (named by ``over``) and one folder
+output.
 """
 
 import asyncio
-import hashlib
-import json
 from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import ClassVar
 
-from pydantic import Field, field_serializer, model_validator
-from pydantic_core.core_schema import SerializerFunctionWrapHandler
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from horus_builtin.artifact.folder import FolderArtifact
-from horus_builtin.executor.shell import ShellExecutor
-from horus_builtin.runtime.command import CommandRuntime
-from horus_builtin.task.horus_task import HorusTask, TaskFingerprint
+from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.core.runtime.base import BaseRuntime
+from horus_runtime.core.artifact.iterable import IterableArtifact
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.workflow.base import EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -49,147 +46,118 @@ class MapConfigurationError(WorkflowError):
     """Raised when a ``horus_map`` task is misconfigured."""
 
 
-def _restore_declared_paths(
-    entries: list[dict[str, Any]], artifacts: list[BaseArtifact]
-) -> None:
+class MapOver(BaseModel):
     """
-    Undo the eager CWD resolution ``BaseArtifact`` applies at construction,
-    so a dumped document keeps the relative paths its author wrote. See
-    :meth:`~horus_builtin.workflow.subworkflow.expander.SubworkflowExpander.
-    _dump_body`, which this mirrors for :attr:`MapTask.task`.
+    What a :class:`MapTask` iterates, and the id each item is bound to.
     """
-    for entry, artifact in zip(entries, artifacts, strict=False):
-        if artifact.declared_path is not None:
-            entry["path"] = str(artifact.declared_path)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    input_id: str
+    """Id of this task's own input holding the collection."""
+
+    item_id: str = Field(alias="as")
+    """
+    Id the per-item artifact is created under on each clone. It is a new
+    artifact, so the collection itself stays addressable under
+    :attr:`input_id` in the body.
+    """
 
 
 class MapTask(HorusTask):
     """
-    Wraps :attr:`task` and runs one clone of it per item of :attr:`over`,
-    fanning every clone's outputs into this task's sole folder output.
+    Runs this task's own body once per item of :attr:`over`, each clone
+    writing into its own slot directory under the single folder output.
     """
 
     kind: str = "horus_map"
     kind_name: ClassVar[str] = "Map"
     kind_description: ClassVar[str] = _(
-        "Runs a wrapped task once per item of a collection, fanning the "
-        "clones' outputs into a single folder output."
+        "Runs this task's body once per item of an iterable input, each run "
+        "writing into its own slot of a single folder output."
     )
 
-    runtime: BaseRuntime = Field(
-        default_factory=lambda: CommandRuntime(command="true")
-    )
+    over: MapOver
     """
-    Inert placeholder: :meth:`_execute` is fully overridden and never
-    delegates to ``self.executor``/``self.runtime``, so these exist only to
-    satisfy ``BaseTask``'s required fields.
-    """
-
-    executor: BaseExecutor = Field(default_factory=ShellExecutor)
-
-    task: BaseTask
-    """
-    The wrapped, per-clone task.
-    """
-
-    over: str
-    """
-    Id of one of *this* task's own :attr:`~BaseTask.inputs` carrying the
-    collection to fan out over.
-    """
-
-    item_input: str
-    """
-    Id of the input on :attr:`task` that receives each item.
+    The input artifact to iterate over (must be an IterableArtifact), and
+    the id each item is bound to on the clone that receives it.
     """
 
     max_concurrency: int | None = None
     """Upper bound on clones dispatched at once; ``None`` means unbounded."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def _default_task_identity(cls, data: Any) -> Any:
+    @property
+    def _over_artifact(self) -> IterableArtifact:
         """
-        Fill ``task.id``/``name`` when authored without one; nothing
-        ever reads them (clone ids are always ``f"{map.id}[{slot}]"``).
+        Returns the input artifact to iterate over.
         """
-        if not isinstance(data, dict):
-            return data
-        task = data.get("task")
-        if isinstance(task, dict) and "id" not in task:
-            task = {**task, "id": f"{data.get('id', 'map')}.body"}
-            task.setdefault("name", task["id"])
-            data = {**data, "task": task}
-        return data
+        input_artifact = next(
+            (inp for inp in self.inputs if inp.id == self.over.input_id), None
+        )
+        if input_artifact is None:
+            raise MapConfigurationError(
+                _("Input artifact '%(id)s' not found in task inputs.")
+                % {"id": self.over.input_id}
+            )
+        if not isinstance(input_artifact, IterableArtifact):
+            raise MapConfigurationError(
+                _("Input artifact '%(id)s' is not iterable.")
+                % {"id": self.over.input_id}
+            )
 
-    @field_serializer("task", mode="wrap")
-    def _dump_task(
-        self, task: BaseTask, handler: SerializerFunctionWrapHandler
-    ) -> Any:
-        """
-        Dump ``task`` with declared (pre-resolution) artifact paths, not the
-        eagerly CWD-resolved ones ``BaseArtifact`` carries at runtime, so a
-        ``to_yaml``/``from_yaml`` round trip keeps relative paths relative
-        instead of baking in this process's CWD.
-        """
-        document = handler(task)
-        _restore_declared_paths(
-            document.get("inputs") or [], list(task.inputs)
-        )
-        _restore_declared_paths(
-            document.get("outputs") or [], list(task.outputs)
-        )
-        return document
+        return input_artifact
 
     @model_validator(mode="after")
-    def _check_ports(self) -> Self:
+    def validate_input_artifact_iterable(self) -> "MapTask":
         """
-        Validate wiring, then adopt each of ``task``'s other inputs as
-        one of this task's own (an author-declared one of the same id wins).
+        Validates that the input artifact specified by `over` is an
+        IterableArtifact.
         """
-        if not any(a.id == self.over for a in self.inputs):
-            raise MapConfigurationError(
-                _("Map task '%(id)s' 'over' names unknown input '%(over)s'.")
-                % {"id": self.id, "over": self.over}
-            )
-        if not any(a.id == self.item_input for a in self.task.inputs):
+        # Obtain the input artifact to iterate over
+        _unused = self._over_artifact
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_item_id_is_free(self) -> "MapTask":
+        """
+        Validates that the per-item id does not collide with a declared port.
+        """
+        taken = {a.id for a in (*self.inputs, *self.outputs)}
+        if self.over.item_id in taken:
             raise MapConfigurationError(
                 _(
-                    "Map task '%(id)s' 'item_input' names unknown input "
-                    "'%(item_input)s' on the wrapped task."
+                    "Map task '%(id)s' binds each item to '%(item)s', which "
+                    "is already the id of one of its own inputs or outputs."
                 )
-                % {"id": self.id, "item_input": self.item_input}
+                % {"id": self.id, "item": self.over.item_id}
             )
+        return self
 
-        # Adopt the wrapped task's other inputs as this task's own, so they
-        # get materialized on the orchestrator's target and can be copied to
-        # each clone's target. Skip the item_input (it gets a fresh copy per
-        # item) and any input already declared on this task (the author may
-        # have wired it to a different artifact than the wrapped task's).
-        own_input_ids = {a.id for a in self.inputs}
-        for inner in self.task.inputs:
-            if inner.id == self.item_input or inner.id in own_input_ids:
-                continue
-            self.inputs.append(inner.model_copy(deep=True))
+    @model_validator(mode="after")
+    def validate_output_artifact_folder(self) -> "MapTask":
+        """
+        Validates that the output artifact is a FolderArtifact.
 
-        if len(self.outputs) != 1 or not isinstance(
-            self.outputs[0], FolderArtifact
-        ):
+        The folder is what makes the fan-out addressable downstream: each
+        clone owns one slot directory inside it.
+        """
+        if len(self.outputs) != 1:
             raise MapConfigurationError(
-                _(
-                    "Map task '%(id)s' must declare exactly one "
-                    "FolderArtifact output."
-                )
+                _("Map task '%(id)s' must have exactly one output.")
                 % {"id": self.id}
             )
-
+        output_artifact = self.outputs[0]
+        if not isinstance(output_artifact, FolderArtifact):
+            raise MapConfigurationError(
+                _("Output artifact '%(id)s' must be a folder.")
+                % {"id": output_artifact.id}
+            )
         return self
 
     async def _execute(self) -> None:
         """
-        Build one clone per item of :attr:`over` and run them all
-        concurrently through :func:`~horus_builtin.workflow.scheduler.
-        execute_task`, then aggregate their side artifacts onto this task.
+        Enumerate the collection, build one clone per item, and run them all.
         """
         wf = self.workflow
         if wf is None:
@@ -198,22 +166,23 @@ class MapTask(HorusTask):
                 % {"id": self.id}
             )
 
-        output = self.outputs[0]
-        await self.target.mkdir(self.target.path_on_target(output))
+        items = await self._over_artifact.items(self.target)
+        root = Path(self.target.path_on_target(self.outputs[0]))
+        await self.target.mkdir(str(root))
 
-        slots = await self._slots()
-        clones = [self._clone(slot, item) for slot, item in slots]
-        # Registers the clones as ordinary DAG tasks, each ordered after
-        # this one by an artifact-less ordering edge (WorkflowEdge with no
-        # source_output/target_input, forced transfer=False) -- the same
-        # pattern LoopController uses for its body/checker tasks. This is
-        # what makes clones visible to anything that reads workflow.tasks
-        # (a live dashboard, to_yaml/model_dump, a resumed-from-snapshot
-        # run) and shows them nested under this task in a dependency view;
-        # expand()'s supersede semantics keep only the current run's clones
-        # on a re-run. execute_task's terminal-status no-op (see
-        # scheduler.py) is what stops the outer ready-set loop from
-        # redispatching a clone once it notices it ready behind this task.
+        # Zero-padded so the slots sort the same lexically and numerically,
+        # both on the filesystem and in the DAG.
+        width = max(1, len(str(len(items) - 1)))
+        clones: list[BaseTask] = []
+        for index, item in enumerate(items):
+            slot = f"{index:0{width}d}"
+            slot_root = root / slot
+            await self.target.mkdir(str(slot_root))
+            clones.append(self._clone(slot, item, slot_root))
+
+        # Ordering-only edges (no artifact ids, so `transfer=False`): they
+        # exist purely to bring the clones into the scheduler's
+        # trigger-reachable scope, never to source a transfer.
         wf.expand(
             tasks=clones,
             edges=[
@@ -255,157 +224,60 @@ class MapTask(HorusTask):
             % {"id": self.id, "n": len(clones)}
         )
 
-    async def _slots(self) -> list[tuple[str, BaseArtifact]]:
+    def _clone(
+        self, slot: str, item: BaseArtifact, slot_root: Path
+    ) -> BaseTask:
         """
-        Resolve the collection off :attr:`over` and return one
-        ``(slot_name, item_artifact)`` pair per element, in a deterministic
-        order.
+        One independent clone of this task for *slot*, bound to *item* and
+        rooted at *slot_root*.
 
-        A :class:`FolderArtifact` source fans out over its children, sorted
-        by name, each item pointed directly at the child's own path (zero
-        copying); the slot is the child's name. Any other source's
-        :meth:`~horus_runtime.core.artifact.base.BaseArtifact.read` must
-        return a JSON list; each item is a fresh copy of the wrapped task's
-        ``item_input`` artifact, written under this task's own working
-        directory via the item's own
-        :meth:`~horus_runtime.core.artifact.base.BaseArtifact.write`; the
-        slot is a zero-padded index.
+        A clone is a plain :class:`~horus_builtin.task.horus_task.HorusTask`,
+        so it runs the body instead of mapping over it again.
         """
-        src = next(a for a in self.inputs if a.id == self.over)
-        item_template = next(
-            a for a in self.task.inputs if a.id == self.item_input
+        # This task's own inputs are already materialized on `self.target`
+        # (its transfer step ran before `_execute`), but their
+        # `declared_path` still holds whatever relative value they were
+        # authored with. Freeze the current absolute path onto the copy.
+        inputs: list[BaseArtifact] = []
+        for artifact in self.inputs:
+            copy = artifact.model_copy(deep=True)
+            copy.declared_path = copy.path
+            inputs.append(copy)
+
+        # The item joins them as a new artifact under `over.as`, so the body
+        # addresses this one element through `$<as>` while the collection it
+        # came from stays addressable through `$<input_id>`.
+        inputs.append(item.model_copy(update={"id": self.over.item_id}))
+
+        # The clone's output is its slot directory, so a body writing into
+        # `$<output>` lands under the map's folder with no path juggling.
+        output = self.outputs[0].model_copy(deep=True)
+        output.path = slot_root
+        output.declared_path = slot_root
+
+        # Excluded from the dump: what the clone sets for itself, the
+        # map-only fields (keeping `kind: horus_map` would make a stored
+        # clone reload as a MapTask with no `over`), and this run's state.
+        exclude_fields = {
+            "id",
+            "name",
+            "inputs",
+            "outputs",
+            "target",
+            "kind",
+            "over",
+            "max_concurrency",
+            "side_artifacts",
+            "status",
+            "skip_reason",
+            "runs",
+        }
+
+        return HorusTask(
+            **self.model_dump(exclude=exclude_fields),
+            id=f"{self.id}[{slot}]",
+            name=f"{self.name}[{slot}]",
+            inputs=inputs,
+            outputs=[output],
+            target=self.target.idle_copy(),
         )
-
-        if isinstance(src, FolderArtifact):
-            base = self.target.path_on_target(src)
-            entries = await self.target.list_dir(base)
-            return [
-                (entry.name, self._item_at(item_template, Path(entry.path)))
-                for entry in sorted(entries, key=lambda e: e.name)
-            ]
-
-        value = src.read()
-        if not isinstance(value, list):
-            raise MapConfigurationError(
-                _(
-                    "Map task '%(id)s' 'over' input '%(over)s' must be a "
-                    "FolderArtifact or an artifact whose read() returns a "
-                    "list."
-                )
-                % {"id": self.id, "over": self.over}
-            )
-
-        width = max(1, len(str(max(len(value) - 1, 0))))
-        items_dir = Path(self.working_dir) / "items"
-        template_declared = item_template.declared_path or item_template.path
-        suffix = template_declared.suffix
-
-        slots: list[tuple[str, BaseArtifact]] = []
-        for i, element in enumerate(value):
-            slot = f"{i:0{width}d}"
-            item = item_template.model_copy(deep=True)
-            item.path = items_dir / f"{slot}{suffix}"
-            item.declared_path = item.path
-            item.write(element)
-            slots.append((slot, item))
-        return slots
-
-    @staticmethod
-    def _item_at(template: BaseArtifact, path: Path) -> BaseArtifact:
-        """A fresh copy of *template*, repointed at the absolute *path*."""
-        item = template.model_copy(deep=True)
-        item.path = path
-        item.declared_path = path
-        return item
-
-    def _clone(self, slot: str, item: BaseArtifact) -> BaseTask:
-        """
-        Build one independent clone of :attr:`task` for *slot*, bound to
-        *item*, with every other input shared verbatim from this task's own
-        inputs and every relative output path re-rooted under this task's
-        folder output.
-        """
-        wf = self.workflow
-        assert wf is not None  # _execute already checked this
-
-        clone = self.task.model_copy(deep=True)
-        clone.id = f"{self.id}[{slot}]"
-        clone.name = clone.id
-        clone.target = clone.target.model_copy(deep=True)
-        # Propagate a forced re-run (e.g. CLI --no-skip-all/--no-skip,
-        # which flips this task's own skip_if_complete) onto each clone.
-        if not self.skip_if_complete:
-            clone.skip_if_complete = False
-
-        own_by_id = {a.id: a for a in self.inputs}
-        clone.inputs = [
-            item
-            if inner.id == self.item_input
-            else self._pinned_copy(own_by_id[inner.id])
-            for inner in clone.inputs
-        ]
-
-        slot_root = Path(self.target.path_on_target(self.outputs[0])) / slot
-        for artifact in clone.outputs:
-            declared = artifact.declared_path
-            if declared is None or declared.is_absolute():
-                continue
-            artifact.path = slot_root / declared
-            artifact.declared_path = artifact.path
-
-        # Anchors the clone's runtime/executor local paths and gives a
-        # co-located clone target the orchestrator's working directory,
-        # exactly as BaseWorkflow.expand does for every DAG-registered task.
-        # Every artifact path is already absolute at this point, so it is a
-        # no-op for those.
-        wf._anchor_task(clone)  # noqa: SLF001
-        return clone
-
-    @staticmethod
-    def _pinned_copy(artifact: BaseArtifact) -> BaseArtifact:
-        """
-        A copy of *artifact* with its *current* path frozen as its declared
-        path too.
-
-        This task's own inputs are already materialized on ``self.target``
-        by the time a clone is built (the generic transfer step already ran
-        for this task), but their ``declared_path`` still holds whatever
-        relative value they were authored with. Freezing the current
-        (absolute, already-correct) path onto ``declared_path`` on the copy
-        stops :meth:`~horus_runtime.core.workflow.base.BaseWorkflow.
-        _anchor_task` from re-deriving -- and clobbering -- it from that
-        stale relative value.
-        """
-        copy = artifact.model_copy(deep=True)
-        copy.declared_path = copy.path
-        return copy
-
-    async def _fingerprint(self) -> TaskFingerprint:
-        """
-        Everything :meth:`HorusTask._fingerprint` covers, plus a hash of the
-        wrapped :attr:`task`'s own configuration, so editing the inner
-        command invalidates this map's memoization too.
-
-        Uses the same declared-path restoration as :meth:`_dump_task`
-        (rather than a raw ``self.task.model_dump()``), so the hash reflects
-        the task's *authored* configuration and stays stable across runs
-        launched from different working directories.
-        """
-        base = await super()._fingerprint()
-        task_doc = self.task.model_dump(mode="json")
-        _restore_declared_paths(
-            task_doc.get("inputs") or [], list(self.task.inputs)
-        )
-        _restore_declared_paths(
-            task_doc.get("outputs") or [], list(self.task.outputs)
-        )
-        config = json.dumps(
-            {
-                "runtime": self.runtime.model_dump(mode="json"),
-                "executor": self.executor.model_dump(mode="json"),
-                "task": task_doc,
-            },
-            sort_keys=True,
-        )
-        config_hash = hashlib.sha256(config.encode()).hexdigest()
-        return TaskFingerprint(inputs=base.inputs, config_hash=config_hash)
