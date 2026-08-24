@@ -20,17 +20,7 @@ horus_map: an ordinary task that runs its own body once per item of an
 iterable input.
 
 The task declares one iterable input (named by ``over``) and one folder
-output. At execution it enumerates that input into items (see
-:class:`~horus_runtime.core.artifact.iterable.IterableArtifact`), clones
-itself once per item as a plain ``horus_task`` -- same runtime, executor and
-other inputs, with the collection input replaced by the item -- and runs
-every clone concurrently. Each clone owns a numbered slot directory under
-the folder output, so the folder gathers the whole fan-out for free.
-
-Everything else is an ordinary node on the canvas: producing the collection
-is whatever task writes the iterable artifact, and folding the slots back
-into one value is whatever task consumes the folder. The map itself only
-fans out.
+output.
 """
 
 import asyncio
@@ -44,6 +34,7 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
+from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.workflow.base import EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
@@ -58,10 +49,6 @@ class MapConfigurationError(WorkflowError):
 class MapOver(BaseModel):
     """
     What a :class:`MapTask` iterates, and the id each item is bound to.
-
-    Authored as ``over: {input_id: rows, as: row}``. ``as`` is a Python
-    keyword, so the field is named ``item_id`` and aliased; both spellings
-    validate, which is what lets a dumped document reload.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -135,10 +122,6 @@ class MapTask(HorusTask):
     def validate_item_id_is_free(self) -> "MapTask":
         """
         Validates that the per-item id does not collide with a declared port.
-
-        Each clone carries this task's ports plus one new artifact under
-        ``over.as``; a collision would make the body's placeholder ambiguous
-        and the clone's artifact ids non-unique.
         """
         taken = {a.id for a in (*self.inputs, *self.outputs)}
         if self.over.item_id in taken:
@@ -190,7 +173,7 @@ class MapTask(HorusTask):
         # Zero-padded so the slots sort the same lexically and numerically,
         # both on the filesystem and in the DAG.
         width = max(1, len(str(len(items) - 1)))
-        clones: list[HorusTask] = []
+        clones: list[BaseTask] = []
         for index, item in enumerate(items):
             slot = f"{index:0{width}d}"
             slot_root = root / slot
@@ -201,7 +184,7 @@ class MapTask(HorusTask):
         # exist purely to bring the clones into the scheduler's
         # trigger-reachable scope, never to source a transfer.
         wf.expand(
-            tasks=list(clones),
+            tasks=clones,
             edges=[
                 WorkflowEdge(source=self.id, target=clone.id)
                 for clone in clones
@@ -243,7 +226,7 @@ class MapTask(HorusTask):
 
     def _clone(
         self, slot: str, item: BaseArtifact, slot_root: Path
-    ) -> HorusTask:
+    ) -> BaseTask:
         """
         One independent clone of this task for *slot*, bound to *item* and
         rooted at *slot_root*.
