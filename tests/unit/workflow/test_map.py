@@ -35,16 +35,17 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_builtin.workflow.map import MapTask
+from horus_builtin.workflow.map import MapOver, MapTask
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
-# The body sees the collection input id (`batches`) bound to its own single
-# item, and the folder output id (`scored`) bound to its own slot directory.
-_BODY = "cp $batches $scored/result.txt"
+# The body sees the item under `over.as` (`batch`), the collection it came
+# from still under its own id (`batches`), and the folder output id (`scored`)
+# bound to its own slot directory.
+_BODY = "cp $batch $scored/result.txt"
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
@@ -91,7 +92,7 @@ def _map_task(
     return MapTask(
         id="score",
         name="score",
-        over=over_artifact.id,
+        over=MapOver(input_id=over_artifact.id, item_id="batch"),
         runtime=CommandRuntime(command=command),
         executor=ShellExecutor(),
         target=LocalTarget(),
@@ -120,7 +121,7 @@ def _wire(
                 source=split.id,
                 source_output=split.outputs[0].id,
                 target=map_task.id,
-                target_input=map_task.over,
+                target_input=map_task.over.input_id,
             ),
             *(extra_edges or []),
         ],
@@ -228,6 +229,38 @@ class TestFolderFanOut:
 
 
 @pytest.mark.unit
+class TestCollectionStaysAddressable:
+    """The item is a new artifact under ``over.as``, so the collection it
+    came from is still addressable in the body under its own id.
+    """
+
+    async def test_body_reads_both_the_item_and_the_collection(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Every clone sees its own item and the whole collection."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                "cp $batch $scored/result.txt && "
+                "ls $batches | wc -l | tr -d ' ' > $scored/total.txt"
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+            assert (scored / str(slot) / "total.txt").read_text() == "3\n"
+
+
+@pytest.mark.unit
 class TestListFanOut:
     """Fan-out over a JSON list source: one slot per element, zero-padded
     by index.
@@ -298,7 +331,7 @@ class TestSharedInput:
             over_artifact=FolderArtifact(
                 id="batches", path=Path("batches_in")
             ),
-            command="cat $batches $receptor > $scored/result.txt",
+            command="cat $batch $receptor > $scored/result.txt",
             extra_inputs=[
                 FileArtifact(id="receptor", path=Path("receptor_in"))
             ],
@@ -510,9 +543,9 @@ class TestConcurrency:
                 id="batches", path=Path("batches_in")
             ),
             command=(
-                f"n=$(basename $batches); echo start-$n >> {log} && "
+                f"n=$(basename $batch); echo start-$n >> {log} && "
                 f"sleep 0.05 && echo end-$n >> {log} && "
-                "cp $batches $scored/result.txt"
+                "cp $batch $scored/result.txt"
             ),
             max_concurrency=1,
         )
@@ -534,12 +567,12 @@ class TestMapPorts:
     """Port wiring is validated at load time, not mid-run."""
 
     def test_over_names_unknown_input(self) -> None:
-        """``over`` must name one of this task's own inputs."""
+        """``over.input_id`` must name one of this task's own inputs."""
         with pytest.raises(ValidationError, match="not found"):
             MapTask(
                 id="score",
                 name="score",
-                over="missing",
+                over=MapOver(input_id="missing", item_id="batch"),
                 runtime=CommandRuntime(command=_BODY),
                 executor=ShellExecutor(),
                 target=LocalTarget(),
@@ -548,12 +581,12 @@ class TestMapPorts:
             )
 
     def test_over_names_a_non_iterable_input(self) -> None:
-        """``over`` must name an input that can enumerate itself."""
+        """``over.input_id`` must name an input that can enumerate itself."""
         with pytest.raises(ValidationError, match="not iterable"):
             MapTask(
                 id="score",
                 name="score",
-                over="batches",
+                over=MapOver(input_id="batches", item_id="batch"),
                 runtime=CommandRuntime(command=_BODY),
                 executor=ShellExecutor(),
                 target=LocalTarget(),
@@ -567,12 +600,26 @@ class TestMapPorts:
             MapTask(
                 id="score",
                 name="score",
-                over="batches",
+                over=MapOver(input_id="batches", item_id="batch"),
                 runtime=CommandRuntime(command=_BODY),
                 executor=ShellExecutor(),
                 target=LocalTarget(),
                 inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
                 outputs=[FileArtifact(id="scored", path=Path("scored.txt"))],
+            )
+
+    def test_item_id_collides_with_a_declared_port(self) -> None:
+        """``over.as`` names a new artifact, so it must be a free id."""
+        with pytest.raises(ValidationError, match="already the id"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="batches", item_id="batches"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
             )
 
     def test_exactly_one_output(self) -> None:
@@ -581,7 +628,7 @@ class TestMapPorts:
             MapTask(
                 id="score",
                 name="score",
-                over="batches",
+                over=MapOver(input_id="batches", item_id="batch"),
                 runtime=CommandRuntime(command=_BODY),
                 executor=ShellExecutor(),
                 target=LocalTarget(),
@@ -622,14 +669,15 @@ class TestRoundTrip:
         dumped = yaml.safe_load(out_path.read_text())
         score_dict = next(t for t in dumped["tasks"] if t["id"] == "score")
         assert score_dict["kind"] == "horus_map"
-        assert score_dict["over"] == "batches"
+        assert score_dict["over"]["input_id"] == "batches"
         assert score_dict["runtime"]["command"] == _BODY
 
         wf2 = BaseWorkflow.from_yaml(out_path)
         assert isinstance(wf2, HorusWorkflow)
         score2 = next(t for t in wf2.tasks if t.id == "score")
         assert isinstance(score2, MapTask)
-        assert score2.over == "batches"
+        assert score2.over.input_id == "batches"
+        assert score2.over.item_id == "batch"
 
         await wf2.run(trigger_id="split")
         assert wf2.status.value == "completed"

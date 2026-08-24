@@ -37,7 +37,7 @@ import asyncio
 from pathlib import Path
 from typing import ClassVar
 
-from pydantic import model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.task.horus_task import HorusTask
@@ -55,6 +55,28 @@ class MapConfigurationError(WorkflowError):
     """Raised when a ``horus_map`` task is misconfigured."""
 
 
+class MapOver(BaseModel):
+    """
+    What a :class:`MapTask` iterates, and the id each item is bound to.
+
+    Authored as ``over: {input_id: rows, as: row}``. ``as`` is a Python
+    keyword, so the field is named ``item_id`` and aliased; both spellings
+    validate, which is what lets a dumped document reload.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    input_id: str
+    """Id of this task's own input holding the collection."""
+
+    item_id: str = Field(alias="as")
+    """
+    Id the per-item artifact is created under on each clone. It is a new
+    artifact, so the collection itself stays addressable under
+    :attr:`input_id` in the body.
+    """
+
+
 class MapTask(HorusTask):
     """
     Runs this task's own body once per item of :attr:`over`, each clone
@@ -68,9 +90,10 @@ class MapTask(HorusTask):
         "writing into its own slot of a single folder output."
     )
 
-    over: str
+    over: MapOver
     """
-    Id of the input artifact to iterate over. Must be an IterableArtifact.
+    The input artifact to iterate over (must be an IterableArtifact), and
+    the id each item is bound to on the clone that receives it.
     """
 
     max_concurrency: int | None = None
@@ -82,17 +105,17 @@ class MapTask(HorusTask):
         Returns the input artifact to iterate over.
         """
         input_artifact = next(
-            (inp for inp in self.inputs if inp.id == self.over), None
+            (inp for inp in self.inputs if inp.id == self.over.input_id), None
         )
         if input_artifact is None:
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' not found in task inputs.")
-                % {"id": self.over}
+                % {"id": self.over.input_id}
             )
         if not isinstance(input_artifact, IterableArtifact):
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' is not iterable.")
-                % {"id": self.over}
+                % {"id": self.over.input_id}
             )
 
         return input_artifact
@@ -104,8 +127,28 @@ class MapTask(HorusTask):
         IterableArtifact.
         """
         # Obtain the input artifact to iterate over
-        _ = self._over_artifact
+        _unused = self._over_artifact
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_item_id_is_free(self) -> "MapTask":
+        """
+        Validates that the per-item id does not collide with a declared port.
+
+        Each clone carries this task's ports plus one new artifact under
+        ``over.as``; a collision would make the body's placeholder ambiguous
+        and the clone's artifact ids non-unique.
+        """
+        taken = {a.id for a in (*self.inputs, *self.outputs)}
+        if self.over.item_id in taken:
+            raise MapConfigurationError(
+                _(
+                    "Map task '%(id)s' binds each item to '%(item)s', which "
+                    "is already the id of one of its own inputs or outputs."
+                )
+                % {"id": self.id, "item": self.over.item_id}
+            )
         return self
 
     @model_validator(mode="after")
@@ -208,23 +251,20 @@ class MapTask(HorusTask):
         A clone is a plain :class:`~horus_builtin.task.horus_task.HorusTask`,
         so it runs the body instead of mapping over it again.
         """
-        # The item stands in for the collection under the very same input id,
-        # so `$<over>` in the body renders the item's own on-target path and
-        # the body is written exactly as if it handled a single element.
-        item = item.model_copy(update={"id": self.over})
-
-        # This task's own remaining inputs are already materialized on
-        # `self.target` (its transfer step ran before `_execute`), but their
+        # This task's own inputs are already materialized on `self.target`
+        # (its transfer step ran before `_execute`), but their
         # `declared_path` still holds whatever relative value they were
         # authored with. Freeze the current absolute path onto the copy.
         inputs: list[BaseArtifact] = []
         for artifact in self.inputs:
-            if artifact.id == self.over:
-                inputs.append(item)
-                continue
             copy = artifact.model_copy(deep=True)
             copy.declared_path = copy.path
             inputs.append(copy)
+
+        # The item joins them as a new artifact under `over.as`, so the body
+        # addresses this one element through `$<as>` while the collection it
+        # came from stays addressable through `$<input_id>`.
+        inputs.append(item.model_copy(update={"id": self.over.item_id}))
 
         # The clone's output is its slot directory, so a body writing into
         # `$<output>` lands under the map's folder with no path juggling.

@@ -330,7 +330,9 @@ tasks:
   - kind: horus_map
     id: score
     name: Score
-    over: batches
+    over:
+      input_id: batches
+      as: batch
     inputs:
       - id: batches
         kind: json
@@ -346,7 +348,7 @@ tasks:
       kind: shell
     runtime:
       kind: command
-      command: cp ${batches} ${scored}/result.txt
+      command: cp ${batch} ${scored}/result.txt
     target:
       kind: local
   - kind: horus_task

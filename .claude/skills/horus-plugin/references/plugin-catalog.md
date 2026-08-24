@@ -45,7 +45,8 @@ and materialized on *target* so a consumer can hand one straight to a task;
 raise `ArtifactIterationError` when enumeration is impossible. **Refs:**
 `artifact/folder.py` (children sorted by name, pointing at their own
 on-target paths, zero copy), `artifact/json.py` (parsed list; one
-single-element JSON artifact per zero-padded index).
+single-element JSON artifact per zero-padded index, in a `<stem>.items`
+directory next to the parent).
 
 ## Runtime — `horus.runtime`
 
@@ -128,8 +129,9 @@ the matching transfer strategy. **Ref:** `workflow/horus_workflow.py`
 (`HorusWorkflow`, `kind="horus_workflow"`, DAG execution via
 `dag.execution_plan`). See the `horus-workflow` skill for authoring workflows.
 Composite-task **Ref:** `workflow/map.py` (`MapTask`, `kind="horus_map"`:
-clones itself as a plain `horus_task` once per item of an iterable input,
-each clone writing into its own slot of a single folder output).
+clones itself as a plain `horus_task` once per item of an iterable input
+(`over: {input_id, as}`), each clone writing into its own slot of a single
+folder output).
 
 ## Target — `horus.target`
 
