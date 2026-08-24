@@ -102,14 +102,7 @@ class TargetPool:
 
         # Every idle instance (the declared target and any prior clones) is
         # currently in use: mint another clone as an extra slot.
-        clone = declared_target.model_copy()
-        # model_copy() shallow-copies pydantic private attributes, so the
-        # clone would otherwise start out pointing at the declared target's
-        # in-flight `_task_future` and look "busy" before it has run
-        # anything. Clear them so the clone starts genuinely idle.
-        clone._task = None  # noqa: SLF001
-        clone._task_future = None  # noqa: SLF001
-        return clone
+        return declared_target.idle_copy()
 
     def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
         """

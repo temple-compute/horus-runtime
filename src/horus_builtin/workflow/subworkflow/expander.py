@@ -67,13 +67,6 @@ class SubworkflowExpander(HorusTask):
         "parent workflow at run time."
     )
 
-    gui_hidden: ClassVar[bool] = True
-    """
-    Hidden from GUI kind pickers (surfaced as the ``hidden`` trait by the
-    backend's kind listing) without dropping the entry point, so stored
-    documents containing ``kind: subworkflow`` keep validating and running.
-    """
-
     runtime: BaseRuntime = Field(
         default_factory=lambda: CommandRuntime(command="true")
     )

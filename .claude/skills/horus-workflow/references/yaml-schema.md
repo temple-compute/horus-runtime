@@ -48,84 +48,45 @@ its `runtimes` (e.g. `shell` ↔ `command`), else `IncompatibleRuntimeError`.
 
 ## Map task
 
-`kind: horus_map` wraps another task and runs one clone of it per item of a
-collection (`src/horus_builtin/workflow/map.py`). It is an ordinary DAG node:
-edges wire its inputs/outputs like any other task's.
+`kind: horus_map` runs its OWN body once per item of a collection
+(`src/horus_builtin/workflow/map.py`). It is an ordinary DAG node: edges wire
+its inputs/outputs like any other task's.
 
 ```yaml
 - kind: horus_map
   id: dock                # required; unique; the DAG node key
   name: Dock every ligand # required; human-readable
   over: ligands           # required; id of THIS task's own input holding the collection
-  item_input: ligand      # required; id of the input on `task` receiving each item
   max_concurrency: 2      # optional; upper bound on clones dispatched at once
   inputs:
     - {kind: folder, id: ligands, path: ligands_in}   # the `over` collection...
     - {kind: file, id: receptor, path: rec.pdbqt}     # ...plus shared inputs
   outputs:
-    - {kind: folder, id: complexes, path: complexes}
-  task:                   # required; the wrapped, per-clone task (full task shape)
-    kind: horus_task
-    inputs:
-      - {kind: file, id: ligand, path: lig.pdbqt}
-    outputs:
-      - {kind: file, id: complex, path: complex.pdb}
-    runtime: {...}
-    executor: {...}
-```
-
-Iteration contract: the `over` input must be an `IterableArtifact`
-(`core/artifact/iterable.py`). `folder` iterates its children sorted by name
-(slot = child name, zero copy); `json` iterates its parsed list (slot =
-zero-padded index). Enumeration reads strictly through the target's channels,
-so remote targets work. Clone ids are `<id>[<slot>]`; every clone shares each
-non-item input verbatim and re-roots its relative output paths under the
-folder output. The wrapped task's other inputs are adopted as ports of the
-map itself unless re-declared there.
-
-### Fan-out transform
-
-Optional `fan_out:` declares the iterable intermediate the map produces
-itself:
-
-```yaml
-  fan_out: {kind: json, id: batches, path: batches.json}
-  runtime:                # the map's OWN body; runs FIRST, only when fan_out is set
+    - {kind: folder, id: complexes, path: complexes}  # required; exactly one folder
+  runtime:                # the per-item body, run once per item
     kind: command
-    command: "... > $batches"
+    command: "dock $ligands $receptor > $complexes/complex.pdb"
   executor: {kind: shell}
 ```
 
-When `fan_out` is set, the map's `runtime`/`executor` execute before iteration
-and their output (the declared iterable intermediate) is what gets iterated;
-use this when the `over` input is not itself iterable. When absent,
-`runtime`/`executor` never run and `over` must be iterable. The intermediate's
-id must not collide with any input or output id.
+Iteration contract: the `over` input must be an `IterableArtifact`
+(`core/artifact/iterable.py`), and `items()` returns real artifacts. `folder`
+iterates its children sorted by name (each child's own on-target path, zero
+copy); `json` iterates its parsed list, writing one single-element JSON
+artifact per index next to the parent.
 
-### Gather transform
+Each item is bound to the body under the SAME id as the collection (`over`),
+and the folder output is bound to that clone's own slot directory, so the body
+is written exactly as if it handled a single element: `$ligands` is one ligand,
+`$complexes` is this clone's directory. Slots are zero-padded indices; clone
+ids are `<id>[<slot>]`, registered in the DAG via `expand()` and ordered after
+the map by an artifact-less edge. Every clone shares each non-`over` input
+verbatim and inherits the map's runtime/executor/target/resources
+(deep-copied).
 
-Without `gather`, the map needs exactly one `folder` output and fans every
-clone's outputs into it. Optional `gather:` declares a second transform that
-instead folds the clones' outputs into ONE single output of ANY kind:
-
-```yaml
-  outputs:
-    - {kind: file, id: merged, path: merged.txt}
-  gather:
-    kind: command
-    command: "cat $slots/*/result.txt > $merged"
-```
-
-With `gather`, the clones' outputs are re-rooted into an internal `slots`
-folder and the SAME `executor` runs `gather` afterwards to fold `$slots`
-(plus any of the map's shared inputs) into the declared output. No input may
-use the reserved id `slots` while `gather` is set.
-
-### Transform-executor compatibility
-
-ONE shared `executor` serves the body AND both transforms: every involved
-transform runtime (`runtime`, `gather`) must be listed in that `executor`'s
-`runtimes`. This is validated at load.
+The map only fans out. Producing the collection is whatever upstream task
+writes the iterable artifact; folding the slots back into one value is
+whatever downstream task consumes the folder output.
 
 ## Artifact
 

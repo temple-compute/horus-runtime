@@ -6,16 +6,6 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
-[options]
-exclude-newer = "2026-08-20T19:08:32.215346Z"
-exclude-newer-span = "P2D"
-
-[options.exclude-newer-package]
-horus-singularity = false
-horus-slurm = false
-horus-docker = false
-horus-runtime = false
-
 [[package]]
 name = "annotated-types"
 version = "0.7.0"

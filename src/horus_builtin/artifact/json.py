@@ -27,7 +27,6 @@ from typing import Any, ClassVar, cast
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import (
-    ArtifactItem,
     ArtifactIterationError,
     IterableArtifact,
 )
@@ -45,47 +44,53 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T], IterableArtifact):
     kind_name: ClassVar[str] = "JSON"
     kind_description: ClassVar[str] = "A JSON-serializable data artifact."
 
-    async def items(self, target: BaseTarget) -> list[ArtifactItem]:
+    async def items(self, target: BaseTarget) -> list[BaseArtifact]:
         """
-        One item per element of the JSON list this artifact holds, read
-        strictly through *target*'s channels (never the local filesystem, so
-        a remote target's file is fetched over the channel); each slot is a
-        zero-padded index into the list.
+        One item per element of the JSON list this artifact holds: a new
+        single-element ``JSONArtifact`` written next to this one, so a
+        consumer gets a real artifact it can pass to a task.
 
         Raises:
             ArtifactIterationError: When the target-side document is not
                 valid JSON or does not hold a JSON list.
         """
-        raw = await target.get_file(target.path_on_target(self))
+        # TODO: Update read, write to support targets. Until then both the
+        # read below and the per-item writes go through the local filesystem,
+        # so iterating a JSON artifact only works on a co-located target.
+        # https://github.com/temple-compute/horus-runtime/issues/174
+        del target
         try:
-            value = json.loads(raw)
+            values = self.read()
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ArtifactIterationError(
                 _(
                     "JSON artifact '%(id)s' at %(path)s is not valid JSON: "
                     "%(err)s"
                 )
-                % {
-                    "id": self.id,
-                    "path": target.path_on_target(self),
-                    "err": exc,
-                }
+                % {"id": self.id, "path": self.path, "err": exc}
             ) from exc
 
-        if not isinstance(value, list):
+        if not isinstance(values, list):
             raise ArtifactIterationError(
                 _(
                     "JSON artifact '%(id)s' must hold a JSON list to be "
                     "iterable; got %(type)s."
                 )
-                % {"id": self.id, "type": type(value).__name__}
+                % {"id": self.id, "type": type(values).__name__}
             )
 
-        width = max(1, len(str(max(len(value) - 1, 0))))
-        return [
-            ArtifactItem(slot=f"{i:0{width}d}", value=element)
-            for i, element in enumerate(value)
-        ]
+        width = max(1, len(str(len(values) - 1)))
+        artifacts: list[BaseArtifact] = []
+        for index, element in enumerate(values):
+            slot = f"{index:0{width}d}"
+            item = JSONArtifact(
+                id=f"{self.id}:{slot}",
+                path=self.path.with_name(f"{self.path.stem}.{slot}.json"),
+            )
+            item.write(element)
+            artifacts.append(item)
+
+        return artifacts
 
     def read(self) -> T:
         """

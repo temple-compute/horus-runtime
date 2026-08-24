@@ -17,24 +17,23 @@
 #
 """
 Unit tests for the IterableArtifact contract: Folder and JSON artifacts
-enumerate deterministic items, reading strictly through the target's
-channels (the regression proof for remote targets).
+enumerate deterministic items: real artifacts a consumer can hand straight
+to a task.
 """
 
-import dataclasses
 from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from pydantic import PrivateAttr
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import (
-    ArtifactItem,
     ArtifactIterationError,
     IterableArtifact,
 )
@@ -161,7 +160,7 @@ class TestFolderItems:
     async def test_items_against_local_target(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """One item per child; slot is the child name; path is absolute."""
+        """One artifact per child, named after it and pointing at it."""
         del horus_context
         base = tmp_path / "batches"
         base.mkdir()
@@ -171,12 +170,32 @@ class TestFolderItems:
         artifact = FolderArtifact(id="batches", path=base)
         items = await artifact.items(LocalTarget())
 
-        assert [(i.slot, i.path) for i in items] == [
-            ("a.txt", (base / "a.txt").as_posix()),
-            ("b.txt", (base / "b.txt").as_posix()),
-            ("c.txt", (base / "c.txt").as_posix()),
+        assert [(i.id, i.path) for i in items] == [
+            ("batches:a.txt", base / "a.txt"),
+            ("batches:b.txt", base / "b.txt"),
+            ("batches:c.txt", base / "c.txt"),
         ]
-        assert all(i.value is None for i in items)
+        assert all(isinstance(i, FileArtifact) for i in items)
+
+    async def test_a_child_directory_is_itself_a_folder_artifact(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Kinds follow the entry: a directory child iterates as a folder,
+        so it packages and transfers as one.
+        """
+        del horus_context
+        base = tmp_path / "batches"
+        (base / "nested").mkdir(parents=True)
+        (base / "flat.txt").write_text("flat")
+
+        artifact = FolderArtifact(id="batches", path=base)
+        items = await artifact.items(LocalTarget())
+
+        kinds = {i.id: type(i) for i in items}
+        assert kinds == {
+            "batches:flat.txt": FileArtifact,
+            "batches:nested": FolderArtifact,
+        }
 
     async def test_empty_folder_yields_no_items(
         self, tmp_path: Path, horus_context: HorusContext
@@ -209,43 +228,53 @@ class TestFolderItems:
         artifact = FolderArtifact(id="batches", path=local)
         items = await artifact.items(target)
 
-        assert [(i.slot, i.path) for i in items] == [
-            ("alpha.txt", f"{remote}/alpha.txt"),
-            ("zulu.txt", f"{remote}/zulu.txt"),
+        assert [(i.id, i.path.as_posix()) for i in items] == [
+            ("batches:alpha.txt", f"{remote}/alpha.txt"),
+            ("batches:zulu.txt", f"{remote}/zulu.txt"),
         ]
         assert target.calls == [("list_dir", remote)]
 
 
 @pytest.mark.unit
 class TestJSONItems:
-    """JSONArtifact.items parses the list off the target and indexes slots."""
+    """JSONArtifact.items writes one single-element artifact per index."""
 
     async def test_items_against_local_target(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """Zero-padded index slots carrying the parsed elements as values."""
+        """Index-named artifacts, materialized next to the parent."""
         del horus_context
         artifact = JSONArtifact(id="batches", path=tmp_path / "b.json")
         artifact.write(["x", {"k": 1}, 3])
 
         items = await artifact.items(LocalTarget())
 
-        assert [i.slot for i in items] == ["0", "1", "2"]
-        assert [i.value for i in items] == ["x", {"k": 1}, 3]
-        assert all(i.path is None for i in items)
+        assert [i.id for i in items] == [
+            "batches:0",
+            "batches:1",
+            "batches:2",
+        ]
+        assert [i.path.name for i in items] == [
+            "b.0.json",
+            "b.1.json",
+            "b.2.json",
+        ]
+        assert [i.read() for i in items] == ["x", {"k": 1}, 3]
 
     async def test_slots_are_zero_padded(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """11 elements pad every slot to the widest index's width."""
+        """11 elements pad every slot to the widest index's width, so the
+        items sort the same lexically and numerically.
+        """
         del horus_context
         artifact = JSONArtifact(id="batches", path=tmp_path / "b.json")
         artifact.write(list(range(11)))
 
         items = await artifact.items(LocalTarget())
 
-        assert items[0].slot == "00"
-        assert items[-1].slot == "10"
+        assert items[0].id == "batches:00"
+        assert items[-1].id == "batches:10"
 
     async def test_empty_list_yields_no_items(
         self, tmp_path: Path, horus_context: HorusContext
@@ -256,28 +285,6 @@ class TestJSONItems:
         artifact.write([])
 
         assert await artifact.items(LocalTarget()) == []
-
-    async def test_document_fetched_over_the_channel(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """On a remote-style target the JSON comes from the channel, not
-        from the local file: regression proof against the old local-only
-        ``read()`` behaviour.
-        """
-        del horus_context
-        # Decoy local content that must never be read.
-        local = tmp_path / "decoy.json"
-        local.write_text('["LOCAL"]')
-
-        target = _ChannelOnlyTarget()
-        remote = f"/remote{local.as_posix()}"
-        target.plant_file(remote, b'["a", "b"]')
-
-        artifact = JSONArtifact(id="batches", path=local)
-        items = await artifact.items(target)
-
-        assert [i.value for i in items] == ["a", "b"]
-        assert target.calls == [("get_file", remote)]
 
     async def test_non_list_document_raises(
         self, tmp_path: Path, horus_context: HorusContext
@@ -302,20 +309,3 @@ class TestJSONItems:
 
         with pytest.raises(ArtifactIterationError, match="valid JSON"):
             await artifact.items(LocalTarget())
-
-
-@pytest.mark.unit
-class TestArtifactItemShape:
-    """ArtifactItem carries exactly one of path/value."""
-
-    def test_defaults_are_none(self) -> None:
-        """A bare item has neither path nor value."""
-        item = ArtifactItem(slot="0")
-        assert item.path is None
-        assert item.value is None
-
-    def test_is_immutable(self) -> None:
-        """Items are frozen: consumers cannot repoint one in place."""
-        item = ArtifactItem(slot="0", path="/x")
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            item.path = "/y"  # type: ignore[misc]

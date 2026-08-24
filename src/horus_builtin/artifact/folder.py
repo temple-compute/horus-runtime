@@ -25,9 +25,10 @@ import shutil
 from pathlib import Path
 from typing import ClassVar
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.artifact.iterable import ArtifactItem, IterableArtifact
+from horus_runtime.core.artifact.iterable import IterableArtifact
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.i18n import tr as _
 
@@ -43,18 +44,20 @@ class FolderArtifact(BaseArtifact[Path], IterableArtifact):
         "A directory artifact containing multiple files."
     )
 
-    async def items(self, target: BaseTarget) -> list[ArtifactItem]:
+    async def items(self, target: BaseTarget) -> list[BaseArtifact]:
         """
-        One item per child of the folder, sorted by name; each item points
-        directly at the child's own on-target path (zero copying) and the
-        slot is the child's name.
+        One item per child of the folder, sorted by name.
 
-        Reads strictly through *target*'s channels, so enumeration works for
+        Each item points at the child's own path *on the target* (zero
+        copying), so a consumer can hand it straight to a task running there.
+        Read strictly through *target*'s channels, so enumeration works for
         remote targets too.
         """
         entries = await target.list_dir(target.path_on_target(self))
         return [
-            ArtifactItem(slot=entry.name, path=entry.path)
+            (FolderArtifact if entry.is_dir else FileArtifact)(
+                id=f"{self.id}:{entry.name}", path=Path(entry.path)
+            )
             for entry in sorted(entries, key=lambda e: e.name)
         ]
 
