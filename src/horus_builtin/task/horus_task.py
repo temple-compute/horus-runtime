@@ -66,8 +66,8 @@ class HorusTask(BaseTask):
 
     async def _run(self) -> None:
         """
-        For a HorusTask, nothing needs to be done here, as the command is
-        already specified in the runtime and will be executed by the executor.
+        Validate inputs, fingerprint them, delegate the actual work to
+        :meth:`_execute`, then record the fingerprint once it succeeds.
         """
         ctx = HorusContext.get_context()
 
@@ -98,12 +98,17 @@ class HorusTask(BaseTask):
         # un-rewritten state.
         fingerprint = await self._fingerprint() if self.outputs else None
 
-        # Execute the command using the executor
-        await self.executor.execute(self)
+        await self._execute()
 
         # Only a run that got this far may claim its outputs match its inputs.
         if fingerprint is not None:
             await self._write_manifest(fingerprint)
+
+    async def _execute(self) -> None:
+        """
+        The task's actual work: dispatch the runtime through the executor.
+        """
+        await self.executor.execute(self)
 
     def _manifest_path(self) -> str | None:
         """

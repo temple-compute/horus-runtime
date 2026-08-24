@@ -29,7 +29,6 @@ import yaml
 from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
-from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.number import NumberArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
@@ -542,67 +541,6 @@ class TestNestedSubworkflows:
         assert "outer/inner/report" in ids
         report = _inner(wf, "outer/inner/report")
         assert report.outputs[0].path.read_text().strip() == "DEEP"
-
-
-@pytest.mark.unit
-class TestSubworkflowAsMapTemplate:
-    """A subworkflow validates and expands as a ``map:`` template."""
-
-    async def test_mapped_subworkflow_runs_per_clone(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        Each map clone inlines its own copy of the body, with per-clone
-        paths, and the gather task fans in each clone's real output
-        rather than the never-written port placeholder.
-        """
-        del horus_context
-        emit = _shell_task(
-            "emit",
-            "mkdir -p $out && cp $idx $out/idx.json",
-            inputs=[FileArtifact(id="idx", path=Path("idx_in.json"))],
-            outputs=[FolderArtifact(id="out", path=Path("emit_out"))],
-        )
-        body = HorusWorkflow(
-            name="child",
-            tasks=[emit],
-            artifacts=[FileArtifact(id="idx", path=tmp_path / "idx.json")],
-            edges=[
-                WorkflowEdge(
-                    source="artifact-idx",
-                    source_output="idx",
-                    target="emit",
-                    target_input="idx",
-                )
-            ],
-        )
-        template = SubworkflowExpander(id="tpl", name="tpl", body=body)
-        gather = _shell_task(
-            "gather",
-            "true",
-            inputs=[FolderArtifact(id="results", path=Path("gather_in"))],
-            outputs=[FileArtifact(id="done", path=tmp_path / "done.txt")],
-        )
-        wf = _parent(tmp_path, tasks=[gather])
-        wf.map(
-            id="fan",
-            template=template,
-            range=2,
-            index_input="idx",
-            gather=("gather", "results"),
-        )
-
-        await wf.run(trigger_id="fan")
-
-        assert wf.status.value == "completed"
-        for i in range(2):
-            inner = _inner(wf, f"fan[{i}]/emit")
-            assert inner.status is TaskStatus.COMPLETED
-            assert (inner.outputs[0].path / "idx.json").read_text() == str(i)
-
-        gathered = _inner(wf, "gather").inputs[0].path
-        for i in range(2):
-            assert (gathered / str(i) / "idx.json").read_text() == str(i)
 
 
 @pytest.mark.unit

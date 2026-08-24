@@ -183,7 +183,8 @@ def package(workflow_yaml: Path, output: Path | None) -> None:
         click.echo(f"  + {rel}")
     for rel in skipped:
         # Usually a path a plugin pins into the run root when it expands
-        # (``map:`` does this), but it can also be a genuinely missing input.
+        # (subworkflow/loop do this), but it can also be a genuinely missing
+        # input.
         click.echo(f"  - {rel} " + _("(not found; assumed generated)"))
     click.echo(
         _("Wrote %(archive)s (%(count)d file(s))")

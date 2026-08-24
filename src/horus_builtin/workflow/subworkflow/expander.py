@@ -31,6 +31,7 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.declared_paths import _restore_declared_paths
 from horus_builtin.workflow.subworkflow.errors import SubworkflowError
 from horus_builtin.workflow.subworkflow.ports import (
     SubworkflowPort,
@@ -50,25 +51,6 @@ from horus_runtime.logging import horus_logger
 _ROOT_PREFIX = "artifact-"
 _ID_SEPARATOR = "/"
 _PORT_SUFFIX = ".port"
-
-
-def _restore_declared_paths(
-    entries: list[dict[str, Any]], artifacts: list[BaseArtifact]
-) -> None:
-    """
-    Undo the eager CWD resolution ``BaseArtifact`` applies at construction.
-
-    ``BaseArtifact.path`` is resolved to an absolute, CWD-anchored path the
-    moment the artifact is built, while the original (possibly relative)
-    value is kept separately on ``declared_path`` (excluded from
-    ``model_dump``). Dumping a body as-is would therefore bake in the
-    *parent's* process CWD instead of leaving relative paths for the run
-    directory to anchor. Restoring each artifact's ``declared_path`` onto
-    the dumped ``path`` makes the document say what its author wrote.
-    """
-    for entry, artifact in zip(entries, artifacts, strict=False):
-        if artifact.declared_path is not None:
-            entry["path"] = str(artifact.declared_path)
 
 
 class SubworkflowExpander(HorusTask):
@@ -117,10 +99,11 @@ class SubworkflowExpander(HorusTask):
         eagerly CWD-resolved ones ``BaseArtifact`` carries at runtime.
 
         This matters whenever a ``SubworkflowExpander`` is itself dumped and
-        reloaded elsewhere (``to_yaml``/``from_yaml``, or a ``MapExpander``
-        capturing this as its per-clone template): without it, a relative
-        artifact path would be baked in absolute and never re-anchored to
-        the eventual run directory. See :func:`_restore_declared_paths`.
+        reloaded elsewhere (``to_yaml``/``from_yaml``): without it, a
+        relative artifact path would be baked in absolute and never
+        re-anchored to the eventual run directory. See
+        :func:`~horus_builtin.workflow.declared_paths.
+        _restore_declared_paths`.
         """
         document = handler(body)
         _restore_declared_paths(
@@ -336,7 +319,7 @@ class SubworkflowExpander(HorusTask):
         Returns ``(mode, payload)``:
 
         - ``("pinned", path)`` when the port placeholder has been pinned to
-          an absolute path by an enclosing construct (a ``MapExpander``
+          an absolute path by an enclosing construct (a map task
           materializes each clone's slice directly rather than through an
           edge), in which case inner consumers are pointed straight at it;
         - ``("edges", parent_edges)`` when the parent feeds the port
@@ -457,7 +440,7 @@ class SubworkflowExpander(HorusTask):
             if port.task is None:
                 continue
             if _is_pinned(self.outputs, port.name):
-                # An enclosing construct (a MapExpander materializing this
+                # An enclosing construct (a map task materializing this
                 # clone's slot) has taken the port over and pinned the
                 # placeholder to the slot's absolute path. Point the real
                 # inner producer's output at that same path instead, so

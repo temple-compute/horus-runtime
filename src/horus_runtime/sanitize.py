@@ -45,7 +45,6 @@ from pathlib import Path
 
 import yaml
 
-from horus_builtin.workflow.map import MapExpander
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.workflow.base import BaseWorkflow
 
@@ -136,14 +135,6 @@ def find_root_inputs(
         (edge.target, edge.target_input)
         for edge in workflow.edges
         if edge.target_input is not None
-    }
-    # A map's fan-in input is wired by MapExpander at run time, not by a
-    # static edge, so it would otherwise look like an author-supplied root
-    # input and get promoted to one.
-    wired |= {
-        (task.gather_task, task.gather_input)
-        for task in workflow.tasks
-        if isinstance(task, MapExpander)
     }
     # Reuses the runtime's own produced-vs-external rule rather than
     # restating it here, so sanitizing can never drift from packaging.

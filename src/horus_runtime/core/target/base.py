@@ -25,7 +25,7 @@ import shlex
 import socket
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from pydantic import PrivateAttr
 
@@ -181,6 +181,22 @@ class BaseTarget(AutoRegistry, entry_point="target"):
                 _("No task is currently running on this target.")
             )
         return self._task
+
+    def idle_copy(self) -> "Self":
+        """
+        A copy of this target that is not running anything.
+
+        ``model_copy`` shallow-copies pydantic private attributes, so a plain
+        copy would start out pointing at this target's in-flight task and
+        future and look busy before it has run anything. Clearing them gives
+        the caller a genuinely idle extra slot on the same location -- a valid
+        one, since a copy shares this target's class and fields and so shares
+        its ``location_id`` (same filesystem, no artifact transfer needed).
+        """
+        copy = self.model_copy()
+        copy._task = None  # noqa: SLF001
+        copy._task_future = None  # noqa: SLF001
+        return copy
 
     def bind(self, task: "BaseTask") -> None:
         """Associate *task* with this target ahead of dispatch, so resource-

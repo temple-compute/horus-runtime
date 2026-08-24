@@ -70,6 +70,7 @@ local = "horus_builtin.target.local"
 
 [project.entry-points."horus.task"]
 horus_task = "horus_builtin.task.horus_task"
+horus_map = "horus_builtin.workflow.map"
 subworkflow = "horus_builtin.workflow.subworkflow.expander"
 
 [project.entry-points."horus.transfer"]

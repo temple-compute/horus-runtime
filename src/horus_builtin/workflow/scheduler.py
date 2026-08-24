@@ -39,8 +39,12 @@ from horus_builtin.workflow.dag import (
 from horus_runtime.context import HorusContext
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.status import SkipReason, TaskStatus
-from horus_runtime.core.workflow.base import BaseWorkflow, _EdgeSource
+from horus_runtime.core.task.status import (
+    TERMINAL_STATUSES,
+    SkipReason,
+    TaskStatus,
+)
+from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -98,14 +102,7 @@ class TargetPool:
 
         # Every idle instance (the declared target and any prior clones) is
         # currently in use: mint another clone as an extra slot.
-        clone = declared_target.model_copy()
-        # model_copy() shallow-copies pydantic private attributes, so the
-        # clone would otherwise start out pointing at the declared target's
-        # in-flight `_task_future` and look "busy" before it has run
-        # anything. Clear them so the clone starts genuinely idle.
-        clone._task = None  # noqa: SLF001
-        clone._task_future = None  # noqa: SLF001
-        return clone
+        return declared_target.idle_copy()
 
     def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
         """
@@ -117,21 +114,19 @@ class TargetPool:
             self._semaphore.release()
 
 
-async def _execute_ready_task(
+async def execute_task(
     workflow: BaseWorkflow,
     task: "BaseTask",
     *,
-    source_map: dict[tuple[str, str], _EdgeSource],
+    source_map: dict[tuple[str, str], EdgeSource],
     pool: TargetPool,
     placement: PlacementManager,
-    liveness: dict[str, bool],
 ) -> None:
     """
-    Run one ready task to completion: reserve placement, acquire a target,
-    bind, transfer inputs, dispatch, and wait — mirroring the per-task body
-    of the previous serial loop, but on whichever target the pool hands back
-    (the task's own declared target in the common case, or an idle clone
-    under contention).
+    Run one task to completion: reserve placement, acquire a target, bind,
+    transfer inputs, dispatch, and wait — on whichever target the pool hands
+    back (the task's own declared target in the common case, or an idle
+    clone under contention).
 
     ``placement.acquire`` waits until the task's declared target's location
     has room for ``task.resources`` (immediately, when the task or location
@@ -139,29 +134,11 @@ async def _execute_ready_task(
     resource-constrained fan-out can genuinely hold this coroutine here
     without ever occupying a pool slot.
 
-    A task on a branch that was not taken is skipped here and returns cleanly,
-    so the caller counts it as completed and the DAG moves on (exactly as a
-    memoized ``skip_if_complete`` task does). The check has to happen *before*
-    ``placement.acquire`` and the transfer below: an inactive task's inputs
-    were never produced, so transferring them would fail on any target where
-    transfer is not a no-op.
+    Shared by :func:`run_schedule`'s ready-set loop and by any composite task
+    that dispatches its own sub-tasks directly (e.g. a ``horus_map`` task
+    awaiting its clones), so both paths get identical placement, transfer,
+    dispatch and cancellation handling.
     """
-    if not await compute_liveness(workflow, task.id, liveness):
-        task.status = TaskStatus.SKIPPED
-        task.skip_reason = SkipReason.INACTIVE
-        message = _(
-            "Task %(task_name)s skipped: no incoming branch was taken."
-        ) % {"task_name": task.name}
-        horus_logger.log.debug(message)
-        HorusContext.get_context().bus.emit(
-            HorusTaskEvent(
-                task_id=task.id,
-                task_name=task.name,
-                message=message,
-            )
-        )
-        return
-
     declared_target = task.target
     location_id = declared_target.location_id
     await placement.acquire(task.name, location_id, task.resources)
@@ -226,6 +203,47 @@ async def _execute_ready_task(
         await placement.release(location_id, task.resources)
 
 
+async def _execute_ready_task(
+    workflow: BaseWorkflow,
+    task: "BaseTask",
+    *,
+    source_map: dict[tuple[str, str], EdgeSource],
+    pool: TargetPool,
+    placement: PlacementManager,
+    liveness: dict[str, bool],
+) -> None:
+    """
+    Gate one ready task on branch liveness, then run it via
+    :func:`execute_task`.
+
+    A task on a branch that was not taken is skipped here and returns
+    cleanly, so the caller counts it as completed and the DAG moves on
+    (exactly as a memoized ``skip_if_complete`` task does). The check has to
+    happen *before* placement/transfer: an inactive task's inputs were never
+    produced, so transferring them would fail on any target where transfer
+    is not a no-op.
+    """
+    if not await compute_liveness(workflow, task.id, liveness):
+        task.status = TaskStatus.SKIPPED
+        task.skip_reason = SkipReason.INACTIVE
+        message = _(
+            "Task %(task_name)s skipped: no incoming branch was taken."
+        ) % {"task_name": task.name}
+        horus_logger.log.debug(message)
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=task.id,
+                task_name=task.name,
+                message=message,
+            )
+        )
+        return
+
+    await execute_task(
+        workflow, task, source_map=source_map, pool=pool, placement=placement
+    )
+
+
 def _collect_completions(
     done: set[asyncio.Task[None]],
     running: dict[asyncio.Task[None], str],
@@ -281,6 +299,52 @@ def _dependencies_with_implicit(
     return deps
 
 
+def _dispatch_ready(
+    ready: list[str],
+    *,
+    workflow: BaseWorkflow,
+    tasks_by_id: dict[str, "BaseTask"],
+    initial_task_ids: set[str],
+    dispatched: set[str],
+    completed: set[str],
+    running: dict[asyncio.Task[None], str],
+    source_map: dict[tuple[str, str], EdgeSource],
+    pool: TargetPool,
+    placement: PlacementManager,
+    liveness: dict[str, bool],
+) -> None:
+    """
+    Dispatch every task in *ready*, mutating *dispatched*/*completed*/
+    *running* in place.
+
+    A task added mid-run (not in *initial_task_ids*) that is already in a
+    terminal status was already run by whoever created it (e.g. a
+    ``horus_map`` task's own dispatch of its clones, see
+    ``run_schedule``) -- count it done without a second, redundant
+    dispatch instead of creating a wrapper.
+    """
+    for task_id in ready:
+        task = tasks_by_id[task_id]
+        dispatched.add(task_id)
+        if (
+            task_id not in initial_task_ids
+            and task.status in TERMINAL_STATUSES
+        ):
+            completed.add(task_id)
+            continue
+        wrapper = asyncio.create_task(
+            _execute_ready_task(
+                workflow,
+                task,
+                source_map=source_map,
+                pool=pool,
+                placement=placement,
+                liveness=liveness,
+            )
+        )
+        running[wrapper] = task_id
+
+
 async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     """
     Execute *workflow* from *trigger_id* with a concurrent ready-set
@@ -321,6 +385,22 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
             % {"trigger_id": trigger_id}
         )
 
+    # Ids present before this call began. A composite task that registers
+    # its children in the DAG for visibility (e.g. a ``horus_map`` task's
+    # clones, added via ``expand()``) but still dispatches them itself
+    # makes each child reachable from two paths once its own gating
+    # dependency completes. A task added mid-run is, by construction, a
+    # brand-new object -- there is no way for it to carry a *stale*
+    # terminal status from an earlier call to this function, so if one
+    # shows up already terminal here it can only mean the composite task
+    # that created it already ran it, and the loop below skips redispatch.
+    # Tasks present from the start get no such benefit of the doubt: the
+    # same task object can be reused across repeated `wf.run()` calls (see
+    # ``TestSkipReasonDistinguishesCacheHit``), so status alone never says
+    # whether *this* run already handled it -- only `is_complete()` (inside
+    # `BaseTask.run()`) can decide that.
+    initial_task_ids = {task.id for task in workflow.tasks}
+
     # No edges means no dependencies: every task runs independently and the
     # plan is limited to the trigger's own (singleton) scope. Flag it so a
     # workflow that forgot to wire its edges is diagnosable.
@@ -334,12 +414,12 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         )
 
     pool = TargetPool(workflow.max_concurrency)
-    placement = PlacementManager(workflow.capacity)
+    placement = workflow.placement
 
     # The source map depends only on workflow structure. It is rebuilt only
     # when the workflow's revision advances (nothing bumps it yet, so this
     # effectively builds once, the first time it's needed).
-    source_map_cache: tuple[int, dict[tuple[str, str], _EdgeSource]] | None = (
+    source_map_cache: tuple[int, dict[tuple[str, str], EdgeSource]] | None = (
         None
     )
 
@@ -403,21 +483,26 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
 
         if ready:
             source_map_cache = workflow.cached_source_map(source_map_cache)
-            source_map = source_map_cache[1]
-            for task_id in ready:
-                task = tasks_by_id[task_id]
-                dispatched.add(task_id)
-                wrapper = asyncio.create_task(
-                    _execute_ready_task(
-                        workflow,
-                        task,
-                        source_map=source_map,
-                        pool=pool,
-                        placement=placement,
-                        liveness=liveness,
-                    )
-                )
-                running[wrapper] = task_id
+            _dispatch_ready(
+                ready,
+                workflow=workflow,
+                tasks_by_id=tasks_by_id,
+                initial_task_ids=initial_task_ids,
+                dispatched=dispatched,
+                completed=completed,
+                running=running,
+                source_map=source_map_cache[1],
+                pool=pool,
+                placement=placement,
+                liveness=liveness,
+            )
+
+        if not running:
+            # Every ready task this iteration was the terminal-status
+            # shortcut above -- nothing was actually dispatched, so there
+            # is nothing to await. Loop back and re-derive ready/scope from
+            # the completed set it just grew.
+            continue
 
         try:
             done, _pending = await asyncio.wait(

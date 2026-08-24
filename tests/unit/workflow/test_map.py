@@ -16,12 +16,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Unit tests for the declarative map / fan-out / fan-in construct: MapOver,
-MapExpander, the ``map:`` YAML lowering hook, and the ``wf.map(...)``
-Python builder.
+Unit tests for the ``horus_map`` task: MapTask, its port validation, and its
+fan-out behaviour as an ordinary DAG node.
 """
 
-import asyncio
 import shutil
 from pathlib import Path
 
@@ -36,77 +34,28 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
-from horus_builtin.workflow.dag import build_dependencies
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_builtin.workflow.map import (
-    MapConfigurationError,
-    MapExpander,
-    MapOver,
-    lower_map_entry,
-    map_task,
-)
+from horus_builtin.workflow.map import MapOver, MapTask
 from horus_runtime.context import HorusContext
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
-
-def _template_task(
-    *,
-    item_id: str = "batch",
-    output_id: str = "scored",
-    command: str = ("mkdir -p $scored && cp $batch/data.txt $scored/out.txt"),
-) -> HorusTask:
-    """A minimal, trivial-command template task for a collection map."""
-    return HorusTask(
-        id="template",
-        name="template",
-        runtime=CommandRuntime(command=command),
-        executor=ShellExecutor(),
-        target=LocalTarget(),
-        inputs=[FolderArtifact(id=item_id, path=Path("batch_in"))],
-        outputs=[FolderArtifact(id=output_id, path=Path("scored_out"))],
-    )
-
-
-def _range_template_task(
-    *,
-    index_id: str = "idx",
-    output_id: str = "scored",
-    command: str = "mkdir -p $scored && cp $idx $scored/idx.json",
-) -> HorusTask:
-    """A minimal, trivial-command template task for a range map."""
-    return HorusTask(
-        id="template",
-        name="template",
-        runtime=CommandRuntime(command=command),
-        executor=ShellExecutor(),
-        target=LocalTarget(),
-        inputs=[FileArtifact(id=index_id, path=Path("idx_in"))],
-        outputs=[FolderArtifact(id=output_id, path=Path("scored_out"))],
-    )
-
-
-def _gather_task(tmp_path: Path, *, input_id: str = "results") -> HorusTask:
-    """A minimal gather task with a single FolderArtifact fan-in input."""
-    return HorusTask(
-        id="gather",
-        name="gather",
-        runtime=CommandRuntime(command="true"),
-        executor=ShellExecutor(),
-        target=LocalTarget(),
-        inputs=[FolderArtifact(id=input_id, path=Path("gather_in"))],
-        outputs=[FileArtifact(id="done", path=tmp_path / "done.txt")],
-    )
+# The body sees the item under `over.as` (`batch`), the collection it came
+# from still under its own id (`batches`), and the folder output id (`scored`)
+# bound to its own slot directory.
+_BODY = "cp $batch $scored/result.txt"
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
-    """A task whose FolderArtifact output already has *names* children."""
+    """A task whose FolderArtifact output already has one file per name,
+    each holding its own name as content.
+    """
     batches = tmp_path / "batches"
+    batches.mkdir(parents=True, exist_ok=True)
     for name in names:
-        child = batches / name
-        child.mkdir(parents=True, exist_ok=True)
-        (child / "data.txt").write_text(name)
+        (batches / name).write_text(name)
     return HorusTask(
         id="split",
         name="split",
@@ -117,10 +66,9 @@ def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
     )
 
 
-def _json_split_task(tmp_path: Path, items: list[object]) -> HorusTask:
-    """A task whose JSON list output already contains *items*."""
-    path = tmp_path / "batches.json"
-    artifact = JSONArtifact(id="batches", path=path)
+def _json_split_task(tmp_path: Path, items: list[str]) -> HorusTask:
+    """A task whose JSON-list output already contains *items*."""
+    artifact = JSONArtifact(id="batches", path=tmp_path / "batches.json")
     artifact.write(items)
     return HorusTask(
         id="split",
@@ -132,1150 +80,604 @@ def _json_split_task(tmp_path: Path, items: list[object]) -> HorusTask:
     )
 
 
+def _map_task(
+    *,
+    over_artifact: BaseArtifact,
+    command: str = _BODY,
+    output_path: str = "scored_out",
+    extra_inputs: list[FileArtifact] | None = None,
+    max_concurrency: int | None = None,
+) -> MapTask:
+    """A ``horus_map`` task running *command* once per item."""
+    return MapTask(
+        id="score",
+        name="score",
+        over=MapOver(input_id=over_artifact.id, item_id="batch"),
+        runtime=CommandRuntime(command=command),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[over_artifact, *(extra_inputs or [])],
+        outputs=[FolderArtifact(id="scored", path=Path(output_path))],
+        max_concurrency=max_concurrency,
+    )
+
+
+def _wire(
+    tmp_path: Path,
+    *,
+    split: HorusTask,
+    map_task: MapTask,
+    extra_tasks: list[HorusTask] | None = None,
+    extra_edges: list[WorkflowEdge] | None = None,
+    artifacts: list[BaseArtifact] | None = None,
+) -> HorusWorkflow:
+    """Wire *split* -> *map_task* with an ordinary, real edge."""
+    return HorusWorkflow(
+        name="wf",
+        tasks=[split, map_task, *(extra_tasks or [])],
+        artifacts=artifacts or [],
+        edges=[
+            WorkflowEdge(
+                source=split.id,
+                source_output=split.outputs[0].id,
+                target=map_task.id,
+                target_input=map_task.over.input_id,
+            ),
+            *(extra_edges or []),
+        ],
+        orchestrator_target=LocalTarget(working_directory=tmp_path.as_posix()),
+    )
+
+
 @pytest.mark.unit
-class TestMapOver:
-    """MapOver enforces collection-mode xor range-mode."""
+class TestFolderFanOut:
+    """Fan-out over a FolderArtifact source: one numbered slot per child,
+    in sorted-by-name order.
+    """
 
-    def test_collection_mode_valid(self) -> None:
-        """All three collection fields together, no range: valid."""
-        over = MapOver(
-            source_task="split", source_output="batches", item_input="batch"
-        )
-        assert not over.is_range
-
-    def test_range_mode_valid(self) -> None:
-        """Range alone, no collection fields: valid."""
-        over = MapOver(range=3, index_input="idx")
-        assert over.is_range
-
-    def test_range_with_collection_fields_raises(self) -> None:
-        """Range combined with any collection field is rejected."""
-        with pytest.raises(ValueError, match="cannot combine"):
-            MapOver(source_task="split", range=3)
-
-    def test_partial_collection_fields_raises(self) -> None:
-        """Only some collection fields set, no range: rejected."""
-        with pytest.raises(ValueError, match="requires"):
-            MapOver(source_task="split", source_output="batches")
-
-    def test_neither_mode_raises(self) -> None:
-        """Neither range nor collection fields set: rejected."""
-        with pytest.raises(ValueError, match="requires"):
-            MapOver()
-
-
-@pytest.mark.unit
-class TestCollectionMapEndToEnd:
-    """Fan-out over a FolderArtifact collection, then fan-in."""
-
-    async def test_three_item_folder_fans_out_and_gathers(
+    async def test_three_files_fan_out_into_numbered_slots(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """
-        3-item folder source -> 3 deterministically-id'd clones, each
-        writing its sliced output; gather runs after all three and its
-        ``.gathered/`` folder has subdirs 0/1/2.
-        """
+        """Each child file becomes its own slot, in name order."""
         del horus_context
-        split = _split_task(tmp_path, ["a", "b", "c"])
-        gather = _gather_task(tmp_path)
-
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
             ),
         )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
 
         await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
-        clone_ids = [t.id for t in wf.tasks if t.id.startswith("score[")]
-        assert clone_ids == ["score[0]", "score[1]", "score[2]"]
-        for task in wf.tasks:
-            assert task.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
 
-        gathered = tmp_path / "score.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == [
-            "0",
-            "1",
-            "2",
-        ]
-        for i in range(3):
-            out = gathered / str(i) / "out.txt"
-            assert out.exists()
-
-    async def test_json_list_source_fans_out(
+    async def test_downstream_task_consumes_the_folder_output(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """A JSON-list collection fans out one clone per element, in
-        list order.
+        """The map's declared folder output is an ordinary output any
+        downstream task can consume via a normal edge -- gathering the
+        fan-out is just another node on the canvas.
         """
         del horus_context
-        split = _json_split_task(tmp_path, ["x", "y"])
-        gather = _gather_task(tmp_path)
-
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
             ),
         )
-        template = HorusTask(
-            id="template",
-            name="template",
-            runtime=CommandRuntime(
-                command="mkdir -p $scored && cp $item $scored/item.json"
-            ),
+        analysis = HorusTask(
+            id="analysis",
+            name="analysis",
+            runtime=CommandRuntime(command="cat $scored/*/result.txt > $rep"),
             executor=ShellExecutor(),
             target=LocalTarget(),
-            inputs=[FileArtifact(id="item", path=Path("item_in"))],
-            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+            inputs=[FolderArtifact(id="scored", path=Path("scored_in"))],
+            outputs=[FileArtifact(id="rep", path=tmp_path / "report.txt")],
         )
-        wf.map(
-            id="score",
-            template=template,
-            over=("split", "batches", "item"),
-            gather=("gather", "results"),
-        )
-
-        await wf.run(trigger_id="split")
-
-        assert wf.status.value == "completed"
-        gathered = tmp_path / "score.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
-
-    async def test_gather_wired_to_trigger_still_waits_for_expander(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        A gather task that is reachable from the trigger by something other
-        than the clones still runs *after* the expander.
-
-        The gather task's other tests leave it edge-isolated, so it only
-        enters the scheduler's trigger-reachable scope once expansion wires
-        the clone edges. Wire it to the trigger directly and it is in scope
-        from the start -- without the expander -> gather ordering edge it is
-        dispatched alongside the expander and its unpinned fan-in input is
-        mistaken for a root input.
-        """
-        del horus_context
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        gather.inputs.append(FolderArtifact(id="seed", path=Path("seed_in")))
-
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            edges=[
+        wf = _wire(
+            tmp_path,
+            split=split,
+            map_task=map_task,
+            extra_tasks=[analysis],
+            extra_edges=[
                 WorkflowEdge(
-                    source="split",
-                    source_output="batches",
-                    target="gather",
-                    target_input="seed",
+                    source="score",
+                    source_output="scored",
+                    target="analysis",
+                    target_input="scored",
                 )
             ],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
         )
 
         await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
-        gathered = tmp_path / "score.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+        assert (tmp_path / "report.txt").read_text() == "a.txtb.txt"
 
-    async def test_file_output_lands_inside_its_clone_directory(
+    async def test_clones_are_registered_as_ordinary_dag_tasks(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """
-        A clone whose output is a *file* still gets its own ``{i}/`` directory,
-        with the file inside it under its declared name.
-
-        Pinning the file at ``{i}`` itself made ``{i}`` a file, so a gather
-        task walking per-clone subdirectories (the layout this module
-        documents) found none and silently produced an empty result instead of
-        failing.
+        """Clones land in ``wf.tasks`` (via ``expand()``), each with its own
+        id, ordered after the map by an artifact-less edge, so a live
+        dashboard, a workflow dump, or a resumed run all see them like any
+        other task.
         """
         del horus_context
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
             ),
         )
-        wf.map(
-            id="score",
-            template=HorusTask(
-                id="template",
-                name="template",
-                runtime=CommandRuntime(command="cp $batch/data.txt $scored"),
-                executor=ShellExecutor(),
-                target=LocalTarget(),
-                inputs=[FolderArtifact(id="batch", path=Path("batch_in"))],
-                outputs=[FileArtifact(id="scored", path=Path("score.txt"))],
-            ),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
 
         await wf.run(trigger_id="split")
 
-        assert wf.status.value == "completed"
-        gathered = tmp_path / "score.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
-        for i, name in enumerate(("a", "b")):
-            clone_dir = gathered / str(i)
-            assert clone_dir.is_dir()
-            assert (clone_dir / "score.txt").read_text() == name
-
-    async def test_rerun_from_an_already_expanded_snapshot(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        Re-running a workflow *from its own post-run snapshot* re-derives the
-        same clone set rather than colliding with it.
-
-        The resume tests below deliberately start from a fresh workflow
-        object, so nothing covered the shape tc-os actually runs: it PATCHes
-        the whole live workflow back onto the run record (clones included) and
-        freezes the next run from that snapshot, so the expander re-expands on
-        top of its own previous output.
-        """
-        del horus_context
-        split = _split_task(tmp_path, ["a", "b", "c"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-        await wf.run(trigger_id="split")
-        assert wf.status.value == "completed"
-
-        # The round trip a run snapshot makes through the API.
-        resumed = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
-        await resumed.run(trigger_id="split")
-
-        assert resumed.status.value == "completed"
-        clone_ids = [t.id for t in resumed.tasks if t.id.startswith("score[")]
-        assert clone_ids == ["score[0]", "score[1]", "score[2]"]
+        clone_ids = {"score[0]", "score[1]"}
+        clones = [t for t in wf.tasks if t.id in clone_ids]
+        assert {c.id for c in clones} == clone_ids
+        assert all(c.kind == "horus_task" for c in clones)
+        assert all(c.status == TaskStatus.COMPLETED for c in clones)
+        assert {
+            (e.source, e.target) for e in wf.edges if e.target in clone_ids
+        } == {("score", "score[0]"), ("score", "score[1]")}
 
 
 @pytest.mark.unit
-class TestRangeMapEndToEnd:
-    """Fan-out over an integer range, with no upstream source task."""
+class TestCollectionStaysAddressable:
+    """The item is a new artifact under ``over.as``, so the collection it
+    came from is still addressable in the body under its own id.
+    """
 
-    async def test_range_fans_out_and_gathers(
+    async def test_body_reads_both_the_item_and_the_collection(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """range=3 with no source task -> 3 clones, gathered 0/1/2."""
+        """Every clone sees its own item and the whole collection."""
         del horus_context
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                "cp $batch $scored/result.txt && "
+                "ls $batches | wc -l | tr -d ' ' > $scored/total.txt"
             ),
         )
-        wf.map(
-            id="rmap",
-            template=_range_template_task(),
-            range=3,
-            index_input="idx",
-            gather=("gather", "results"),
-        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
 
-        await wf.run(trigger_id="rmap")
+        await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
-        clone_ids = sorted(t.id for t in wf.tasks if t.id.startswith("rmap["))
-        assert clone_ids == ["rmap[0]", "rmap[1]", "rmap[2]"]
-        gathered = tmp_path / "rmap.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == [
-            "0",
-            "1",
-            "2",
-        ]
-
-    async def test_range_fans_out_with_file_output_keeps_filename(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        A non-folder (FileArtifact) clone output keeps its declared
-        filename under the ``{i}/`` slot dir, rather than collapsing to a
-        bare file named ``0``/``1``/``2`` (the w03-loop-map regression).
-        """
-        del horus_context
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        template = HorusTask(
-            id="template",
-            name="template",
-            runtime=CommandRuntime(command="echo $idx > $square"),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            inputs=[FileArtifact(id="idx", path=Path("idx_in"))],
-            outputs=[FileArtifact(id="square", path=Path("square.txt"))],
-        )
-        wf.map(
-            id="rmap",
-            template=template,
-            range=3,
-            index_input="idx",
-            gather=("gather", "results"),
-        )
-
-        await wf.run(trigger_id="rmap")
-
-        assert wf.status.value == "completed"
-        gathered = tmp_path / "rmap.gathered"
-        for i in range(3):
-            assert (gathered / str(i) / "square.txt").exists()
+        scored = tmp_path / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+            assert (scored / str(slot) / "total.txt").read_text() == "3\n"
 
 
 @pytest.mark.unit
-class TestPartialCompletion:
-    """A partially completed map resumes: done clones are skipped."""
+class TestListFanOut:
+    """Fan-out over a JSON list source: one slot per element, zero-padded
+    by index.
+    """
 
-    async def test_pre_created_clone_output_is_skipped(
+    async def test_two_element_list_fans_out(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A 2-element list yields slots "0" and "1"."""
+        del horus_context
+        split = _json_split_task(tmp_path, ["x", "y"])
+        map_task = _map_task(
+            over_artifact=JSONArtifact(
+                id="batches", path=Path("batches_in.json")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+        assert (scored / "0" / "result.txt").read_text() == '"x"'
+        assert (scored / "1" / "result.txt").read_text() == '"y"'
+
+    async def test_slot_index_is_zero_padded_to_the_widest_index(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """11 elements (max index 10, two digits) pad every slot to width 2,
+        so the slots sort the same lexically and numerically.
+        """
+        del horus_context
+        split = _json_split_task(tmp_path, [f"v{i}" for i in range(11)])
+        map_task = _map_task(
+            over_artifact=JSONArtifact(
+                id="batches", path=Path("batches_in.json")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        slots = sorted(p.name for p in scored.iterdir())
+        assert len(slots) == 11
+        assert slots[0] == "00"
+        assert slots[-1] == "10"
+        assert (scored / "00" / "result.txt").read_text() == '"v0"'
+        assert (scored / "10" / "result.txt").read_text() == '"v10"'
+
+
+@pytest.mark.unit
+class TestSharedInput:
+    """An input declared on the map itself, other than ``over``, is shared
+    verbatim by every clone.
+    """
+
+    async def test_static_root_artifact_reaches_every_clone_unchanged(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Every clone reads the exact same shared file."""
+        del horus_context
+        (tmp_path / "receptor.txt").write_text("RECEPTOR")
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command="cat $batch $receptor > $scored/result.txt",
+            extra_inputs=[
+                FileArtifact(id="receptor", path=Path("receptor_in"))
+            ],
+        )
+        wf = _wire(
+            tmp_path,
+            split=split,
+            map_task=map_task,
+            artifacts=[
+                FileArtifact(id="receptor", path=tmp_path / "receptor.txt")
+            ],
+            extra_edges=[
+                WorkflowEdge(
+                    source="artifact-receptor",
+                    source_output="receptor",
+                    target="score",
+                    target_input="receptor",
+                )
+            ],
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt")):
+            content = (scored / str(slot) / "result.txt").read_text()
+            assert content == f"{name}RECEPTOR"
+
+
+@pytest.mark.unit
+class TestEmptyCollection:
+    """An empty collection is a valid, trivial map."""
+
+    async def test_empty_folder_completes_with_an_empty_output(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Zero children -> zero clones, an empty (but existing) output
+        folder, and the map still reports completed.
+        """
+        del horus_context
+        split = _split_task(tmp_path, [])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        assert scored.is_dir()
+        assert list(scored.iterdir()) == []
+
+
+@pytest.mark.unit
+class TestPartialResume:
+    """Once the map itself decides to re-run, each clone's own
+    ``skip_if_complete`` still governs it individually.
+    """
+
+    async def test_only_the_invalidated_slot_reruns(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
         """
-        Clone 1 is left complete from a prior run (output *and* recorded
-        input manifest); re-running with a *fresh* workflow object re-derives
-        the same clone set but skips clone 1 while the others run.
+        A FolderArtifact output's completeness is existence-only, so
+        deleting one slot alone does not invalidate the map's own record;
+        this also removes the map's manifest to force a fresh check (e.g.
+        what a user asking for a rerun would do). Slots whose own output
+        and manifest are untouched are then skipped -- proven here by
+        poisoning their content and confirming it survives -- while the
+        genuinely incomplete slot is rebuilt from real input.
         """
         del horus_context
 
         def _build() -> HorusWorkflow:
-            wf = HorusWorkflow(
-                name="wf",
-                tasks=[
-                    _split_task(tmp_path, ["a", "b", "c"]),
-                    _gather_task(tmp_path),
-                ],
-                orchestrator_target=LocalTarget(
-                    working_directory=tmp_path.as_posix()
+            split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
                 ),
             )
-            wf.map(
-                id="score",
-                template=_template_task(),
-                over=("split", "batches", "batch"),
-                gather=("gather", "results"),
-            )
-            return wf
+            return _wire(tmp_path, split=split, map_task=map_task)
 
-        # A full prior run, with everything but clone 1's leftovers removed:
-        # an output on its own no longer proves a clone is complete, only an
-        # output plus the manifest recorded alongside it does.
         await _build().run(trigger_id="split")
-        for i in (0, 2):
-            shutil.rmtree(tmp_path / "score.gathered" / str(i))
-            (tmp_path / ".horus" / f"score[{i}].json").unlink()
+
+        scored = tmp_path / "scored_out"
+        for slot in ("0", "2"):
+            (scored / slot / "result.txt").write_text("STALE")
+        shutil.rmtree(scored / "1")
+        (tmp_path / ".horus" / "score[1].json").unlink()
+        (tmp_path / ".horus" / "score.json").unlink()
 
         wf = _build()
         await wf.run(trigger_id="split")
 
-        statuses = {t.id: t.status for t in wf.tasks}
-        assert statuses["score[0]"] == TaskStatus.COMPLETED
-        assert statuses["score[1]"] == TaskStatus.SKIPPED
-        assert statuses["score[2]"] == TaskStatus.COMPLETED
         assert wf.status.value == "completed"
+        assert (scored / "0" / "result.txt").read_text() == "STALE"
+        assert (scored / "2" / "result.txt").read_text() == "STALE"
+        assert (scored / "1" / "result.txt").read_text() == "b.txt"
 
-    async def test_forced_expander_reruns_completed_clones(
+    async def test_an_unchanged_map_is_skipped_whole(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """
-        Forcing a re-run on the expander (as the CLI's ``--no-skip-all`` /
-        ``--no-skip`` does by flipping the static task's
-        ``skip_if_complete``) must propagate to the clones it materializes
-        at runtime, so an already-complete clone re-runs instead of being
-        skipped.
+        """The map memoizes like any other task: with its own manifest
+        intact and its inputs unchanged, it never re-expands at all.
         """
         del horus_context
-        # Pre-create clone 1's deterministic output, as in the skip test.
-        gathered_1 = tmp_path / "score.gathered" / "1"
-        gathered_1.mkdir(parents=True)
-        (gathered_1 / "out.txt").write_text("already done")
 
-        split = _split_task(tmp_path, ["a", "b", "c"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
 
-        # Mimic the CLI's --no-skip-all: force the expander to re-run. The
-        # clones do not exist yet, so this must reach them when they are built.
-        expander = next(t for t in wf.tasks if t.id == "score")
-        expander.skip_if_complete = False
+        await _build().run(trigger_id="split")
 
+        wf = _build()
         await wf.run(trigger_id="split")
 
-        statuses = {t.id: t.status for t in wf.tasks}
-        assert statuses["score[0]"] == TaskStatus.COMPLETED
-        # Without the fix this clone is SKIPPED despite the forced re-run.
-        assert statuses["score[1]"] == TaskStatus.COMPLETED
-        assert statuses["score[2]"] == TaskStatus.COMPLETED
-        assert wf.status.value == "completed"
-
-
-@pytest.mark.unit
-class TestFanInOrdering:
-    """Gather does not start until every clone has completed."""
-
-    async def test_gather_waits_for_all_clones(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        While the (deliberately slow) clones are still running, gather is
-        still IDLE; once the run finishes, gather has run after them.
-        """
-        del horus_context
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        slow_template = _template_task(
-            command=(
-                "sleep 0.3 && mkdir -p $scored && "
-                "cp $batch/data.txt $scored/out.txt"
-            )
-        )
-        wf.map(
-            id="score",
-            template=slow_template,
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-
-        run = asyncio.create_task(wf.run(trigger_id="split"))
-        await asyncio.sleep(0.1)
-
-        # Clones should be under way but gather must not have started yet.
-        gather_task = next(t for t in wf.tasks if t.id == "gather")
-        status_before: TaskStatus = gather_task.status
-        assert status_before == TaskStatus.IDLE
-
-        await run
-
-        status_after: TaskStatus = gather_task.status
-        assert status_after == TaskStatus.COMPLETED
-        clone_statuses = [
-            t.status for t in wf.tasks if t.id.startswith("score[")
-        ]
-        assert all(s == TaskStatus.COMPLETED for s in clone_statuses)
-
-    async def test_clone_to_gather_edges_are_real_dependencies(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        The clone -> gather edges created by ``expand()`` are ordinary
-        task-to-task dependencies (not just decorative), so the
-        scheduler's dependency graph makes gather depend on every clone
-        once the map has run.
-        """
-        del horus_context
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-
-        await wf.run(trigger_id="split")
-
-        deps = build_dependencies(wf.tasks, wf.edges)
-        clone_ids = {t.id for t in wf.tasks if t.id.startswith("score[")}
-        assert clone_ids
-        assert clone_ids <= deps["gather"]
-
-
-@pytest.mark.unit
-class TestYamlLowering:
-    """The ``map:`` YAML block lowers to a map_expander task + edge."""
-
-    def test_lower_collection_entry(self) -> None:
-        """Collection-mode ``map:`` lowers to a map_expander dict with an
-        input placeholder and a construction-time ordering edge.
-        """
-        entry = {
-            "id": "score",
-            "map": {
-                "over": {
-                    "source_task": "split",
-                    "source_output": "batches",
-                    "item_input": "batch",
-                },
-                "template": {"kind": "horus_task"},
-                "gather": {"task": "gather", "input": "results"},
-            },
-        }
-        expander, edges = lower_map_entry(entry)
-
-        assert expander["kind"] == "map_expander"
-        assert expander["id"] == "score"
-        assert expander["over"]["source_task"] == "split"
-        assert expander["over"]["range"] is None
-        assert expander["gather_task"] == "gather"
-        assert expander["gather_input"] == "results"
-        assert len(expander["inputs"]) == 1
-        assert expander["inputs"][0]["id"] == "batches"
-
-        assert edges == [
-            {
-                "source": "split",
-                "source_output": "batches",
-                "target": "score",
-                "target_input": "batches",
-                "transfer": False,
-            },
-            {
-                "source": "score",
-                "source_output": "score.fanout",
-                "target": "gather",
-                "target_input": "results",
-                "transfer": False,
-            },
-        ]
-
-    def test_lower_range_entry(self) -> None:
-        """Range-mode ``map:`` lowers with no source edge and no placeholder
-        input -- only the expander -> gather ordering edge.
-        """
-        entry = {
-            "id": "rmap",
-            "map": {
-                "range": 5,
-                "index_input": "idx",
-                "template": {"kind": "horus_task"},
-                "gather": {"task": "gather", "input": "results"},
-            },
-        }
-        expander, edges = lower_map_entry(entry)
-
-        assert expander["over"]["range"] == 5
-        assert expander["over"]["index_input"] == "idx"
-        assert expander["inputs"] == []
-        assert edges == [
-            {
-                "source": "rmap",
-                "source_output": "rmap.fanout",
-                "target": "gather",
-                "target_input": "results",
-                "transfer": False,
-            }
-        ]
-
-    def test_lower_entry_missing_gather_raises(self) -> None:
-        """A ``map:`` block missing ``gather`` raises a typed error naming
-        the offending task, not a bare ``KeyError``.
-        """
-        entry = {
-            "id": "score",
-            "map": {"range": 2, "index_input": "i", "template": {}},
-        }
-        with pytest.raises(MapConfigurationError, match="'score'"):
-            lower_map_entry(entry)
-
-    def test_lower_entry_missing_template_raises(self) -> None:
-        """A ``map:`` block missing ``template`` raises a typed error
-        naming the offending task.
-        """
-        entry = {
-            "id": "score",
-            "map": {
-                "range": 2,
-                "index_input": "i",
-                "gather": {"task": "gather", "input": "results"},
-            },
-        }
-        with pytest.raises(MapConfigurationError, match="'score'"):
-            lower_map_entry(entry)
-
-    def test_lower_entry_missing_gather_task_raises(self) -> None:
-        """A ``gather`` block missing ``task`` raises a typed error naming
-        the offending task.
-        """
-        entry = {
-            "id": "score",
-            "map": {
-                "range": 2,
-                "index_input": "i",
-                "template": {},
-                "gather": {"input": "results"},
-            },
-        }
-        with pytest.raises(MapConfigurationError, match="'score'"):
-            lower_map_entry(entry)
-
-    def test_lower_entry_missing_gather_input_raises(self) -> None:
-        """A ``gather`` block missing ``input`` raises a typed error naming
-        the offending task.
-        """
-        entry = {
-            "id": "score",
-            "map": {
-                "range": 2,
-                "index_input": "i",
-                "template": {},
-                "gather": {"task": "gather"},
-            },
-        }
-        with pytest.raises(MapConfigurationError, match="'score'"):
-            lower_map_entry(entry)
-
-    def test_lower_entry_missing_id_raises(self) -> None:
-        """A ``map:`` entry missing ``id`` raises a typed error rather than
-        a bare ``KeyError``.
-        """
-        entry = {
-            "map": {
-                "range": 2,
-                "index_input": "i",
-                "template": {},
-                "gather": {"task": "gather", "input": "results"},
-            }
-        }
-        with pytest.raises(MapConfigurationError, match="'id'"):
-            lower_map_entry(entry)
-
-    def test_malformed_map_block_raises_validation_error(self) -> None:
-        """A malformed ``map:`` block surfaces as a ``ValidationError``
-        naming the offending task when loaded through a workflow, not a
-        bare ``KeyError``.
-
-        This is the exact reproduction from the downstream tc-os incident:
-        a queued validation request that raised a raw ``KeyError`` here hung
-        the whole consumer loop until restart, because ``KeyError`` never
-        reaches pydantic's ``ValidationError`` handler.
-        """
-        with pytest.raises(ValidationError, match="'a'") as exc_info:
-            BaseWorkflow.model_validate(
-                {
-                    "kind": "horus_workflow",
-                    "name": "x",
-                    "tasks": [
-                        {
-                            "kind": "horus_task",
-                            "id": "a",
-                            "map": {
-                                "range": 2,
-                                "index_input": "i",
-                                "template": {},
-                            },
-                        }
-                    ],
-                }
-            )
-        assert not isinstance(exc_info.value, KeyError)
-
-    def test_yaml_workflow_loads_and_runs(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """A full YAML workflow with a ``map:`` block loads via
-        BaseWorkflow.from_yaml and runs to completion.
-        """
-        del horus_context
-        batches = tmp_path / "batches"
-        for name in ("a", "b"):
-            (batches / name).mkdir(parents=True)
-            (batches / name / "data.txt").write_text(name)
-
-        wf_yaml = {
-            "name": "map_yaml",
-            "kind": "horus_workflow",
-            "tasks": [
-                {
-                    "id": "split",
-                    "name": "split",
-                    "kind": "horus_task",
-                    "runtime": {"kind": "command", "command": "true"},
-                    "executor": {"kind": "shell"},
-                    "target": {"kind": "local"},
-                    "outputs": [
-                        {
-                            "id": "batches",
-                            "kind": "folder",
-                            "path": str(batches),
-                        }
-                    ],
-                },
-                {
-                    "id": "score",
-                    "map": {
-                        "over": {
-                            "source_task": "split",
-                            "source_output": "batches",
-                            "item_input": "batch",
-                        },
-                        "template": {
-                            "kind": "horus_task",
-                            "runtime": {
-                                "kind": "command",
-                                "command": (
-                                    "mkdir -p $scored && "
-                                    "cp $batch/data.txt $scored/out.txt"
-                                ),
-                            },
-                            "executor": {"kind": "shell"},
-                            "target": {"kind": "local"},
-                            "inputs": [
-                                {
-                                    "id": "batch",
-                                    "kind": "folder",
-                                    "path": "batch_in",
-                                }
-                            ],
-                            "outputs": [
-                                {
-                                    "id": "scored",
-                                    "kind": "folder",
-                                    "path": "scored_out",
-                                }
-                            ],
-                        },
-                        "gather": {"task": "gather", "input": "results"},
-                    },
-                },
-                {
-                    "id": "gather",
-                    "name": "gather",
-                    "kind": "horus_task",
-                    "runtime": {"kind": "command", "command": "true"},
-                    "executor": {"kind": "shell"},
-                    "target": {"kind": "local"},
-                    "inputs": [
-                        {
-                            "id": "results",
-                            "kind": "folder",
-                            "path": "gather_in",
-                        }
-                    ],
-                    "outputs": [
-                        {
-                            "id": "done",
-                            "kind": "file",
-                            "path": "done.txt",
-                        }
-                    ],
-                },
-            ],
-        }
-        wf_path = tmp_path / "wf.yaml"
-        with wf_path.open("w") as fh:
-            yaml.safe_dump(wf_yaml, fh)
-
-        wf = BaseWorkflow.from_yaml(wf_path)
-        assert isinstance(wf, HorusWorkflow)
         score = next(t for t in wf.tasks if t.id == "score")
-        assert isinstance(score, MapExpander)
-        wf.orchestrator_target = LocalTarget(
-            working_directory=tmp_path.as_posix()
-        )
+        assert score.status == TaskStatus.SKIPPED
+        assert [t.id for t in wf.tasks if t.id.startswith("score[")] == []
 
-        asyncio.run(wf.run(trigger_id="split"))
+
+@pytest.mark.unit
+class TestSkipPropagation:
+    """Forcing the map's own ``skip_if_complete`` off propagates to every
+    clone (mirrors the CLI's ``--no-skip-all``/``--no-skip``).
+    """
+
+    async def test_forced_rerun_reaches_every_already_complete_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """With skip_if_complete forced False, no clone is skipped even
+        though every slot is already complete.
+        """
+        del horus_context
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
+
+        await _build().run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        for slot in ("0", "1"):
+            (scored / slot / "result.txt").write_text("STALE")
+
+        wf = _build()
+        score = next(t for t in wf.tasks if t.id == "score")
+        score.skip_if_complete = False
+        await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
-        gathered = tmp_path / "score.gathered"
-        assert sorted(p.name for p in gathered.iterdir()) == ["0", "1"]
+        for slot_to_use, name in enumerate(("a.txt", "b.txt")):
+            assert (
+                scored / str(slot_to_use) / "result.txt"
+            ).read_text() == name
 
-    def test_yaml_to_yaml_round_trip(self, tmp_path: Path) -> None:
-        """to_yaml -> from_yaml round-trips a map workflow: the second
-        load sees the already-lowered map_expander natively (no ``map:``
-        block survives the dump), with the same task ids/kinds.
+
+@pytest.mark.unit
+class TestCloneFailure:
+    """A clone failure fails the map as a whole."""
+
+    async def test_a_failing_clone_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The map's own status ends up FAILED when any clone fails."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command="exit 1",
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "failed"
+
+
+@pytest.mark.unit
+class TestConcurrency:
+    """``max_concurrency`` bounds how many clones run at once."""
+
+    async def test_max_concurrency_one_serializes_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """With max_concurrency=1, no clone's window overlaps another's."""
+        del horus_context
+        log = tmp_path / "log.txt"
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                f"n=$(basename $batch); echo start-$n >> {log} && "
+                f"sleep 0.05 && echo end-$n >> {log} && "
+                "cp $batch $scored/result.txt"
+            ),
+            max_concurrency=1,
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        lines = log.read_text().splitlines()
+        assert len(lines) == 6
+        for i in range(0, len(lines), 2):
+            assert lines[i].startswith("start-")
+            name = lines[i].removeprefix("start-")
+            assert lines[i + 1] == f"end-{name}"
+
+
+@pytest.mark.unit
+class TestMapPorts:
+    """Port wiring is validated at load time, not mid-run."""
+
+    def test_over_names_unknown_input(self) -> None:
+        """``over.input_id`` must name one of this task's own inputs."""
+        with pytest.raises(ValidationError, match="not found"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="missing", item_id="batch"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+            )
+
+    def test_over_names_a_non_iterable_input(self) -> None:
+        """``over.input_id`` must name an input that can enumerate itself."""
+        with pytest.raises(ValidationError, match="not iterable"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="batches", item_id="batch"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FileArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+            )
+
+    def test_output_must_be_a_single_folder(self) -> None:
+        """The one declared output is the folder the slots live in."""
+        with pytest.raises(ValidationError, match="must be a folder"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="batches", item_id="batch"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[FileArtifact(id="scored", path=Path("scored.txt"))],
+            )
+
+    def test_item_id_collides_with_a_declared_port(self) -> None:
+        """``over.as`` names a new artifact, so it must be a free id."""
+        with pytest.raises(ValidationError, match="already the id"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="batches", item_id="batches"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
+            )
+
+    def test_exactly_one_output(self) -> None:
+        """Two outputs have no unambiguous slot root."""
+        with pytest.raises(ValidationError, match="exactly one output"):
+            MapTask(
+                id="score",
+                name="score",
+                over=MapOver(input_id="batches", item_id="batch"),
+                runtime=CommandRuntime(command=_BODY),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[FolderArtifact(id="batches", path=Path("batches_in"))],
+                outputs=[
+                    FolderArtifact(id="scored", path=Path("scored_out")),
+                    FolderArtifact(id="other", path=Path("other_out")),
+                ],
+            )
+
+
+@pytest.mark.unit
+class TestRoundTrip:
+    """A map is an ordinary task document: to_yaml/from_yaml preserves it
+    and the reloaded workflow reruns cleanly.
+    """
+
+    async def test_yaml_round_trip_reruns(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Dumped after a run, reloaded, and re-run (skipped via its
+        manifest, since nothing changed).
         """
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
             ),
         )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
 
         out_path = tmp_path / "dump.yaml"
         wf.to_yaml(out_path)
 
         dumped = yaml.safe_load(out_path.read_text())
         score_dict = next(t for t in dumped["tasks"] if t["id"] == "score")
-        assert "map" not in score_dict
-        assert score_dict["kind"] == "map_expander"
+        assert score_dict["kind"] == "horus_map"
+        assert score_dict["over"]["input_id"] == "batches"
+        assert score_dict["runtime"]["command"] == _BODY
 
         wf2 = BaseWorkflow.from_yaml(out_path)
         assert isinstance(wf2, HorusWorkflow)
-        assert {t.id for t in wf2.tasks} == {"split", "score", "gather"}
         score2 = next(t for t in wf2.tasks if t.id == "score")
-        assert isinstance(score2, MapExpander)
-        assert score2.over.source_task == "split"
-        assert score2.gather_task == "gather"
-        assert score2.gather_input == "results"
+        assert isinstance(score2, MapTask)
+        assert score2.over.input_id == "batches"
+        assert score2.over.item_id == "batch"
 
-
-@pytest.mark.unit
-class TestPythonBuilderParity:
-    """wf.map(...) and the equivalent YAML map: block agree structurally."""
-
-    def test_python_builder_matches_yaml_lowering_shape(
-        self, tmp_path: Path
-    ) -> None:
-        """Building the same map via wf.map(...) and via lower_map_entry
-        yields the same over/gather wiring and construction-time edge.
-        """
-        split = _split_task(tmp_path, ["a", "b"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(name="wf", tasks=[split, gather])
-
-        expander = wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-
-        entry = {
-            "id": "score",
-            "map": {
-                "over": {
-                    "source_task": "split",
-                    "source_output": "batches",
-                    "item_input": "batch",
-                },
-                "template": {"kind": "horus_task"},
-                "gather": {"task": "gather", "input": "results"},
-            },
-        }
-        yaml_expander, yaml_edges = lower_map_entry(entry)
-        yaml_over = yaml_expander["over"]
-
-        assert expander.over.source_task == yaml_over["source_task"]
-        assert expander.over.source_output == yaml_over["source_output"]
-        assert expander.over.item_input == yaml_over["item_input"]
-        assert expander.gather_task == yaml_expander["gather_task"]
-        assert expander.gather_input == yaml_expander["gather_input"]
-
-        construction_edge = next(e for e in wf.edges if e.target == "score")
-        assert (construction_edge.source, construction_edge.source_output) == (
-            yaml_edges[0]["source"],
-            yaml_edges[0]["source_output"],
-        )
-        assert construction_edge.transfer is False
-        assert yaml_edges[0]["transfer"] is False
-
-    def test_map_task_requires_exactly_one_of_over_or_range(self) -> None:
-        """Neither over nor range: rejected."""
-        wf = HorusWorkflow(name="wf")
-        with pytest.raises(MapConfigurationError):
-            map_task(
-                wf,
-                id="score",
-                template=_template_task(),
-                gather=("gather", "results"),
-            )
-
-    def test_map_task_rejects_both_over_and_range(self) -> None:
-        """Both over and range: rejected."""
-        wf = HorusWorkflow(name="wf")
-        with pytest.raises(MapConfigurationError):
-            map_task(
-                wf,
-                id="score",
-                template=_template_task(),
-                over=("split", "batches", "batch"),
-                range=3,
-                gather=("gather", "results"),
-            )
-
-
-@pytest.mark.unit
-class TestMapExpanderErrors:
-    """MapExpander._run raises clear errors for common misconfigurations."""
-
-    async def test_missing_orchestrator_target_raises(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """
-        No orchestrator_target set: a range map (no source-collection
-        input, so the generic root-input transfer check never fires first)
-        raises MapConfigurationError from the expander's own guard.
-        """
-        del horus_context
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(name="wf", tasks=[gather])
-        wf.orchestrator_target = None
-        wf.map(
-            id="rmap",
-            template=_range_template_task(),
-            range=3,
-            index_input="idx",
-            gather=("gather", "results"),
-        )
-        with pytest.raises(MapConfigurationError):
-            await wf.run(trigger_id="rmap")
-
-    async def test_unknown_source_task_raises(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """over.source_task not present in the workflow: raises."""
-        del horus_context
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        expander = MapExpander(
-            id="score",
-            name="score",
-            over=MapOver(
-                source_task="missing",
-                source_output="batches",
-                item_input="batch",
-            ),
-            template=_template_task().model_dump(mode="json"),
-            gather_task="gather",
-            gather_input="results",
-            inputs=[FolderArtifact(id="batches", path=Path("marker"))],
-        )
-        wf.tasks.append(expander)
-        with pytest.raises(MapConfigurationError):
-            await wf.run(trigger_id="score")
-
-    async def test_missing_gather_task_raises(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """gather_task not present in the workflow: raises."""
-        del horus_context
-        split = _split_task(tmp_path, ["a"])
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("missing_gather", "results"),
-        )
-        with pytest.raises(MapConfigurationError):
-            await wf.run(trigger_id="split")
-
-    async def test_template_with_wrong_output_count_raises(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """A template declaring zero or multiple outputs is rejected once
-        clones are being built.
-        """
-        del horus_context
-        split = _split_task(tmp_path, ["a"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        bad_template = HorusTask(
-            id="template",
-            name="template",
-            runtime=CommandRuntime(command="true"),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            inputs=[FolderArtifact(id="batch", path=Path("batch_in"))],
-            outputs=[],
-        )
-        wf.map(
-            id="score",
-            template=bad_template,
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-        with pytest.raises(MapConfigurationError):
-            await wf.run(trigger_id="split")
-
-    async def test_non_list_json_source_raises(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """A JSON source that isn't a list is rejected."""
-        del horus_context
-        artifact = JSONArtifact(id="batches", path=tmp_path / "b.json")
-        artifact.write({"not": "a list"})
-        split = HorusTask(
-            id="split",
-            name="split",
-            runtime=CommandRuntime(command="true"),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            outputs=[artifact],
-        )
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        template = HorusTask(
-            id="template",
-            name="template",
-            runtime=CommandRuntime(command="true"),
-            executor=ShellExecutor(),
-            target=LocalTarget(),
-            inputs=[FileArtifact(id="item", path=Path("item_in"))],
-            outputs=[FolderArtifact(id="scored", path=Path("scored_out"))],
-        )
-        wf.map(
-            id="score",
-            template=template,
-            over=("split", "batches", "item"),
-            gather=("gather", "results"),
-        )
-        with pytest.raises(MapConfigurationError):
-            await wf.run(trigger_id="split")
-
-
-@pytest.mark.unit
-class TestCopyFolderCrossFilesystem:
-    """MapExpander._copy_folder's tar pack/unpack branch (cross-target)."""
-
-    async def test_cross_filesystem_copy_round_trips_contents(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """Two targets with different location_id still get a correct
-        copy, via the tar pack/unpack fallback.
-        """
-        del horus_context
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
-        (src_dir / "file.txt").write_text("hello")
-        dst_dir = tmp_path / "dst"
-
-        class _OtherTarget(LocalTarget):
-            add_to_registry = False
-
-            @property
-            def location_id(self) -> str:
-                return "other://location"
-
-        src_target = LocalTarget(working_directory=str(tmp_path))
-        dst_target = _OtherTarget(working_directory=str(tmp_path))
-
-        await MapExpander._copy_folder(
-            src_target, str(src_dir), dst_target, dst_dir
-        )
-
-        assert (dst_dir / "file.txt").read_text() == "hello"
-
-        # Re-copying (rmtree + fresh copytree) stays correct too.
-        shutil.rmtree(dst_dir)
-        await MapExpander._copy_folder(
-            src_target, str(src_dir), dst_target, dst_dir
-        )
-        assert (dst_dir / "file.txt").read_text() == "hello"
-
-
-@pytest.mark.unit
-class TestMapExpanderReset:
-    """MapExpander._reset clears the run counter and the (never-written)
-    wiring marker.
-    """
-
-    async def test_reset_clears_runs(
-        self, tmp_path: Path, horus_context: HorusContext
-    ) -> None:
-        """After a run, reset() sets runs back to 0 and status to IDLE."""
-        del horus_context
-        split = _split_task(tmp_path, ["a"])
-        gather = _gather_task(tmp_path)
-        wf = HorusWorkflow(
-            name="wf",
-            tasks=[split, gather],
-            orchestrator_target=LocalTarget(
-                working_directory=tmp_path.as_posix()
-            ),
-        )
-        wf.map(
-            id="score",
-            template=_template_task(),
-            over=("split", "batches", "batch"),
-            gather=("gather", "results"),
-        )
-        await wf.run(trigger_id="split")
-
-        expander = next(t for t in wf.tasks if t.id == "score")
-        assert expander.runs == 1
-        await expander.reset()
-        assert expander.runs == 0
-        assert expander.status == TaskStatus.IDLE
+        await wf2.run(trigger_id="split")
+        assert wf2.status.value == "completed"

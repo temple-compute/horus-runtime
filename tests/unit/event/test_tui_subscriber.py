@@ -19,9 +19,12 @@
 Unit tests for the live workflow TUI subscriber.
 """
 
+from pathlib import Path
+
 import pytest
 from rich.console import Console
 
+from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.event.tui_subscriber import WorkflowTUISubscriber
 from horus_builtin.executor.shell import ShellExecutor
@@ -121,9 +124,9 @@ class TestWorkflowTUISubscriber:
         """
         Tasks added after ``track()`` count towards the total.
 
-        A ``map:``/``sub:`` expander only adds its clones once it runs, so a
-        scope planned before the run reported ``1/1 tasks`` for a five-clone
-        loop map.
+        A ``loop:``/``sub:`` expander only adds its injected tasks once it
+        runs, so a scope planned before the run reported ``1/1 tasks`` for a
+        multi-iteration loop.
         """
         wf = _workflow()
         wf.edges.append(WorkflowEdge(source="a", target="b"))
@@ -151,3 +154,63 @@ class TestWorkflowTUISubscriber:
     def test_setup_is_noop(self) -> None:
         """setup() is a no-op and must not raise."""
         WorkflowTUISubscriber().setup()
+
+    def test_fanout_children_render_before_the_real_successor(self) -> None:
+        """A task's own fan-out (wired by an ordering-only, transfer=False
+        edge -- e.g. a horus_map's clones, appended at the end of
+        ``workflow.tasks`` by ``expand()``) lists right after it, ahead of
+        a genuine downstream consumer reached by a real data edge -- not
+        wherever the raw task list happens to put it.
+        """
+        tasks: list[BaseTask] = [
+            HorusTask(
+                id="map",
+                name="Map",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                outputs=[FileArtifact(id="scaled", path=Path("scaled.json"))],
+            ),
+            HorusTask(
+                id="report",
+                name="Report",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                inputs=[
+                    FileArtifact(id="scaled", path=Path("scaled_in.json"))
+                ],
+            ),
+            *(
+                HorusTask(
+                    id=tid,
+                    name=name,
+                    runtime=CommandRuntime(command="true"),
+                    executor=ShellExecutor(),
+                )
+                for tid, name in (("clone0", "Clone 0"), ("clone1", "Clone 1"))
+            ),
+        ]
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=tasks,
+            edges=[
+                WorkflowEdge(
+                    source="map",
+                    source_output="scaled",
+                    target="report",
+                    target_input="scaled",
+                ),
+                WorkflowEdge(source="map", target="clone0", transfer=False),
+                WorkflowEdge(source="map", target="clone1", transfer=False),
+            ],
+        )
+
+        tui = WorkflowTUISubscriber()
+        tui.track(wf)
+
+        console = Console(record=True, width=120)
+        console.print(tui.render())
+        out = console.export_text()
+
+        assert (
+            out.index("Clone 0") < out.index("Clone 1") < out.index("Report")
+        )

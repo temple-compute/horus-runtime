@@ -46,6 +46,52 @@ managed by the runtime — don't set them.
 Compatibility is checked at load: the `executor` must list the `runtime`'s type in
 its `runtimes` (e.g. `shell` ↔ `command`), else `IncompatibleRuntimeError`.
 
+## Map task
+
+`kind: horus_map` runs its OWN body once per item of a collection
+(`src/horus_builtin/workflow/map.py`). It is an ordinary DAG node: edges wire
+its inputs/outputs like any other task's.
+
+```yaml
+- kind: horus_map
+  id: dock                # required; unique; the DAG node key
+  name: Dock every ligand # required; human-readable
+  over:                   # required; what to iterate and what to call each item
+    input_id: ligands     #   id of THIS task's own input holding the collection
+    as: ligand            #   id the per-item artifact is created under
+  max_concurrency: 2      # optional; upper bound on clones dispatched at once
+  inputs:
+    - {kind: folder, id: ligands, path: ligands_in}   # the `over` collection...
+    - {kind: file, id: receptor, path: rec.pdbqt}     # ...plus shared inputs
+  outputs:
+    - {kind: folder, id: complexes, path: complexes}  # required; exactly one folder
+  runtime:                # the per-item body, run once per item
+    kind: command
+    command: "dock $ligand $receptor > $complexes/complex.pdb"
+  executor: {kind: shell}
+```
+
+Iteration contract: the `over.input_id` input must be an `IterableArtifact`
+(`core/artifact/iterable.py`), and `items()` returns real artifacts. `folder`
+iterates its children sorted by name (each child's own on-target path, zero
+copy); `json` iterates its parsed list, writing one single-element JSON
+artifact per index into a `<stem>.items` directory next to the parent.
+
+Each clone carries every input the map declares, plus ONE new artifact under
+`over.as` holding its item, and the folder output rebound to that clone's own
+slot directory. So the body is written as if it handled a single element while
+the collection stays addressable: `$ligand` is one ligand, `$ligands` is the
+whole collection, `$complexes` is this clone's directory. `over.as` must not
+collide with a declared input or output id (validated at load). Slots are
+zero-padded indices; clone ids are `<id>[<slot>]`, registered in the DAG via
+`expand()` and ordered after the map by an artifact-less edge. Clones inherit
+the map's runtime/executor/target/resources (deep-copied) and run as plain
+`horus_task`s.
+
+The map only fans out. Producing the collection is whatever upstream task
+writes the iterable artifact; folding the slots back into one value is
+whatever downstream task consumes the folder output.
+
 ## Artifact
 
 Artifacts appear in a task's `inputs`/`outputs` or as workflow-level root

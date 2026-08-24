@@ -53,7 +53,7 @@ decision needs the callable.
 Why the sentinel is always re-derived
 ---------------------------------------
 :meth:`BranchRouter.is_complete` is permanently ``False``, mirroring
-:class:`~horus_builtin.workflow.map.MapExpander`: a stale sentinel from an
+:class:`~horus_builtin.workflow.loop.LoopController`: a stale sentinel from an
 earlier run would silently pin a resumed run to the old branch, so the router
 re-runs and re-decides deterministically. The tasks on the branches it selects
 are ordinary tasks and are still skipped individually by the usual
@@ -168,8 +168,8 @@ class BranchRouter(HorusTask):
         Append the sentinel output if not already present (idempotent, so
         re-loading an already-dumped router does not duplicate it).
 
-        Unlike :class:`~horus_builtin.workflow.map.MapExpander`'s wiring
-        marker, this one is really written: it is the whole interface between
+        Unlike :class:`~horus_builtin.workflow.loop.LoopController`'s wiring
+        markers, this one is really written: it is the whole interface between
         the router and the declarative conditions on its outgoing edges.
         """
         output_id = self.routes_output_id
@@ -381,10 +381,11 @@ def branch_task(
     Append a switch-style branch to *wf*: a router task plus one gated edge
     per route.
 
-    Mirrors :func:`~horus_builtin.workflow.map.map_task`'s ergonomics. Unlike
-    map and loop there is no YAML block to lower from, because the declarative
-    form a router lowers *to* is already the YAML authoring form: hand-write
-    the conditions on the edges and no router is needed at all.
+    Mirrors :func:`~horus_builtin.workflow.loop.loop_task`'s ergonomics.
+    Unlike loop there is no YAML block to lower from, because the
+    declarative form a router lowers *to* is already the YAML authoring
+    form: hand-write the conditions on the edges and no router is needed at
+    all.
 
     Args:
         wf: The workflow to append to.
