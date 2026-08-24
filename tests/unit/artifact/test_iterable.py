@@ -242,7 +242,7 @@ class TestJSONItems:
     async def test_items_against_local_target(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """Index-named artifacts, materialized next to the parent."""
+        """Index-named artifacts, materialized in one sibling directory."""
         del horus_context
         artifact = JSONArtifact(id="batches", path=tmp_path / "b.json")
         artifact.write(["x", {"k": 1}, 3])
@@ -254,10 +254,10 @@ class TestJSONItems:
             "batches:1",
             "batches:2",
         ]
-        assert [i.path.name for i in items] == [
-            "b.0.json",
-            "b.1.json",
-            "b.2.json",
+        assert [i.path.relative_to(tmp_path).as_posix() for i in items] == [
+            "b.items/0.json",
+            "b.items/1.json",
+            "b.items/2.json",
         ]
         assert [i.read() for i in items] == ["x", {"k": 1}, 3]
 

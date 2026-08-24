@@ -47,8 +47,9 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T], IterableArtifact):
     async def items(self, target: BaseTarget) -> list[BaseArtifact]:
         """
         One item per element of the JSON list this artifact holds: a new
-        single-element ``JSONArtifact`` written next to this one, so a
-        consumer gets a real artifact it can pass to a task.
+        single-element ``JSONArtifact`` written into a ``<stem>.items``
+        directory next to this one, so a consumer gets a real artifact it
+        can pass to a task.
 
         Raises:
             ArtifactIterationError: When the target-side document is not
@@ -79,13 +80,15 @@ class JSONArtifact[T: Any = Any](BaseArtifact[T], IterableArtifact):
                 % {"id": self.id, "type": type(values).__name__}
             )
 
+        # One sibling directory rather than N loose files: a large list would
+        # otherwise bury the declared artifacts it sits next to.
+        items_dir = self.path.with_name(f"{self.path.stem}.items")
         width = max(1, len(str(len(values) - 1)))
         artifacts: list[BaseArtifact] = []
         for index, element in enumerate(values):
             slot = f"{index:0{width}d}"
             item = JSONArtifact(
-                id=f"{self.id}:{slot}",
-                path=self.path.with_name(f"{self.path.stem}.{slot}.json"),
+                id=f"{self.id}:{slot}", path=items_dir / f"{slot}.json"
             )
             item.write(element)
             artifacts.append(item)
