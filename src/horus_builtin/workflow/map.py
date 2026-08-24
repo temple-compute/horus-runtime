@@ -202,7 +202,11 @@ class MapTask(HorusTask):
         self, slot: str, item: BaseArtifact, slot_root: Path
     ) -> HorusTask:
         """
-        Clone independent task instances for each item of the collection.
+        One independent clone of this task for *slot*, bound to *item* and
+        rooted at *slot_root*.
+
+        A clone is a plain :class:`~horus_builtin.task.horus_task.HorusTask`,
+        so it runs the body instead of mapping over it again.
         """
         # The item stands in for the collection under the very same input id,
         # so `$<over>` in the body renders the item's own on-target path and
@@ -228,8 +232,23 @@ class MapTask(HorusTask):
         output.path = slot_root
         output.declared_path = slot_root
 
-        # Exclude fields specifically overriden in the clone.
-        exclude_fields = {"id", "name", "inputs", "outputs", "target"}
+        # Excluded from the dump: what the clone sets for itself, the
+        # map-only fields (keeping `kind: horus_map` would make a stored
+        # clone reload as a MapTask with no `over`), and this run's state.
+        exclude_fields = {
+            "id",
+            "name",
+            "inputs",
+            "outputs",
+            "target",
+            "kind",
+            "over",
+            "max_concurrency",
+            "side_artifacts",
+            "status",
+            "skip_reason",
+            "runs",
+        }
 
         return HorusTask(
             **self.model_dump(exclude=exclude_fields),
