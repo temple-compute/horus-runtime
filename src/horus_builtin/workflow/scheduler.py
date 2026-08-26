@@ -53,6 +53,16 @@ if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
 
 
+DEFAULT_MAX_CONCURRENCY = 8
+"""
+Fan-out cap applied when a workflow or ``horus_map`` task leaves
+``max_concurrency`` unset. A DAG (or map input) with no cap of its own
+dispatches every ready task/clone as its own subprocess at once, which can
+over-subscribe a modest host; this keeps that failure mode opt-in-only
+(explicitly pass a larger ``max_concurrency`` to raise it).
+"""
+
+
 class TargetPool:
     """
     Hands out an idle target for each dispatched task, giving otherwise
@@ -79,22 +89,21 @@ class TargetPool:
         # id(declared_target). Lazily seeded with the declared target itself
         # on first acquisition (see `acquire`).
         self._idle: dict[int, list[BaseTarget]] = {}
-        self._semaphore = (
-            asyncio.Semaphore(max_concurrency)
+        self._semaphore = asyncio.Semaphore(
+            max_concurrency
             if max_concurrency is not None
-            else None
+            else DEFAULT_MAX_CONCURRENCY
         )
 
     async def acquire(self, declared_target: BaseTarget) -> BaseTarget:
         """
         Return an idle target equivalent to *declared_target*.
 
-        Blocks on the ``max_concurrency`` semaphore (if set) before handing
-        out a target, so the cap applies to genuinely concurrent dispatches
-        rather than just to distinct target instances.
+        Blocks on the ``max_concurrency`` semaphore before handing out a
+        target, so the cap applies to genuinely concurrent dispatches rather
+        than just to distinct target instances.
         """
-        if self._semaphore is not None:
-            await self._semaphore.acquire()
+        await self._semaphore.acquire()
 
         idle = self._idle.setdefault(id(declared_target), [declared_target])
         if idle:
@@ -110,8 +119,7 @@ class TargetPool:
         *declared_target*) to the idle pool.
         """
         self._idle[id(declared_target)].append(target)
-        if self._semaphore is not None:
-            self._semaphore.release()
+        self._semaphore.release()
 
 
 async def execute_task(
@@ -354,7 +362,8 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     ``BaseTask.is_complete``, applied inside ``BaseTask.run``). Every task
     whose dependencies are already satisfied is dispatched immediately and
     concurrently with any other ready task, bounded by
-    ``workflow.max_concurrency`` when set.
+    ``workflow.max_concurrency`` (or :data:`DEFAULT_MAX_CONCURRENCY` when
+    unset).
 
     ``workflow.failure_policy`` controls what happens once a task fails:
 
