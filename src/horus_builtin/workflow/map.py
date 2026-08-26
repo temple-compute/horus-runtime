@@ -216,8 +216,13 @@ class MapTask(HorusTask):
                     )
                 )
 
-        for clone in clones:
-            self.side_artifacts.extend(clone.side_artifacts)
+        # Deliberately NOT merging the clones' side artifacts into this
+        # task's own list: each clone's upload middleware registers them
+        # under the clone's own task id, and a re-upload here (same artifact
+        # ids, different task) would repoint every reference at this map,
+        # erasing the per-clone attribution the UI's clone browser reads.
+        # The aggregate view is the backend's job: listing a task's side
+        # products includes those of its `id[slot]` descendants.
 
         horus_logger.log.debug(
             _("Map task '%(id)s' ran %(n)d clone(s).")
@@ -273,7 +278,7 @@ class MapTask(HorusTask):
             "runs",
         }
 
-        return HorusTask(
+        clone = HorusTask(
             **self.model_dump(exclude=exclude_fields),
             id=f"{self.id}[{slot}]",
             name=f"{self.name}[{slot}]",
@@ -281,3 +286,14 @@ class MapTask(HorusTask):
             outputs=[output],
             target=self.target.idle_copy(),
         )
+
+        # Register this clone's item as a side artifact, so the upload
+        # middleware persists it to S3 under the clone's own task id and the
+        # UI can inspect exactly what this one run of the body received. The
+        # item is an input transfer, not an output of the body, so without
+        # this it would never be uploaded at all.
+        clone.side_artifacts.append(
+            item.model_copy(update={"id": f"{clone.id}_item"})
+        )
+
+        return clone
