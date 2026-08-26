@@ -681,3 +681,61 @@ class TestRoundTrip:
 
         await wf2.run(trigger_id="split")
         assert wf2.status.value == "completed"
+
+
+@pytest.mark.unit
+class TestCloneSideArtifacts:
+    """Per-clone side-artifact attribution: each clone owns what it
+    produced (its item, its log), and the map does not re-register any of
+    it under its own id -- re-uploading the same artifact ids with a
+    different task id would repoint the references and erase the per-clone
+    attribution the UI's clone browser reads.
+    """
+
+    async def test_each_clone_registers_its_item_as_a_side_artifact(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The item a clone received is uploaded under the clone's own id,
+        so what each run of the body got from the map is inspectable.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        for slot, name in enumerate(("a.txt", "b.txt")):
+            clone = next(t for t in wf.tasks if t.id == f"score[{slot}]")
+            item_id = f"score[{slot}]_item"
+            items = [a for a in clone.side_artifacts if a.id == item_id]
+            assert len(items) == 1
+            assert items[0].path.name == name
+
+    async def test_the_map_does_not_merge_clone_side_artifacts(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Nothing produced by a clone is re-registered under the map's
+        id: the map's own side-artifact list stays free of `score[...]`
+        entries, so the upload pass cannot repoint the clones' refs.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert not [
+            a for a in map_task.side_artifacts if a.id.startswith("score[")
+        ]
