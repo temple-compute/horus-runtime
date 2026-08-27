@@ -32,6 +32,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_builtin.workflow.scheduler import DEFAULT_MAX_CONCURRENCY
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import (
@@ -279,6 +280,58 @@ class TestConcurrentReadySet:
             await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
 
         assert state["max_seen"] == 1
+
+    async def test_unset_max_concurrency_still_caps_a_wide_fanout(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        With ``max_concurrency`` left unset, a fan-out wider than
+        ``DEFAULT_MAX_CONCURRENCY`` never has more than that many siblings
+        RUNNING at once (it's not truly unbounded), but more than one still
+        runs at a time (it's not serialized to 1 either).
+        """
+        del horus_context
+        state = {"current": 0, "max_seen": 0}
+
+        class ConcurrencyTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                state["current"] += 1
+                state["max_seen"] = max(state["max_seen"], state["current"])
+                await asyncio.sleep(0.01)
+                state["current"] -= 1
+
+        root = _task(
+            "root",
+            tmp_path=tmp_path,
+            task_cls=ConcurrencyTask,
+            outputs=[FileArtifact(id="root_out", path=tmp_path / "root.out")],
+        )
+        children = [
+            _task(
+                f"child{i}",
+                tmp_path=tmp_path,
+                task_cls=ConcurrencyTask,
+                inputs=[FileArtifact(id="in", path=tmp_path / "root.out")],
+            )
+            for i in range(DEFAULT_MAX_CONCURRENCY + 4)
+        ]
+
+        wf = HorusWorkflow(
+            name="wide_fanout_unset_concurrency",
+            tasks=[root, *children],
+            edges=[
+                _edge("root", "root_out", child.id, "in") for child in children
+            ],
+        )
+
+        with patch.object(
+            HorusWorkflow, "transfer_artifacts", new=AsyncMock()
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert 1 < state["max_seen"] <= DEFAULT_MAX_CONCURRENCY
 
     async def test_failure_cancels_concurrent_sibling_and_stops_downstream(
         self, tmp_path: Path, horus_context: HorusContext
