@@ -1,0 +1,33 @@
+name: Horus Runtime
+
+icon: https://avatars.githubusercontent.com/u/243013656?v=4
+
+headline: Reproducible scientific workflows, from your laptop to the HPC cluster.
+
+description: >
+  Horus Runtime is the open-source engine behind the Temple Compute platform.
+  You describe a pipeline once, in YAML or Python, and run it wherever the
+  compute lives. It tracks every artifact a task produces, moves those
+  artifacts between machines for you, and skips work that is already done
+  when you run it again. Targets, runtimes, executors, artifacts, tasks,
+  transfer strategies, and middleware are all pluggable, registered as
+  `horus.*` entry points.
+
+language: Python
+
+documentation:
+  general: https://docs.templecompute.com
+  installation: https://docs.templecompute.com
+  tutorial: https://docs.templecompute.com
+
+execution_environment:
+  interfaces:
+    - CLI
+    - Python API
+    - YAML
+  resource_managers:
+    - local
+    - SLURM
+  transfer_protocols:
+    - local
+    - SSH
