@@ -34,6 +34,8 @@ description: >
 
 language: Python
 
+website: https://templecompute.com
+
 documentation:
   general: https://docs.templecompute.com
   installation: https://docs.templecompute.com/guides/installation
