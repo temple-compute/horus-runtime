@@ -67,13 +67,11 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
 
     def local_files(self) -> list[Path]:
         """
-        Local files this runtime reads from the orchestrator, so a change
-        to one invalidates the task that runs it. Empty by default.
+        Local files this runtime reads from the orchestrator, digested
+        into the task fingerprint. Empty by default.
 
-        Mirrors :meth:`anchor_local_paths`: whatever that resolves is what
-        this returns. A runtime that carries its code inline, or that names
-        an artifact rather than a file, owns no local file and returns
-        nothing.
+        Mirrors :meth:`anchor_local_paths`: whatever that resolves is
+        what this returns.
         """
         return []
 

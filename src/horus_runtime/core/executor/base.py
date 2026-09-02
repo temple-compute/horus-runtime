@@ -135,13 +135,11 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
 
     def local_files(self) -> list[Path]:
         """
-        Local files this executor reads from the orchestrator, so a change
-        to one invalidates the tasks that use it. Empty by default.
+        Local files this executor reads from the orchestrator, digested
+        into the task fingerprint. Empty by default.
 
-        Mirrors :meth:`BaseRuntime.local_files`, for the same reason as the
-        anchoring above: an executor pointing at a conda
-        ``environment_file`` next to the workflow describes an environment,
-        and editing that file changes the environment.
+        Mirrors :meth:`BaseRuntime.local_files`; a conda
+        ``environment_file`` is the case this exists for.
         """
         return []
 

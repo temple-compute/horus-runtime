@@ -41,8 +41,7 @@ _UNHASHABLE = "unhashable"
 
 def _digest_file(path: Path) -> str:
     """
-    sha256 of a file on the machine running the orchestrator, read in
-    chunks so a large one does not have to fit in memory.
+    sha256 of a local file, read in chunks.
     """
     sha = hashlib.sha256()
     with path.open("rb") as handle:
@@ -166,18 +165,11 @@ class HorusTask(BaseTask):
 
     def _local_file_digests(self) -> list[list[str]]:
         """
-        ``[name, sha256]`` for every local file the runtime and executor
-        own, sorted, so the same set hashes the same way twice.
+        Sorted ``[name, sha256]`` for the runtime's and executor's local
+        files, so the same set hashes the same way twice.
 
-        Keyed by file name rather than full path, so this adds no new
-        path dependence. Note the fingerprint is already path-dependent
-        without it: ``runtime.model_dump()`` carries the script's
-        absolute path, so moving a workflow directory already
-        invalidates every task that runs a script.
-
-        A file that has gone missing is skipped rather than raising. It
-        drops out of the set, which changes the hash, which re-runs the
-        task, which is what a missing script deserves.
+        Keyed by name, not path, to add no new path dependence. A missing
+        file is skipped: it drops out of the set, so the task re-runs.
         """
         digests: list[list[str]] = []
         for path in [

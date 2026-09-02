@@ -83,11 +83,8 @@ class PythonScriptRuntime(CommandRuntime):
 
     def local_files(self) -> list[Path]:
         """
-        The script, unless it is templated.
-
-        A templated script names an input artifact rather than a file on
-        this machine, and that artifact's digest is already in the
-        fingerprint through the task's inputs.
+        The script, unless it is templated: a templated script names an
+        input artifact, already digested through the task's inputs.
         """
         if _is_template(self.script):
             return []
