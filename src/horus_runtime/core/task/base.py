@@ -267,10 +267,12 @@ class BaseTask(AutoRegistry, entry_point="task"):
         Subclasses must implement ``_run()`` instead of overriding this method.
         Status is driven entirely here:
 
-        - ``SKIPPED``   — set when ``skip_if_complete`` is true and outputs
-                          exist (returns early)
-        - ``RUNNING``   — set on entry when not skipped
-        - ``COMPLETED`` — set on clean exit
+        - ``SKIPPED``     — set when ``skip_if_complete`` is true and outputs
+                            exist (returns early)
+        - ``CONFIGURING`` — set on entry when not skipped; the executor flips
+                            this to ``RUNNING`` once its own work starts (see
+                            ``BaseExecutor.execute``)
+        - ``COMPLETED``   — set on clean exit
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
         """
@@ -301,9 +303,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     % {"task_name": self.name}
                 )
                 return
-            self.status = TaskStatus.RUNNING
+            self.status = TaskStatus.CONFIGURING
             horus_logger.log.debug(
-                _("Task %(task_name)s status → RUNNING")
+                _("Task %(task_name)s status → CONFIGURING")
                 % {"task_name": self.name}
             )
             try:
