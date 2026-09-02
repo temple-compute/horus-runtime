@@ -20,6 +20,9 @@ jobs:
 
       - name: Enforce docs reference if required
         if: steps.changes.outputs.runtime == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           BODY=$(cat <<'EOF'
           ${{ github.event.pull_request.body }}
@@ -29,8 +32,12 @@ jobs:
           # If author explicitly says docs are NOT required -> allow
           echo "$BODY" | grep -qi "\[x\] No documentation update required" && exit 0
 
-          # Otherwise, docs ARE required -> enforce horus-docs PR link
-          echo "$BODY" | grep -E "github.com/temple-compute/horus-docs/pull/[0-9]+" \
+          # Docs ARE required -> a horus-docs PR link in the body or in any
+          # PR comment (e.g. a reviewer linking it) satisfies the check.
+          COMMENTS=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --jq '.[].body')
+
+          printf '%s\n%s\n' "$BODY" "$COMMENTS" \
+            | grep -E "github.com/temple-compute/horus-docs/pull/[0-9]+" \
             && exit 0
 
           echo "❌ Runtime code changed and documentation is required, but no horus-docs PR was linked."
