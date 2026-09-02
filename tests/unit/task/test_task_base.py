@@ -20,6 +20,7 @@ Unit tests for BaseTask abstract base class.
 """
 
 from abc import ABC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -297,6 +298,26 @@ class TestBaseTaskRun:
         await task.run()
 
         assert task.status == TaskStatus.SKIPPED
+        assert task.started_at is None
+        assert task.finished_at is None
+
+    async def test_run_sets_started_and_finished_at_on_completion(
+        self, horus_context: object
+    ) -> None:
+        """
+        A task that actually runs (not skipped) must record when it started
+        and when it reached a terminal state.
+        """
+        del horus_context
+        task = _make_concrete_task()
+        task.skip_if_complete = False
+
+        await task.run()
+
+        assert task.status == TaskStatus.COMPLETED
+        assert task.started_at is not None
+        assert task.finished_at is not None
+        assert task.finished_at >= task.started_at
 
     async def test_status_is_configuring_during_run_before_execute(
         self,
@@ -406,6 +427,22 @@ class TestBaseTaskReset:
         await task.reset()
 
         assert task.status == TaskStatus.IDLE
+
+    async def test_reset_clears_timestamps(
+        self,
+    ) -> None:
+        """
+        reset() must clear started_at/finished_at so a re-run doesn't show a
+        leftover duration before it starts.
+        """
+        task = _make_concrete_task()
+        task.started_at = datetime.now(UTC)
+        task.finished_at = datetime.now(UTC)
+
+        await task.reset()
+
+        assert task.started_at is None
+        assert task.finished_at is None
 
     async def test_default_reset_is_noop(
         self,

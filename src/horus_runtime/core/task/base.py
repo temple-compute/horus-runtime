@@ -23,6 +23,7 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 from uuid import uuid4
@@ -155,6 +156,18 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Why the task was skipped, set only alongside ``TaskStatus.SKIPPED``. Lets a
     consumer tell a memoized cache hit apart from a branch that was not taken,
     which are the same status but mean opposite things to a reader.
+    """
+
+    started_at: datetime | None = None
+    """
+    When this task's status last moved to ``RUNNING`` (UTC). ``None`` before
+    the task has ever run.
+    """
+
+    finished_at: datetime | None = None
+    """
+    When this task's status last reached a terminal state (UTC). ``None``
+    while idle, pending, or running.
     """
 
     runs: int = 0
@@ -303,11 +316,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     % {"task_name": self.name}
                 )
                 return
+
             self.status = TaskStatus.CONFIGURING
+            self.started_at = datetime.now(UTC)
+            self.finished_at = None
             horus_logger.log.debug(
                 _("Task %(task_name)s status → CONFIGURING")
                 % {"task_name": self.name}
             )
+
             try:
 
                 async def mkdir_and_run() -> None:
@@ -330,6 +347,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 )
             except CancelledError:
                 self.status = TaskStatus.CANCELED
+                self.finished_at = datetime.now(UTC)
                 horus_logger.log.debug(
                     _("Task %(task_name)s status → CANCELED")
                     % {"task_name": self.name}
@@ -337,6 +355,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 raise
             except Exception:
                 self.status = TaskStatus.FAILED
+                self.finished_at = datetime.now(UTC)
                 horus_logger.log.debug(
                     _("Task %(task_name)s status → FAILED")
                     % {"task_name": self.name}
@@ -344,6 +363,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 raise
             else:
                 self.status = TaskStatus.COMPLETED
+                self.finished_at = datetime.now(UTC)
                 horus_logger.log.debug(
                     _("Task %(task_name)s status → COMPLETED")
                     % {"task_name": self.name}
@@ -387,6 +407,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         """
         self.status = TaskStatus.IDLE
         self.skip_reason = None
+        self.started_at = None
+        self.finished_at = None
         horus_logger.log.debug(
             _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
         )
