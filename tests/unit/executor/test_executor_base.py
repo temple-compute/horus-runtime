@@ -288,6 +288,35 @@ class TestOutputDirectoriesAreCreated:
         assert not await task.is_complete()
 
 
+@pytest.mark.unit
+class TestExecuteSetsRunning:
+    """
+    ``BaseExecutor.execute`` flips the task to RUNNING itself, once the
+    generic environment setup (directories) is done and right before the
+    executor's own ``_execute`` starts.
+    """
+
+    @pytest.mark.usefixtures("horus_context")
+    async def test_status_is_running_when_execute_starts(
+        self, tmp_path: Path
+    ) -> None:
+        """RUNNING is set before ``_execute``, the executor-specific work."""
+        task = HorusTask(
+            id="writer",
+            name="writer",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(working_directory=tmp_path.as_posix()),
+        )
+        # BaseTask.run() would already have set this; set it directly since
+        # this test drives the executor without going through run().
+        task.status = TaskStatus.CONFIGURING
+
+        await task.executor.execute(task)
+
+        assert task.status is TaskStatus.RUNNING
+
+
 _MKDIRS: list[str] = []
 
 

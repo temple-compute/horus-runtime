@@ -35,6 +35,7 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.resources import ProcessTreeScope, ResourceScope
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.executor import (
@@ -172,6 +173,13 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         for artifact in task.outputs:
             on_target = PurePosixPath(task.target.path_on_target(artifact))
             await task.target.mkdir(str(on_target.parent))
+
+        # Generic environment setup (above) is done; the executor's own work
+        # starts now. Plugin executors with slower setup of their own (image
+        # build/pull, provisioning, queueing) may set ``task.status`` back to
+        # ``CONFIGURING`` at the start of their ``_execute`` and flip it to
+        # ``RUNNING`` again once real execution starts, the same way this does.
+        task.status = TaskStatus.RUNNING
 
         try:
             await ExecutorMiddleware.call_with_middleware(

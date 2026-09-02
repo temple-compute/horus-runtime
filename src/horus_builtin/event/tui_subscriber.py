@@ -69,6 +69,7 @@ if TYPE_CHECKING:
 _STATUS_STYLE: dict[TaskStatus, str] = {
     TaskStatus.IDLE: "dim",
     TaskStatus.PENDING: "cyan",
+    TaskStatus.CONFIGURING: "cyan",
     TaskStatus.RUNNING: "bold yellow",
     TaskStatus.COMPLETED: "bold green",
     TaskStatus.FAILED: "bold red",
@@ -80,6 +81,7 @@ _STATUS_STYLE: dict[TaskStatus, str] = {
 _STATUS_GLYPH: dict[TaskStatus, str] = {
     TaskStatus.IDLE: "◌",
     TaskStatus.PENDING: "◔",
+    TaskStatus.CONFIGURING: "◑",
     TaskStatus.RUNNING: "●",
     TaskStatus.COMPLETED: "✓",
     TaskStatus.FAILED: "✗",
