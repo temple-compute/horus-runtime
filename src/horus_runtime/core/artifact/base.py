@@ -95,6 +95,30 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     Optional free-text description of the artifact, shown in the UI.
     """
 
+    labels: dict[str, str] = Field(default_factory=dict)
+    """
+    Free-form key/value metadata carried with the artifact.
+
+    The runtime never interprets these. They travel with the artifact
+    through serialization and exist for whatever reads a workflow
+    afterwards: a UI grouping nodes, or a lineage reader answering
+    "everything derived from subject X". A domain expresses its own
+    structure through them instead of the runtime growing a field per
+    domain, so one mechanism serves materials science, biology or
+    anything else::
+
+        outputs:
+          - id: scored
+            kind: file
+            path: batch_017.parquet
+            labels: {subject: batch_017, role: measurement}
+
+    Not part of any cache key. Relabelling an artifact describes it
+    differently, it does not make its contents stale, and
+    ``HorusTask._fingerprint`` hashes artifact *content* digests rather
+    than artifact models, so nothing here reaches a cache decision.
+    """
+
     path: Annotated[Path, BeforeValidator(validate_path)]
     """
     Absolute local filesystem path where the artifact materializes.
