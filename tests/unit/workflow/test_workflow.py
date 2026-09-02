@@ -21,6 +21,7 @@ Unit tests for the Workflow class.
 
 import textwrap
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -140,3 +141,85 @@ class TestWorkflowFromYaml:
 
         with pytest.raises(ValidationError):
             ConcreteWorkflow.from_yaml(wf_file)
+
+
+class SourcePathWorkflow(BaseWorkflow):
+    """
+    A concrete workflow that inherits ``from_yaml`` rather than
+    overriding it, so the loader under test actually runs.
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "source_path_workflow"
+
+    async def _run(self, trigger_id: str) -> None:
+        """
+        No-op body.
+        """
+        del trigger_id
+
+    async def _reset(self) -> None:
+        """
+        No-op reset.
+        """
+        return None
+
+
+class TestSourcePath:
+    """
+    The file a workflow was loaded from.
+    """
+
+    WORKFLOW = textwrap.dedent("""\
+    name: yaml_workflow
+    kind: source_path_workflow
+    tasks:
+        - id: step1_id
+          name: Step 1
+          kind: horus_task
+          runtime:
+              kind: command
+              command: "echo hello"
+          executor:
+              kind: shell
+    """)
+
+    def test_from_yaml_keeps_the_file_path(
+        self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
+    ) -> None:
+        """
+        Deriving it from the base directory is only correct when the file
+        happens to be named workflow.yaml.
+        """
+        workflow_file = make_workflow_file(tmp_path, self.WORKFLOW)
+        wf = SourcePathWorkflow.from_yaml(workflow_file)
+        assert wf.source_path == workflow_file.resolve()
+
+    def test_the_base_directory_still_points_at_the_folder(
+        self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
+    ) -> None:
+        """
+        The new field sits beside the existing one, it does not replace
+        it.
+        """
+        workflow_file = make_workflow_file(tmp_path, self.WORKFLOW)
+        wf = SourcePathWorkflow.from_yaml(workflow_file)
+        assert wf.source_path is not None
+        assert wf.source_path.parent == wf._effective_base
+
+    def test_it_is_none_without_a_file(self) -> None:
+        """
+        A workflow built in Python has no source to point at.
+        """
+        assert SourcePathWorkflow(name="built_in_python").source_path is None
+
+    def test_it_is_not_serialized(
+        self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
+    ) -> None:
+        """
+        Runtime-only state, like the base directory beside it, so a
+        snapshot's meaning does not change.
+        """
+        workflow_file = make_workflow_file(tmp_path, self.WORKFLOW)
+        wf = SourcePathWorkflow.from_yaml(workflow_file)
+        assert "source_path" not in wf.model_dump(mode="json")

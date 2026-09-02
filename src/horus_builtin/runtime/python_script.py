@@ -81,6 +81,15 @@ class PythonScriptRuntime(CommandRuntime):
         if not self.script.is_absolute():
             self.script = (base / self.script).resolve()
 
+    def local_files(self) -> list[Path]:
+        """
+        The script, unless it is templated: a templated script names an
+        input artifact, already digested through the task's inputs.
+        """
+        if _is_template(self.script):
+            return []
+        return [self.script]
+
     async def _setup_runtime(self, task: "BaseTask") -> str:
         if _is_template(self.script):
             # ``script: ${my_script}`` names an input artifact instead of a

@@ -37,6 +37,14 @@ class TaskStatus(Enum):
     The task is dispatched, but has not started executing yet.
     """
 
+    CONFIGURING = "configuring"
+    """
+    The task has started, and the executor is preparing its environment
+    (creating directories, checking/fingerprinting inputs, or -- for plugin
+    executors -- provisioning a machine, building/pulling an image, etc.) but
+    the task's own work has not started yet.
+    """
+
     RUNNING = "running"
     """
     The task is currently executing.

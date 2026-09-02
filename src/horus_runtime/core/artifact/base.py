@@ -95,6 +95,14 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     Optional free-text description of the artifact, shown in the UI.
     """
 
+    labels: dict[str, str] = Field(default_factory=dict)
+    """
+    Free-form key/value metadata carried with the artifact. Never
+    interpreted by the runtime, and not part of any cache key::
+
+        labels: {subject: batch_017, role: measurement}
+    """
+
     path: Annotated[Path, BeforeValidator(validate_path)]
     """
     Absolute local filesystem path where the artifact materializes.

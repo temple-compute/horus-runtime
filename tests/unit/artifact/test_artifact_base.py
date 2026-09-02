@@ -235,3 +235,51 @@ class TestBaseArtifactValidation:
         assert artifact.id == "test_artifact"
         assert artifact.path == Path("test").resolve()
         assert artifact.kind == "test"
+
+
+class TestLabels:
+    """
+    Free-form metadata carried with an artifact.
+    """
+
+    def test_labels_default_to_empty(self) -> None:
+        """
+        An artifact that declares none is not different from one that
+        declares an empty mapping.
+        """
+        artifact = ConcreteTestArtifact(id="a", path=Path("a"))
+        assert artifact.labels == {}
+
+    def test_labels_are_not_shared_between_artifacts(self) -> None:
+        """
+        A mutable default shared across instances would let one
+        artifact's labels leak into every other.
+        """
+        first = ConcreteTestArtifact(id="a", path=Path("a"))
+        second = ConcreteTestArtifact(id="b", path=Path("b"))
+        first.labels["subject"] = "batch_017"
+        assert second.labels == {}
+
+    def test_labels_survive_a_round_trip(self) -> None:
+        """
+        They exist to be read after the run, so they have to serialize.
+        """
+        artifact = ConcreteTestArtifact(
+            id="a", path=Path("a"), labels={"subject": "batch_017"}
+        )
+        restored = ConcreteTestArtifact.model_validate(
+            artifact.model_dump(mode="json")
+        )
+        assert restored.labels == {"subject": "batch_017"}
+
+    def test_non_string_values_are_rejected(self) -> None:
+        """
+        String values stay serializable in YAML and JSON without
+        surprises, and can be used directly as index keys.
+        """
+        with pytest.raises(ValidationError):
+            ConcreteTestArtifact(
+                id="a",
+                path=Path("a"),
+                labels={"replicate": object()},  # type: ignore[dict-item]
+            )

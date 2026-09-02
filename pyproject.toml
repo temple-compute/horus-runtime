@@ -1,13 +1,22 @@
 [project]
 name = "horus-runtime"
 description = "The Horus workflow manager runtime. Execute advanced workflows with multi-environment support, HPC integration, automatic artifact management, and more."
+readme = "README.md"
+authors = [{ name = "Temple Compute", email = "christian@templecompute.com" }]
 license-files = ["LICENSE"]
 dynamic = ["version"]
 
 requires-python = ">=3.13"
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
   "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Operating System :: POSIX",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: System :: Distributed Computing",
 ]
 dependencies = [
   "click>=8.3.3",
@@ -18,6 +27,12 @@ dependencies = [
   "pyyaml~=6.0",
   "rich>=13.7",
 ]
+
+[project.urls]
+Homepage = "https://templecompute.com"
+Documentation = "https://docs.templecompute.com"
+Source = "https://github.com/temple-compute/horus-runtime"
+Issues = "https://github.com/temple-compute/horus-runtime/issues"
 
 [project.scripts]
 horus = "horus_runtime.cli:main"

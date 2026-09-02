@@ -1,0 +1,54 @@
+name: Horus Runtime
+
+icon: https://avatars.githubusercontent.com/u/243013656?v=4
+
+headline: Reproducible scientific workflows, from your laptop to the HPC cluster.
+
+description: >
+  Horus Runtime is the open-source engine behind the Temple Compute platform.
+  You describe a pipeline once, in YAML or Python, and run it wherever the
+  compute lives, from a laptop to an HPC cluster. A workflow is a DAG of
+  tasks wired together by edges that carry typed, addressable artifacts
+  (files, folders, JSON, pickles) from one task's output to another's input;
+  the DAG comes entirely from those edges, not from list order. Each task
+  separates three concerns: a Runtime (what runs: a shell command, a Python
+  snippet or script), an Executor (how it runs: subprocess, in-process
+  Python), and a Target (where it runs: local today, SSH and Slurm via
+  official plugins), so moving a stage from a laptop to a cluster is a change
+  to the target, not a rewrite. Targets expose an agentless channel
+  (run_command, put_file, get_file, list_dir) so a remote host needs nothing
+  but the binaries a command names, no Horus install required there. Because
+  outputs are artifacts rather than side effects, completed tasks are skipped
+  on re-run, and a pipeline that failed at hour nine resumes at hour nine.
+  Beyond single tasks, workflows can fan out over a collection with a `map`
+  task that dispatches one clone per item concurrently, and repeat a task
+  with a conditional `loop` driven by a predicate artifact, both expanding
+  the DAG dynamically at runtime as the data becomes known. Every building
+  block, artifacts, tasks, runtimes, executors, targets, transfer strategies,
+  workflows, interactive runtime interactions, event transports and
+  subscribers, and middleware, is a plugin: a Python package that subclasses
+  a Horus base class and registers itself under a `horus.*` entry point, so
+  the runtime discovers it automatically once installed and it is used the
+  same way a built-in kind is, by its `kind` string in YAML or by direct
+  import in Python.
+
+language: Python
+
+website: https://templecompute.com
+
+documentation:
+  general: https://docs.templecompute.com
+  installation: https://docs.templecompute.com/guides/installation
+  tutorial: https://docs.templecompute.com/guides/quickstart
+
+execution_environment:
+  interfaces:
+    - CLI
+    - Python API
+    - YAML
+  resource_managers:
+    - local
+    - SLURM
+  transfer_protocols:
+    - local
+    - SSH

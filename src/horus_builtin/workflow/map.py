@@ -84,7 +84,12 @@ class MapTask(HorusTask):
     """
 
     max_concurrency: int | None = None
-    """Upper bound on clones dispatched at once; ``None`` means unbounded."""
+    """
+    Upper bound on clones dispatched at once. ``None`` (the default) applies
+    a conservative built-in cap (see
+    ``horus_builtin.workflow.scheduler.DEFAULT_MAX_CONCURRENCY``) instead of
+    dispatching every clone at once.
+    """
 
     @property
     def _over_artifact(self) -> IterableArtifact:

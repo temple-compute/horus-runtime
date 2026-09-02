@@ -319,6 +319,37 @@ class TestBaseTaskRun:
         assert task.finished_at is not None
         assert task.finished_at >= task.started_at
 
+    async def test_status_is_configuring_during_run_before_execute(
+        self,
+    ) -> None:
+        """
+        Before the executor's own work starts, the task must report
+        CONFIGURING (not RUNNING) -- see ``BaseExecutor.execute``, which is
+        what flips it to RUNNING once environment setup is done.
+        """
+        seen: list[TaskStatus] = []
+
+        class RecordingTask(ConcreteTestTask):
+            kind: str = "recording_status_task"
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                seen.append(self.status)
+
+        task = RecordingTask(
+            id="test_task_id",
+            name="test_task",
+            skip_if_complete=False,
+            runtime=CommandRuntime(command="echo test"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+        )
+
+        await task.run()
+
+        assert seen == [TaskStatus.CONFIGURING]
+        assert task.status == TaskStatus.COMPLETED
+
     async def test_middleware_can_retarget_before_working_dir_is_created(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
