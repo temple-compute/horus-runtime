@@ -21,8 +21,8 @@ Default Horus task implementation.
 
 import hashlib
 import json
-from pathlib import PurePosixPath
-from typing import ClassVar
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -37,6 +37,19 @@ from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 
 _UNHASHABLE = "unhashable"
+
+
+def _digest_file(path: Path) -> str:
+    """
+    sha256 of a local file, read in chunks.
+    """
+    sha = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            sha.update(block)
+    return sha.hexdigest()
+
+
 """Fingerprint value for an input the target cannot digest."""
 
 
@@ -136,15 +149,38 @@ class HorusTask(BaseTask):
             artifact.id: await store.digest(artifact) or _UNHASHABLE
             for artifact in self.inputs
         }
-        config = json.dumps(
-            {
-                "runtime": self.runtime.model_dump(mode="json"),
-                "executor": self.executor.model_dump(mode="json"),
-            },
-            sort_keys=True,
-        )
+        payload: dict[str, Any] = {
+            "runtime": self.runtime.model_dump(mode="json"),
+            "executor": self.executor.model_dump(mode="json"),
+        }
+        # A runtime holds its script as a path, so the dump above changes
+        # when the path changes but not when the file does. Without this a
+        # task keeps skipping after its code was edited.
+        code = self._local_file_digests()
+        if code:
+            payload["code"] = code
+        config = json.dumps(payload, sort_keys=True)
         config_hash = hashlib.sha256(config.encode()).hexdigest()
         return TaskFingerprint(inputs=inputs, config_hash=config_hash)
+
+    def _local_file_digests(self) -> list[list[str]]:
+        """
+        Sorted ``[name, sha256]`` for the runtime's and executor's local
+        files, so the same set hashes the same way twice.
+
+        Keyed by name, not path, to add no new path dependence. A missing
+        file is skipped: it drops out of the set, so the task re-runs.
+        """
+        digests: list[list[str]] = []
+        for path in [
+            *self.runtime.local_files(),
+            *self.executor.local_files(),
+        ]:
+            try:
+                digests.append([path.name, _digest_file(path)])
+            except OSError:
+                continue
+        return sorted(digests)
 
     async def _write_manifest(self, fingerprint: TaskFingerprint) -> None:
         """

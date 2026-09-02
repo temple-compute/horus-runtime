@@ -20,6 +20,8 @@
 Unit tests for HorusTask builtin task.
 """
 
+import hashlib
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.python_script import PythonScriptRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
@@ -457,3 +460,125 @@ class TestHorusTaskInputFingerprint:
 
         assert task.runs == 1
         assert await task.is_complete() is True
+
+
+@pytest.mark.unit
+class TestLocalFilesInFingerprint:
+    """
+    A runtime holds its script as a path, so the config dump changes when
+    the path changes but not when the file does. Without the file's digest
+    a task keeps skipping after its code was edited.
+    """
+
+    @staticmethod
+    def _script_task(tmp_path: Path, body: str) -> HorusTask:
+        """
+        A task whose runtime runs a real script file on disk.
+        """
+        script = tmp_path / "prep.py"
+        script.write_text(body)
+        return HorusTask(
+            id="prep",
+            name="Prepare",
+            runtime=PythonScriptRuntime(script=script),
+            executor=ShellExecutor(),
+            target=LocalTarget(working_directory=str(tmp_path)),
+        )
+
+    async def test_editing_a_script_changes_the_fingerprint(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The bug this exists to fix: the task used to skip with stale code.
+        """
+        task = self._script_task(tmp_path, "print('one')\n")
+        before = (await task._fingerprint()).config_hash
+
+        (tmp_path / "prep.py").write_text("print('two')\n")
+        after = (await task._fingerprint()).config_hash
+
+        assert before != after
+
+    async def test_an_untouched_script_keeps_its_fingerprint(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Hashing the file must not make the fingerprint unstable, or every
+        run would re-run everything.
+        """
+        task = self._script_task(tmp_path, "print('one')\n")
+        assert (await task._fingerprint()).config_hash == (
+            await task._fingerprint()
+        ).config_hash
+
+    async def test_a_task_without_local_files_is_unaffected(
+        self, tmp_path: Path, make_shell_task: MakeTaskType
+    ) -> None:
+        """
+        The code entry is only added when a task has local files, so
+        existing caches for command-only tasks stay valid.
+        """
+        del tmp_path
+        task = make_shell_task(cmd="echo hello")
+        fingerprint = await task._fingerprint()
+        payload = json.dumps(
+            {
+                "runtime": task.runtime.model_dump(mode="json"),
+                "executor": task.executor.model_dump(mode="json"),
+            },
+            sort_keys=True,
+        )
+        assert (
+            fingerprint.config_hash
+            == hashlib.sha256(payload.encode()).hexdigest()
+        )
+
+    async def test_a_missing_script_is_skipped_rather_than_raising(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        It drops out of the set, which changes the hash, which re-runs the
+        task. A missing script deserves exactly that.
+        """
+        task = self._script_task(tmp_path, "print('one')\n")
+        with_script = (await task._fingerprint()).config_hash
+
+        (tmp_path / "prep.py").unlink()
+        without = (await task._fingerprint()).config_hash
+
+        assert with_script != without
+
+
+@pytest.mark.unit
+class TestLocalFilesHooks:
+    """
+    What each base class reports as its own local files.
+    """
+
+    def test_a_runtime_owns_nothing_by_default(self) -> None:
+        """
+        A runtime carrying its command inline reads no local file.
+        """
+        assert CommandRuntime(command="echo hi").local_files() == []
+
+    def test_an_executor_owns_nothing_by_default(self) -> None:
+        """
+        The hook exists for executors that point at an environment file.
+        """
+        assert ShellExecutor().local_files() == []
+
+    def test_a_script_runtime_owns_its_script(self, tmp_path: Path) -> None:
+        """
+        The case the fingerprint change depends on.
+        """
+        script = tmp_path / "prep.py"
+        script.write_text("print('one')\n")
+        assert PythonScriptRuntime(script=script).local_files() == [script]
+
+    def test_a_templated_script_owns_nothing(self) -> None:
+        """
+        A templated script names an input artifact, whose digest is
+        already in the fingerprint through the task's inputs.
+        """
+        runtime = PythonScriptRuntime(script=Path("${my_script}"))
+        assert runtime.local_files() == []

@@ -133,6 +133,16 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         working directory instead.
         """
 
+    def local_files(self) -> list[Path]:
+        """
+        Local files this executor reads from the orchestrator, digested
+        into the task fingerprint. Empty by default.
+
+        Mirrors :meth:`BaseRuntime.local_files`; a conda
+        ``environment_file`` is the case this exists for.
+        """
+        return []
+
     @final
     async def execute(self, task: "BaseTask") -> None:
         """

@@ -65,6 +65,16 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
         Called by the workflow before execution. No-op by default.
         """
 
+    def local_files(self) -> list[Path]:
+        """
+        Local files this runtime reads from the orchestrator, digested
+        into the task fingerprint. Empty by default.
+
+        Mirrors :meth:`anchor_local_paths`: whatever that resolves is
+        what this returns.
+        """
+        return []
+
     @abstractmethod
     async def _setup_runtime(self, task: "BaseTask") -> T:
         """
