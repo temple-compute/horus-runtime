@@ -253,6 +253,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     fall back to the process CWD. Runtime-only state, not serialized.
     """
 
+    _source_path: Path | None = PrivateAttr(default=None)
+    """
+    The workflow file this instance was loaded from, set by
+    :meth:`from_yaml`. ``None`` for a programmatically-built workflow or
+    one validated from a snapshot, neither of which has a file. Runtime-only
+    state, not serialized. Read it through :attr:`source_path`.
+    """
+
     _implicit_task_deps: dict[str, set[str]] = PrivateAttr(
         default_factory=dict
     )
@@ -959,6 +967,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # own directory, so a run is self-contained regardless of the launch
         # directory.
         workflow._base_directory = Path(path).resolve().parent  # noqa: SLF001
+        workflow._source_path = Path(path).resolve()  # noqa: SLF001
         return workflow
 
     def to_yaml(self, path: str | Path) -> None:
@@ -1156,6 +1165,19 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     @property
     def _effective_base(self) -> Path:
         return self._base_directory or Path.cwd()
+
+    @property
+    def source_path(self) -> Path | None:
+        """
+        The workflow file this instance was loaded from, or ``None`` when
+        it was not loaded from one.
+
+        Anything wanting to copy, digest or link back to the source needs
+        the path rather than only its folder, and deriving it from
+        :attr:`_base_directory` is only correct when the file happens to
+        be named ``workflow.yaml``.
+        """
+        return self._source_path
 
     @property
     def run_directory(self) -> Path:
