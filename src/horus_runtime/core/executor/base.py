@@ -133,6 +133,18 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         working directory instead.
         """
 
+    def local_files(self) -> list[Path]:
+        """
+        Local files this executor reads from the orchestrator, so a change
+        to one invalidates the tasks that use it. Empty by default.
+
+        Mirrors :meth:`BaseRuntime.local_files`, for the same reason as the
+        anchoring above: an executor pointing at a conda
+        ``environment_file`` next to the workflow describes an environment,
+        and editing that file changes the environment.
+        """
+        return []
+
     @final
     async def execute(self, task: "BaseTask") -> None:
         """

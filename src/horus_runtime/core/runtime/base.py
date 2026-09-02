@@ -65,6 +65,18 @@ class BaseRuntime[T: Any = Any](AutoRegistry, entry_point="runtime"):
         Called by the workflow before execution. No-op by default.
         """
 
+    def local_files(self) -> list[Path]:
+        """
+        Local files this runtime reads from the orchestrator, so a change
+        to one invalidates the task that runs it. Empty by default.
+
+        Mirrors :meth:`anchor_local_paths`: whatever that resolves is what
+        this returns. A runtime that carries its code inline, or that names
+        an artifact rather than a file, owns no local file and returns
+        nothing.
+        """
+        return []
+
     @abstractmethod
     async def _setup_runtime(self, task: "BaseTask") -> T:
         """

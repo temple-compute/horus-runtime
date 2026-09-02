@@ -21,8 +21,8 @@ Default Horus task implementation.
 
 import hashlib
 import json
-from pathlib import PurePosixPath
-from typing import ClassVar
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -37,6 +37,20 @@ from horus_runtime.core.task.base import BaseTask
 from horus_runtime.i18n import tr as _
 
 _UNHASHABLE = "unhashable"
+
+
+def _digest_file(path: Path) -> str:
+    """
+    sha256 of a file on the machine running the orchestrator, read in
+    chunks so a large one does not have to fit in memory.
+    """
+    sha = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            sha.update(block)
+    return sha.hexdigest()
+
+
 """Fingerprint value for an input the target cannot digest."""
 
 
@@ -136,15 +150,45 @@ class HorusTask(BaseTask):
             artifact.id: await store.digest(artifact) or _UNHASHABLE
             for artifact in self.inputs
         }
-        config = json.dumps(
-            {
-                "runtime": self.runtime.model_dump(mode="json"),
-                "executor": self.executor.model_dump(mode="json"),
-            },
-            sort_keys=True,
-        )
+        payload: dict[str, Any] = {
+            "runtime": self.runtime.model_dump(mode="json"),
+            "executor": self.executor.model_dump(mode="json"),
+        }
+        # A runtime holds its script as a path, so the dump above changes
+        # when the path changes but not when the file does. Without this a
+        # task keeps skipping after its code was edited.
+        code = self._local_file_digests()
+        if code:
+            payload["code"] = code
+        config = json.dumps(payload, sort_keys=True)
         config_hash = hashlib.sha256(config.encode()).hexdigest()
         return TaskFingerprint(inputs=inputs, config_hash=config_hash)
+
+    def _local_file_digests(self) -> list[list[str]]:
+        """
+        ``[name, sha256]`` for every local file the runtime and executor
+        own, sorted, so the same set hashes the same way twice.
+
+        Keyed by file name rather than full path, so this adds no new
+        path dependence. Note the fingerprint is already path-dependent
+        without it: ``runtime.model_dump()`` carries the script's
+        absolute path, so moving a workflow directory already
+        invalidates every task that runs a script.
+
+        A file that has gone missing is skipped rather than raising. It
+        drops out of the set, which changes the hash, which re-runs the
+        task, which is what a missing script deserves.
+        """
+        digests: list[list[str]] = []
+        for path in [
+            *self.runtime.local_files(),
+            *self.executor.local_files(),
+        ]:
+            try:
+                digests.append([path.name, _digest_file(path)])
+            except OSError:
+                continue
+        return sorted(digests)
 
     async def _write_manifest(self, fingerprint: TaskFingerprint) -> None:
         """
