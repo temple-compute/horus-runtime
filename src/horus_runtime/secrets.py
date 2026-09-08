@@ -72,7 +72,13 @@ def ref_for_path(path: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
 
 
-def _env_key(ref: str) -> str:
+def env_key_for_ref(ref: str) -> str:
+    """
+    The environment variable name :func:`Secret.resolve` (and a dispatcher
+    provisioning one for it) checks first for *ref* -- the one place this
+    mapping is defined, so a dispatcher and the runtime it hands values to
+    can never derive it differently.
+    """
     return "HORUS_SECRET_" + re.sub(r"[^A-Za-z0-9]+", "_", ref).upper()
 
 
@@ -82,7 +88,7 @@ def _resolve(ref: str) -> str:
     file, matching the export side's own precedence (an operator can always
     override a file-provisioned secret with an env var).
     """
-    env_key = _env_key(ref)
+    env_key = env_key_for_ref(ref)
     if env_key in os.environ:
         return os.environ[env_key]
     secrets_file = os.environ.get("HORUS_SECRETS_FILE")
@@ -91,8 +97,8 @@ def _resolve(ref: str) -> str:
         if isinstance(data, dict) and ref in data:
             return str(data[ref])
     raise SecretResolutionError(
-        f"No value for secret reference {ref!r}: set {_env_key(ref)} or add "
-        f"it to the file named by $HORUS_SECRETS_FILE."
+        f"No value for secret reference {ref!r}: set {env_key} or add it "
+        f"to the file named by $HORUS_SECRETS_FILE."
     )
 
 
