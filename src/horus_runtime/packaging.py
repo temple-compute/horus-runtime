@@ -38,6 +38,7 @@ from pathlib import Path
 from horus_builtin.runtime.substitution import is_template
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.i18n import tr as _
+from horus_runtime.secrets import iter_secret_fields, ref_for_path
 
 # Junk that can sit inside a referenced folder artifact but is never input.
 _EXCLUDED_DIRS = frozenset(
@@ -47,6 +48,34 @@ _EXCLUDED_DIRS = frozenset(
 
 class BundleError(Exception):
     """A workflow could not be packaged."""
+
+
+def _redact_source(text: str, workflow: BaseWorkflow) -> str:
+    """
+    Replace each literal secret value's occurrence in *text* with its
+    ``${secret:<ref>}`` reference.
+
+    Substring replacement on the source text, not a re-dump through the
+    model: re-dumping resolves every relative path to absolute (see
+    :meth:`BaseWorkflow.to_yaml`), which would make the packaged
+    ``workflow.yaml`` unportable -- the same reason :mod:`horus_runtime.
+    sanitize` rewrites text rather than re-dumping. A value already holding
+    a ``${secret:<ref>}`` reference is left alone; there is nothing literal
+    left to redact.
+
+    ponytail: a literal secret value that happens to also appear verbatim
+    elsewhere in the file (e.g. reused as another field's value) gets
+    replaced there too. Narrow this to the exact YAML node with a real
+    parser (ruamel) if that ever produces a wrong substitution.
+    """
+    for path, secret in iter_secret_fields(workflow):
+        if secret.ref is not None:
+            continue
+        value = secret.resolve()
+        if not value:
+            continue
+        text = text.replace(value, f"${{secret:{ref_for_path(path)}}}")
+    return text
 
 
 def collect_bundle_paths(
@@ -152,12 +181,16 @@ def package_workflow(
     output = output or base / f"{base.name}.zip"
     output = output.resolve()
 
+    workflow_text = _redact_source(
+        workflow_yaml.read_text(encoding="utf-8"), workflow
+    )
+
     with zipfile.ZipFile(
         output, "w", compression=zipfile.ZIP_DEFLATED
     ) as bundle:
         # Always at the archive root under a fixed name, so an importer can
         # find the definition without guessing the original filename.
-        bundle.write(workflow_yaml, "workflow.yaml")
+        bundle.writestr("workflow.yaml", workflow_text)
         for rel in members:
             bundle.write(base / rel, rel.as_posix())
 
