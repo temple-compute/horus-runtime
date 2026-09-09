@@ -54,20 +54,13 @@ def _redact_source(text: str, workflow: BaseWorkflow) -> str:
     """
     Replace each literal secret value's occurrence in *text* with its
     ``${secret:<ref>}`` reference.
-
-    Substring replacement on the source text, not a re-dump through the
-    model: re-dumping resolves every relative path to absolute (see
-    :meth:`BaseWorkflow.to_yaml`), which would make the packaged
-    ``workflow.yaml`` unportable -- the same reason :mod:`horus_runtime.
-    sanitize` rewrites text rather than re-dumping. A value already holding
-    a ``${secret:<ref>}`` reference is left alone; there is nothing literal
-    left to redact.
-
-    ponytail: a literal secret value that happens to also appear verbatim
-    elsewhere in the file (e.g. reused as another field's value) gets
-    replaced there too. Narrow this to the exact YAML node with a real
-    parser (ruamel) if that ever produces a wrong substitution.
     """
+    # Substring replacement on the source text, not a re-dump through the
+    # model: re-dumping absolutizes relative paths (see BaseWorkflow.to_yaml),
+    # same reason horus_runtime.sanitize rewrites text instead.
+    # ponytail: a literal value reused verbatim elsewhere in the file gets
+    # replaced there too. Narrow to the exact YAML node with ruamel if that
+    # ever produces a wrong substitution.
     for path, secret in iter_secret_fields(workflow):
         if secret.ref is not None:
             continue

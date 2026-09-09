@@ -981,11 +981,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         similar become plain strings) exactly as ``from_yaml`` expects them
         back on load.
 
-        Every ``Secret``-marked field (see :mod:`horus_runtime.secrets`) is
-        replaced with a ``${secret:<ref>}`` reference before writing.
-        ``model_dump``'s own default -- masking with ``**********`` -- is
-        the wrong answer for a file meant to be re-imported: a masked value
-        round-trips back in as that literal string.
+        ``Secret``-marked fields (see :mod:`horus_runtime.secrets`) are
+        redacted to ``${secret:<ref>}`` before writing.
 
         Args:
             path: Path to the YAML file.

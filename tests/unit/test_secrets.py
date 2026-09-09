@@ -23,6 +23,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import BaseModel
 
 from horus_builtin.target.local import LocalTarget
@@ -31,7 +32,9 @@ from horus_runtime.packaging import package_workflow
 from horus_runtime.secrets import (
     Secret,
     SecretResolutionError,
+    env_key_for_ref,
     iter_secret_fields,
+    iter_secret_refs,
     redact,
 )
 
@@ -131,12 +134,7 @@ class TestSecret:
     def test_default_json_dump_masks_a_reference_without_resolving(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """
-        Pydantic's default JSON masking must not require resolution: a
-        plain ``model_dump(mode="json")`` of a workflow already carrying a
-        reference must not raise just because this process has no value
-        for it yet.
-        """
+        """model_dump never resolves; masking a reference must not raise."""
         monkeypatch.delenv("HORUS_SECRET_MY_REF", raising=False)
         monkeypatch.delenv("HORUS_SECRETS_FILE", raising=False)
         holder = Holder(name="x", secret=Secret("${secret:my-ref}"))
@@ -171,6 +169,32 @@ class TestIterSecretFields:
         found = dict(iter_secret_fields(workflow))
         assert "tasks.0.target.password" in found
         assert found["tasks.0.target.password"].resolve() == HUNTER2
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("horus_context")
+class TestIterSecretRefs:
+    """Tests for the dict-side walk tc-os runs on stored ``workflow_data``."""
+
+    def test_finds_refs_in_a_redacted_yaml_dict(
+        self, workflow_dir: Path
+    ) -> None:
+        """to_yaml -> safe_load -> iter_secret_refs finds the same path."""
+        workflow = BaseWorkflow.from_yaml(workflow_dir / "workflow.yaml")
+        out = workflow_dir / "out.yaml"
+        workflow.to_yaml(out)
+
+        data = yaml.safe_load(out.read_text())
+        found = dict(iter_secret_refs(data))
+        assert found["tasks.0.target.password"] == "tasks_0_target_password"
+        assert (
+            env_key_for_ref(found["tasks.0.target.password"])
+            == "HORUS_SECRET_TASKS_0_TARGET_PASSWORD"
+        )
+
+    def test_no_references_yields_nothing(self) -> None:
+        """A plain value is not a reference."""
+        assert list(iter_secret_refs({"name": "x", "port": 22})) == []
 
 
 @pytest.mark.unit
