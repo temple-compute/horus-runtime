@@ -87,6 +87,7 @@ from horus_runtime.middleware.workflow import (
     WorkflowMiddlewareContext,
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.secrets import iter_secret_fields, redact
 
 if TYPE_CHECKING:
     from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
@@ -980,14 +981,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         similar become plain strings) exactly as ``from_yaml`` expects them
         back on load.
 
+        ``Secret``-marked fields (see :mod:`horus_runtime.secrets`) are
+        redacted to ``${secret:<ref>}`` before writing.
+
         Args:
             path: Path to the YAML file.
 
         Returns:
             None
         """
+        dumped = self.model_dump(mode="json")
+        secret_fields = list(iter_secret_fields(self))
+        if secret_fields:
+            dumped = redact(dumped, secret_fields)
         with Path(path).open("w", encoding="utf-8") as fh:
-            yaml.safe_dump(self.model_dump(mode="json"), fh)
+            yaml.safe_dump(dumped, fh)
 
     def _build_source_map(self) -> dict[tuple[str, str], EdgeSource]:
         """
