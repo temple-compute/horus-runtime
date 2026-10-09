@@ -38,6 +38,9 @@ if TYPE_CHECKING:
 _SHA256_HEX_LEN = 64
 """Length of a hex-encoded sha256, used to sanity-check command output."""
 
+_STDERR_TAIL = 2000
+"""Max characters of a failed command's stderr kept in the error message."""
+
 
 class ArtifactStore:
     """
@@ -124,7 +127,9 @@ class ArtifactStore:
         dest = self.target.path_on_target(artifact)
         cmd = artifact.unpack_command(package_path, dest)
         if cmd is None:
-            if package_path != dest:
+            # Compare normalized paths: "wd//f" and "wd/f" are the same file
+            # and ``mv`` refuses to move a file onto itself.
+            if PurePosixPath(package_path) != PurePosixPath(dest):
                 parent = str(PurePosixPath(dest).parent)
                 cmd = (
                     f"mkdir -p {shlex.quote(parent)} && "
@@ -142,20 +147,22 @@ class ArtifactStore:
         artifact's own path so packaging never clobbers the source.
         """
         name = PurePosixPath(src).name
-        base = self.target.resolved_working_directory
-        return f"{base}/{name}.horuspkg"
+        base = PurePosixPath(self.target.resolved_working_directory)
+        return str(base / f"{name}.horuspkg")
 
     async def _run(self, cmd: str, artifact: "BaseArtifact", op: str) -> None:
         """
-        Run *cmd* on the target and raise when it exits non-zero.
+        Run *cmd* on the target and raise when it exits non-zero, including
+        the tail of the command's stderr so the real cause is not lost.
         """
         proc = await self.target.run_command_sync(cmd)
+        # communicate() drains both pipes, so large output cannot deadlock.
+        _stdout, stderr = await proc.communicate()
         rc = await proc.wait()
         if rc != 0:
-            raise RuntimeError(
-                _(
-                    "Failed to %(op)s artifact '%(id)s' on target "
-                    "(exit code %(rc)s)"
-                )
-                % {"op": op, "id": artifact.id, "rc": rc}
-            )
+            msg = _(
+                "Failed to %(op)s artifact '%(id)s' on target "
+                "(exit code %(rc)s)"
+            ) % {"op": op, "id": artifact.id, "rc": rc}
+            tail = stderr.decode(errors="replace").strip()[-_STDERR_TAIL:]
+            raise RuntimeError(f"{msg}: {tail}" if tail else msg)

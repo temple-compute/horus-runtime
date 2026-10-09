@@ -27,7 +27,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, field_validator
 
 from horus_runtime.core.resources import ResourceScope
 from horus_runtime.core.target.channel import (
@@ -97,6 +97,20 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     other target decides for itself what an unset value means via
     :attr:`resolved_working_directory`.
     """
+
+    @field_validator("working_directory")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str | None) -> str | None:
+        """
+        Drop trailing ``/`` (``/scratch/x/`` -> ``/scratch/x``; ``/`` stays).
+
+        Paths are built by joining onto this value, so a trailing slash would
+        yield ``//`` paths that no longer compare equal to their normalized
+        form (e.g. a single-file unpackage turning into ``mv x//f x/f``).
+        """
+        if value and len(value) > 1:
+            return value.rstrip("/") or "/"
+        return value
 
     _task: "BaseTask | None" = PrivateAttr(default=None)
     _task_future: "asyncio.Task[None] | None" = PrivateAttr(default=None)
