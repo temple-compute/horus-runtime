@@ -30,6 +30,7 @@ dependencies from the workflow's explicit edges and executes tasks in
 topological (DAG) order, which may differ from the order they are defined.
 """
 
+import re
 from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable
@@ -823,6 +824,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         tasks: list[BaseTask] | None = None,
         edges: list[WorkflowEdge] | None = None,
         artifacts: list[BaseArtifact] | None = None,
+        owner: str | None = None,
     ) -> None:
         """
         Atomically add a batch of tasks, root artifacts, and edges to the
@@ -847,6 +849,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         The freshly derived task has to win regardless: its paths are pinned
         under *this* run's root, while the snapshot's copy names the previous
         run's directory. Duplicates *within* one batch are still an error.
+
+        Superseding by id alone never removes a clone the batch no longer
+        emits, so a map that shrinks from three items to one would keep
+        ``map[1]`` and ``map[2]``. Passing *owner* makes the batch replace the
+        owner's whole previous expansion: every existing ``owner[n]`` clone
+        (and anything nested under one, ``owner[n]/...``) is dropped with its
+        edges, whether or not the batch re-emits it.
 
         Validates, in order: task id uniqueness (kept + new), per-task
         input/output id uniqueness for each new task, root artifact id
@@ -879,6 +888,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # re-emits every edge touching the tasks it owns, so any stale edge on
         # a superseded id is one this batch is about to re-state.
         superseded_tasks = {task.id for task in new_tasks}
+        if owner is not None:
+            clone_id = re.compile(rf"{re.escape(owner)}\[\d+\](?:/.*)?")
+            superseded_tasks |= {
+                t.id for t in self.tasks if clone_id.fullmatch(t.id)
+            }
         superseded_artifacts = {artifact.id for artifact in new_artifacts}
         kept_tasks = [t for t in self.tasks if t.id not in superseded_tasks]
         kept_edges = [

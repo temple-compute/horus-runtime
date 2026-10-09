@@ -185,6 +185,14 @@ class MapTask(HorusTask):
             await self.target.mkdir(str(slot_root))
             clones.append(self._clone(slot, item, slot_root))
 
+        # Slots from an earlier, larger expansion (or one padded to another
+        # width) would otherwise survive next to this run's. Surviving slots
+        # are kept: their contents are what lets an unchanged clone skip.
+        slots = {f"{index:0{width}d}" for index in range(len(items))}
+        for entry in await self.target.list_dir(str(root)):
+            if entry.name not in slots:
+                await self.target.remove(entry.path)
+
         # Ordering-only edges (no artifact ids, so `transfer=False`): they
         # exist purely to bring the clones into the scheduler's
         # trigger-reachable scope, never to source a transfer.
@@ -194,6 +202,7 @@ class MapTask(HorusTask):
                 WorkflowEdge(source=self.id, target=clone.id)
                 for clone in clones
             ],
+            owner=self.id,
         )
 
         # Every clone input is already materialized on `self.target` (either
