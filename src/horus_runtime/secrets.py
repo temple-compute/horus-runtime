@@ -21,9 +21,11 @@ Mark, find, and redact credential fields on plugin models.
 
 ``Secret`` opts a field into export redaction (``password: Secret | None``).
 Export replaces the value with ``${secret:<ref>}`` instead of pydantic's own
-``**********`` mask, since a mask re-imports as a literal password.
+``**********`` mask, since a mask re-imports as a literal password. A JSON
+dump (``model_dump(mode="json")``) keeps a reference as itself, so a dumped
+workflow round-trips it; only a literal is masked.
 ``Secret.resolve()`` reads the real value back from the environment or a
-local secrets file at run time.
+local secrets file at run time, and refuses the mask.
 """
 
 import copy
@@ -34,9 +36,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, GetCoreSchemaHandler, SecretStr
+from pydantic_core import SchemaSerializer, core_schema
 
 __all__ = [
+    "SECRET_MASK",
     "Secret",
     "SecretResolutionError",
     "env_key_for_ref",
@@ -46,6 +50,10 @@ __all__ = [
     "ref_for_path",
     "secret_ref",
 ]
+
+#: What pydantic dumps a masked ``SecretStr`` as. Never a real value: a
+#: document holding it lost its secret to a masked dump.
+SECRET_MASK = "**********"
 
 #: Matches a secret reference literal, e.g. ``${secret:ssh-password}``.
 _REF_RE = re.compile(r"^\$\{secret:([A-Za-z0-9_.:-]+)\}$")
@@ -87,6 +95,20 @@ def _resolve(ref: str) -> str:
     )
 
 
+def _serialize(value: Any, info: core_schema.SerializationInfo) -> Any:
+    """JSON: a reference as itself, a literal masked. Python: unchanged."""
+    if info.mode != "json":
+        return value
+    if isinstance(value, Secret) and value.ref is not None:
+        return value.get_secret_value()
+    return str(value)  # SecretStr's mask ("" for an empty value)
+
+
+_SERIALIZATION = core_schema.plain_serializer_function_ser_schema(
+    _serialize, info_arg=True, when_used="always"
+)
+
+
 class Secret(SecretStr):
     """
     A model field marker for a credential.
@@ -103,6 +125,25 @@ class Secret(SecretStr):
     # just because this process can't resolve a reference yet. Only
     # resolve() -- called when a plugin actually needs the value -- can fail.
 
+    __pydantic_serializer__ = SchemaSerializer(
+        core_schema.any_schema(serialization=_SERIALIZATION)
+    )
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source: type[Any], handler: GetCoreSchemaHandler
+    ) -> core_schema.CoreSchema:
+        """
+        SecretStr's schema with :func:`_serialize` in place of its mask.
+
+        A reference is not sensitive, and masking it is what turned run
+        snapshots into "**********" passwords: dump it as itself.
+        """
+        schema = super().__get_pydantic_core_schema__(source, handler)
+        for branch in ("lax_schema", "strict_schema"):
+            schema[branch]["serialization"] = _SERIALIZATION
+        return schema
+
     def __init__(self, secret_value: str) -> None:
         super().__init__(secret_value)
         self._ref = secret_ref(secret_value)
@@ -115,8 +156,18 @@ class Secret(SecretStr):
     def resolve(self) -> str:
         """The real value: as-is for a literal, looked up for a reference."""
         if self._ref is None:
-            return self.get_secret_value()
-        return _resolve(self._ref)
+            value = self.get_secret_value()
+        else:
+            value = _resolve(self._ref)
+        if value == SECRET_MASK:
+            # A masked dump copied back in as if it were the value; using it
+            # would just fail later as a confusing "permission denied".
+            raise SecretResolutionError(
+                "Secret holds the masked placeholder "
+                f"{SECRET_MASK!r}, not a real value: point the field at a "
+                "stored credential instead."
+            )
+        return value
 
 
 def iter_secret_fields(
