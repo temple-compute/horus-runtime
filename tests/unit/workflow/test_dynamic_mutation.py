@@ -322,6 +322,29 @@ class TestExpand:
         assert wf.tasks[1] is fresh
         assert wf.edges == [fresh_edge]
 
+    def test_expand_owner_drops_previous_expansion(self) -> None:
+        """
+        With an owner, a shrinking re-expansion drops every clone it no longer
+        emits (nested ones too) and their edges, but keeps a user task whose
+        id merely starts like a clone.
+        """
+        lookalike = _task("m[x]")
+        wf = HorusWorkflow(name="wf", tasks=[_task("m"), lookalike])
+        clones = [_task(f"m[{i}]") for i in range(3)]
+        wf.expand(
+            tasks=[*clones, _task("m[1]/inner")],
+            edges=[WorkflowEdge(source="m", target=c.id) for c in clones],
+            owner="m",
+        )
+
+        fresh = _task("m[0]")
+        fresh_edge = WorkflowEdge(source="m", target="m[0]")
+        wf.expand(tasks=[fresh], edges=[fresh_edge], owner="m")
+
+        assert [t.id for t in wf.tasks] == ["m", "m[x]", "m[0]"]
+        assert wf.tasks[2] is fresh
+        assert wf.edges == [fresh_edge]
+
     def test_expand_duplicate_ids_within_one_batch_still_raise(self) -> None:
         """Supersession is against the workflow, not within the batch: two
         new tasks sharing an id is still an authoring error.

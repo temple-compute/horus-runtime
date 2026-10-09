@@ -435,6 +435,43 @@ class TestPartialResume:
         assert (scored / "2" / "result.txt").read_text() == "STALE"
         assert (scored / "1" / "result.txt").read_text() == "b.txt"
 
+    async def test_shrinking_map_drops_stale_clones_and_slots(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Reloaded from a dump that still carries a 3-item expansion (what
+        tc-os does when re-running from a run) and re-run over 1 item, the
+        map leaves exactly one clone, one clone edge, and one slot folder.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        await wf.run(trigger_id="split")
+        dump = tmp_path / "dump.yaml"
+        wf.to_yaml(dump)
+
+        for name in ("b.txt", "c.txt"):
+            (tmp_path / "batches" / name).unlink()
+        (tmp_path / ".horus" / "score.json").unlink()
+
+        wf2 = BaseWorkflow.from_yaml(dump)
+        assert len([t for t in wf2.tasks if t.id.startswith("score[")]) == 3
+        await wf2.run(trigger_id="split")
+
+        assert wf2.status.value == "completed"
+        assert [t.id for t in wf2.tasks if t.id.startswith("score[")] == [
+            "score[0]"
+        ]
+        assert [e.target for e in wf2.edges if e.source == "score"] == [
+            "score[0]"
+        ]
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0"]
+
     async def test_an_unchanged_map_is_skipped_whole(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
