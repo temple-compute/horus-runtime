@@ -30,6 +30,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.packaging import package_workflow
 from horus_runtime.secrets import (
+    SECRET_MASK,
     Secret,
     SecretResolutionError,
     env_key_for_ref,
@@ -131,14 +132,53 @@ class TestSecret:
         with pytest.raises(SecretResolutionError, match="missing"):
             Secret("${secret:missing}").resolve()
 
-    def test_default_json_dump_masks_a_reference_without_resolving(
+    def test_json_dump_keeps_a_reference_without_resolving(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """model_dump never resolves; masking a reference must not raise."""
+        """A JSON dump writes the reference itself and never resolves it."""
         monkeypatch.delenv("HORUS_SECRET_MY_REF", raising=False)
         monkeypatch.delenv("HORUS_SECRETS_FILE", raising=False)
+        holder = Holder(
+            name="x",
+            secret=Secret("${secret:my-ref}"),
+            many=[Nested(inner=Secret("${secret:other}"))],
+        )
+        dumped = holder.model_dump(mode="json")
+        assert dumped["secret"] == "${secret:my-ref}"
+        assert dumped["many"][0]["inner"] == "${secret:other}"
+        assert '"${secret:my-ref}"' in holder.model_dump_json()
+
+    def test_json_dump_round_trips_a_reference(self) -> None:
+        """Dump -> validate yields the same reference, not a mask."""
         holder = Holder(name="x", secret=Secret("${secret:my-ref}"))
-        assert holder.model_dump(mode="json")["secret"] == "**********"
+        again = Holder.model_validate_json(holder.model_dump_json())
+        assert again.secret is not None
+        assert again.secret.ref == "my-ref"
+
+    def test_json_dump_never_leaks_a_literal(self) -> None:
+        """A literal is still masked in every dump shape."""
+        holder = Holder(name="x", secret=Secret(HUNTER2))
+        assert holder.model_dump(mode="json")["secret"] == SECRET_MASK
+        assert HUNTER2 not in holder.model_dump_json()
+
+    def test_repr_masks_a_reference(self) -> None:
+        """repr/str stay masked even for a reference."""
+        holder = Holder(name="x", secret=Secret("${secret:my-ref}"))
+        assert "my-ref" not in repr(holder)
+        assert str(Secret("${secret:my-ref}")) == SECRET_MASK
+
+    def test_mask_never_resolves_as_a_password(self) -> None:
+        """A value copied from a masked dump is refused, not used."""
+        with pytest.raises(SecretResolutionError, match="masked"):
+            Secret(SECRET_MASK).resolve()
+
+    def test_reference_resolving_to_the_mask_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stored value that is itself the mask is refused too."""
+        monkeypatch.setenv("HORUS_SECRET_MY_REF", SECRET_MASK)
+        with pytest.raises(SecretResolutionError, match="masked"):
+            Secret("${secret:my-ref}").resolve()
 
 
 @pytest.mark.unit
@@ -209,7 +249,7 @@ class TestRedact:
         assert redacted["secret"] == "${secret:secret}"
         assert HUNTER2 not in str(redacted)
         # The dict redact() was given is untouched (a deep copy is redacted).
-        assert data["secret"] == "**********"
+        assert data["secret"] == SECRET_MASK
 
     def test_keeps_an_existing_reference(self) -> None:
         """Redacting an already-referenced value is a no-op on its ref."""
