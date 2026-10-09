@@ -75,7 +75,8 @@ class GenericTransfer(BaseTransferStrategy):
         data = await source.get_file(pkg_src)
 
         name = PurePosixPath(pkg_src).name
-        pkg_dst = f"{destination.resolved_working_directory}/{name}"
+        wd = PurePosixPath(destination.resolved_working_directory)
+        pkg_dst = str(wd / name)
         await destination.put_file(data, pkg_dst)
 
         # Derive dest_path from destination.resolved_working_directory so it
@@ -84,10 +85,7 @@ class GenericTransfer(BaseTransferStrategy):
         # used destination.path_on_target(artifact) which, for targets that do
         # not override path_on_target, returns the source's absolute path —
         # causing a working-dir mismatch that forced a slow `find` fallback.
-        dest_path = (
-            f"{destination.resolved_working_directory}"
-            f"/{PurePosixPath(artifact.path).name}"
-        )
+        dest_path = str(wd / PurePosixPath(artifact.path).name)
 
         # Repoint the artifact at the destination path *before* unpackage so
         # that path_on_target (used internally by dst_store.unpackage) returns

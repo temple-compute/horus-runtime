@@ -290,3 +290,71 @@ class TestGenericTransfer:
             await GenericTransfer().transfer(artifact, source, destination)
 
             assert Path(dst_dir, "f.txt").read_text() == "payload"
+
+
+@pytest.mark.unit
+class TestTrailingSlashWorkingDirectory:
+    """
+    A trailing ``/`` on ``working_directory`` must not break transfers
+    (``mv wd//f wd/f`` fails with "are the same file" on GNU mv).
+    """
+
+    def test_working_directory_trailing_slash_stripped(self) -> None:
+        """Trailing slashes are dropped; the root stays ``/``."""
+        assert LocalTarget(working_directory="/a/b/").working_directory == (
+            "/a/b"
+        )
+        assert LocalTarget(working_directory="/a/b//").working_directory == (
+            "/a/b"
+        )
+        assert LocalTarget(working_directory="/").working_directory == "/"
+
+    async def test_unpackage_file_skips_self_move(
+        self, horus_context: HorusContext, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A package path differing only by ``//`` is already in place."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as tmp:
+            # Resolved, since FileArtifact resolves its path (macOS /private).
+            temp_dir = str(Path(tmp).resolve())
+            path = Path(temp_dir) / "f.txt"
+            path.write_text("hi")
+            store = ArtifactStore(LocalTarget(working_directory=temp_dir))
+            artifact = FileArtifact(id="a", path=path)
+
+            async def _no_command(*_: object, **__: object) -> None:
+                raise AssertionError("unpackage must not run a command")
+
+            monkeypatch.setattr(store, "_run", _no_command)
+            await store.unpackage(artifact, f"{temp_dir}//f.txt")
+
+            assert path.read_text() == "hi"
+
+    async def test_cross_location_file_transfer_trailing_slash(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A file transfers into a destination whose wd ends with ``/``."""
+        del horus_context
+        with (
+            tempfile.TemporaryDirectory() as src_dir,
+            tempfile.TemporaryDirectory() as dst_dir,
+        ):
+            src_file = Path(src_dir) / "f.txt"
+            src_file.write_text("payload")
+
+            source = _FarLocalTarget(working_directory=f"{src_dir}/")
+            destination = _FarLocalTarget(working_directory=f"{dst_dir}/")
+            artifact = FileArtifact(id="f", path=src_file)
+
+            await GenericTransfer().transfer(artifact, source, destination)
+
+            assert Path(dst_dir, "f.txt").read_text() == "payload"
+            assert artifact.path == Path(dst_dir, "f.txt").resolve()
+
+    async def test_failed_command_error_includes_stderr(self) -> None:
+        """The RuntimeError carries the command's stderr, not just rc."""
+        store = ArtifactStore(LocalTarget())
+        artifact = FileArtifact(id="a", path=Path("/nonexistent/f.txt"))
+
+        with pytest.raises(RuntimeError, match=r"exit code 3.*boom"):
+            await store._run("echo boom >&2; exit 3", artifact, "unpackage")
