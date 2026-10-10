@@ -150,3 +150,68 @@ class TestValueRootsMaterializeAndTransfer:
         assert root_ids == {"n", "b", "s"}
         values = {a.id: getattr(a, "value", None) for a in reloaded.artifacts}
         assert values == {"n": 42, "b": True, "s": "hello"}
+
+
+@pytest.mark.unit
+class TestMappedBooleanRoot:
+    """A boolean with on/off values hands the task the mapped value."""
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [(True, "--device gpu"), (False, "--device cpu")],
+    )
+    @pytest.mark.parametrize("plain_input", [False, True])
+    async def test_mapped_value_reaches_the_command(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        state: bool,
+        expected: str,
+        plain_input: bool,
+    ) -> None:
+        """
+        ``$device`` renders ``gpu``/``cpu``, whether the consuming input
+        repeats the mapping or is declared as a plain boolean.
+        """
+        del horus_context
+        root = BooleanArtifact(
+            id="device",
+            path=Path("roots/device"),
+            value=state,
+            on={"value": "gpu", "label": "GPU"},  # type: ignore[arg-type]
+            off={"value": "cpu", "label": "CPU"},  # type: ignore[arg-type]
+        )
+        consumer_input = (
+            BooleanArtifact(id="device", path=Path("roots/device"))
+            if plain_input
+            else root.model_copy(deep=True)
+        )
+        task = HorusTask(
+            id="consume",
+            name="consume",
+            runtime=CommandRuntime(command="echo --device $device > $report"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[consumer_input],
+            outputs=[FileArtifact(id="report", path=Path("report.txt"))],
+        )
+        wf = HorusWorkflow(
+            name="mapped-boolean",
+            tasks=[task],
+            artifacts=[root],
+            edges=[
+                WorkflowEdge(
+                    source="artifact-device",
+                    source_output="device",
+                    target="consume",
+                    target_input="device",
+                )
+            ],
+        )
+        wf._base_directory = tmp_path
+
+        await wf.run(trigger_id="consume")
+
+        assert wf.status.value == "completed"
+        assert (tmp_path / "report.txt").read_text().strip() == expected
+        assert (tmp_path / "roots/device").read_text() == f'"{expected[-3:]}"'
