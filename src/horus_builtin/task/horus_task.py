@@ -142,9 +142,6 @@ class HorusTask(BaseTask):
         own configuration, so editing the command invalidates the cache too.
         """
         store = ArtifactStore(self.target)
-        # ponytail: a folder input digests to None, so a task whose inputs are
-        # all folders keeps the old existence-only behaviour, upgrade path is a
-        # recursive digest in ArtifactStore.digest.
         inputs = {
             artifact.id: await store.digest(artifact) or _UNHASHABLE
             for artifact in self.inputs

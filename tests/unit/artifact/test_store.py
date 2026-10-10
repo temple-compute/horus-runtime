@@ -136,6 +136,38 @@ class TestArtifactStore:
 
             assert await store.exists(artifact) is True
 
+    async def test_folder_digest_tracks_contents_and_names(
+        self, tmp_path: Path
+    ) -> None:
+        """A folder digests by content, so a folder input can invalidate a
+        task's fingerprint; it used to digest to None (a constant).
+        """
+        folder = tmp_path / "f"
+        (folder / "sub").mkdir(parents=True)
+        (folder / "a.txt").write_text("a")
+        (folder / "sub" / "b.txt").write_text("b")
+        store = ArtifactStore(LocalTarget())
+        artifact = FolderArtifact(id="f", path=folder)
+
+        first = await store.digest(artifact)
+        assert first is not None
+        assert await store.digest(artifact) == first
+
+        (folder / "sub" / "b.txt").write_text("B")
+        edited = await store.digest(artifact)
+        assert edited not in (None, first)
+
+        (folder / "sub" / "b.txt").rename(folder / "sub" / "c.txt")
+        assert await store.digest(artifact) not in (None, first, edited)
+
+    async def test_digest_of_missing_path_is_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Nothing to hash means no digest, never a crash."""
+        store = ArtifactStore(LocalTarget())
+        missing = FolderArtifact(id="m", path=tmp_path / "missing")
+        assert await store.digest(missing) is None
+
     async def test_delete_removes_file_and_emits_event(
         self, horus_context: HorusContext
     ) -> None:

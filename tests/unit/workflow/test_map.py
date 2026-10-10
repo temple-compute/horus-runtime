@@ -530,6 +530,36 @@ class TestPartialResume:
         assert score.status == TaskStatus.SKIPPED
         assert [t.id for t in wf.tasks if t.id.startswith("score[")] == []
 
+    async def test_a_changed_upstream_folder_reruns_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The bug this guards: a folder input used to fingerprint as a
+        constant, so after the upstream task rewrote the collection the map
+        and every clone still skipped as complete, keeping stale results.
+        """
+        del horus_context
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
+
+        await _build().run(trigger_id="split")
+
+        wf = _build()
+        # _split_task rewrites the original contents, so change them after.
+        (tmp_path / "batches" / "a.txt").write_text("changed")
+        await wf.run(trigger_id="split")
+
+        score = next(t for t in wf.tasks if t.id == "score")
+        assert score.status == TaskStatus.COMPLETED
+        scored = tmp_path / "scored_out"
+        assert (scored / "0" / "result.txt").read_text() == "changed"
+
 
 @pytest.mark.unit
 class TestSkipPropagation:
