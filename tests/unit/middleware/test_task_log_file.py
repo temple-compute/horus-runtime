@@ -17,14 +17,17 @@
 #
 """Tests for TaskLogFileMiddleware."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.middleware.task_log_file import TaskLogFileMiddleware
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
+from horus_runtime.context import running_task
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.logging import horus_logger
@@ -45,10 +48,10 @@ class _ConcreteTask(BaseTask):
         pass
 
 
-def _make_task() -> _ConcreteTask:
+def _make_task(task_id: str = "t1", name: str = "my_task") -> _ConcreteTask:
     return _ConcreteTask(
-        id="t1",
-        name="my_task",
+        id=task_id,
+        name=name,
         runtime=CommandRuntime(command="echo hi"),
         executor=ShellExecutor(),
         target=LocalTarget(),
@@ -80,3 +83,38 @@ async def test_log_artifact_registered_before_task_runs(
 
     assert result == "ok"
     assert f"{task.id}_logs" in seen_during_run
+
+
+@pytest.mark.unit
+async def test_concurrent_tasks_log_only_their_own_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Loguru sinks are global: each task's log file must only collect the lines
+    logged while that task is the current one, not its concurrent siblings'.
+    """
+    monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+
+    async def run(task: _ConcreteTask) -> None:
+        async def call_next() -> None:
+            for i in range(3):
+                logger.info(f"line from {task.name} {i}")
+                await asyncio.sleep(0)
+
+        # Mirror BaseTask.run, which sets the current task around the chain.
+        with running_task(task.id):
+            await TaskLogFileMiddleware().wrap(
+                TaskMiddlewareContext(task=task), call_next
+            )
+
+    await asyncio.gather(
+        run(_make_task("a", "task_a")), run(_make_task("b", "task_b"))
+    )
+    logger.info("workflow-level line")
+
+    log_a = (tmp_path / "task_a.log").read_text()
+    log_b = (tmp_path / "task_b.log").read_text()
+    assert log_a.count("line from task_a") == 3
+    assert log_b.count("line from task_b") == 3
+    assert "task_b" not in log_a
+    assert "task_a" not in log_b

@@ -25,6 +25,7 @@ from typing import TypeVar
 from loguru import logger
 
 from horus_builtin.artifact.file import FileArtifact
+from horus_runtime.context import current_task_id
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
@@ -87,12 +88,17 @@ class TaskLogFileMiddleware(TaskMiddleware):
 
         log_path = logs_dir / f"{safe_name}.log"
 
-        # Add the file to the sink (this creates the file on disk).
+        # Add the file to the sink (this creates the file on disk). loguru
+        # sinks are global, so only accept records emitted while this task is
+        # the current one (``BaseTask.run`` sets it around the middleware
+        # chain); otherwise concurrent tasks would write into each other's log.
+        task_id = ctx.task.id
         handler_id = logger.add(
             sink=log_path,
             format=horus_logger.format,
             level=horus_logger.level,
             enqueue=False,
+            filter=lambda _record: current_task_id() == task_id,
         )
 
         # Register the log file as a side artifact up front, while we still own
