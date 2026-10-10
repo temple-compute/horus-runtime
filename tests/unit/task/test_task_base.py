@@ -408,6 +408,82 @@ class TestBaseTaskRun:
         # No stray task directory left under the process CWD on the way there.
         assert not (elsewhere / task.id).exists()
 
+    @pytest.mark.parametrize(
+        ("fail", "expected"),
+        [(False, TaskStatus.COMPLETED), (True, TaskStatus.FAILED)],
+    )
+    async def test_middleware_sees_terminal_status_on_exit(
+        self, fail: bool, expected: TaskStatus
+    ) -> None:
+        """
+        The terminal status is set inside the middleware chain, so middleware
+        reporting status on its way out (e.g. in a ``finally``) sees it.
+        """
+        seen: list[TaskStatus] = []
+        original_registry = list(TaskMiddleware.registry)
+
+        class MaybeFailingTask(ConcreteTestTask):
+            kind: str = "maybe_failing_task"
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                if fail:
+                    raise RuntimeError("boom")
+
+        class RecordingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, context: TaskMiddlewareContext) -> None:
+                seen.append(context.task.status)
+
+        TaskMiddleware.registry = [*original_registry, RecordingMiddleware]
+        try:
+            task = MaybeFailingTask(
+                id="test_task_id",
+                name="test_task",
+                skip_if_complete=False,
+                runtime=CommandRuntime(command="echo test"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+            )
+            if fail:
+                with pytest.raises(RuntimeError):
+                    await task.run()
+            else:
+                await task.run()
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert seen == [expected]
+        assert task.status == expected
+        assert task.finished_at is not None
+
+    async def test_middleware_failure_after_run_marks_task_failed(
+        self,
+    ) -> None:
+        """
+        A middleware raising after ``_run()`` succeeded still ends the task in
+        FAILED, not the COMPLETED set inside the chain.
+        """
+        original_registry = list(TaskMiddleware.registry)
+
+        class FailingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, _: TaskMiddlewareContext) -> None:
+                raise RuntimeError("middleware boom")
+
+        TaskMiddleware.registry = [*original_registry, FailingMiddleware]
+        try:
+            task = _make_concrete_task()
+            task.skip_if_complete = False
+            with pytest.raises(RuntimeError, match="middleware boom"):
+                await task.run()
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert task.status == TaskStatus.FAILED
+
 
 @pytest.mark.unit
 class TestBaseTaskReset:
