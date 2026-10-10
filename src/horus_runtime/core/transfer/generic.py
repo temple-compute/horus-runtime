@@ -30,6 +30,7 @@ from pathlib import Path, PurePosixPath
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.transfer.events import report_transfer_progress
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.logging import horus_logger
 
@@ -70,8 +71,10 @@ class GenericTransfer(BaseTransferStrategy):
         dst_store = ArtifactStore(destination)
 
         src_path = source.path_on_target(artifact)
+        report_transfer_progress(stage="packaging")
         pkg_src = await src_store.package(artifact)
 
+        report_transfer_progress(stage="transferring")
         data = await source.get_file(pkg_src)
 
         name = PurePosixPath(pkg_src).name
@@ -92,6 +95,7 @@ class GenericTransfer(BaseTransferStrategy):
         # the correct destination location.
         artifact.path = Path(dest_path)
 
+        report_transfer_progress(stage="unpacking")
         await dst_store.unpackage(artifact, pkg_dst)
 
         # Best-effort cleanup of staging packages. Never remove a package that

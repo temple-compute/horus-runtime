@@ -22,6 +22,7 @@ fan-out behaviour as an ordinary DAG node.
 
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -39,6 +40,7 @@ from horus_builtin.workflow.map import MapOver, MapTask
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
@@ -155,6 +157,36 @@ class TestFolderFanOut:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_clone_hand_offs_emit_no_transfer_events(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Only the real split -> score edge reports a transfer; the map's
+        per-clone item hand-offs are not edges and stay silent.
+        """
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        transfers = [
+            c.args[0]
+            for c in emit.call_args_list
+            if isinstance(c.args[0], TransferEvent)
+        ]
+        assert [(e.task_id, e.phase) for e in transfers] == [
+            ("score", "started"),
+            ("score", "finished"),
+        ]
 
     async def test_downstream_task_consumes_the_folder_output(
         self, tmp_path: Path, horus_context: HorusContext
