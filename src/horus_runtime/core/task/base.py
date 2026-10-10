@@ -288,6 +288,11 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``COMPLETED``   — set on clean exit
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
+
+        Terminal statuses are set as soon as ``_run()`` returns or raises,
+        still inside the ``TaskMiddleware`` chain, so middleware sees them on
+        its way out; a middleware that later raises turns them into ``FAILED``
+        or ``CANCELED``.
         """
         ctx = HorusContext.get_context()
         # Publish this task as the "current task" for the duration of its
@@ -339,35 +344,49 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     # creating the directory first would create it at the old
                     # path and leave the new one missing.
                     await self.target.mkdir(self.working_dir)
-                    await self._run()
+                    # The terminal status is also set here, inside the chain,
+                    # so every middleware observes it on its way out (e.g. one
+                    # reporting status in its ``finally``). The outer handlers
+                    # below still cover failures raised by middleware itself.
+                    try:
+                        await self._run()
+                    except CancelledError:
+                        self._finish(TaskStatus.CANCELED)
+                        raise
+                    except Exception:
+                        self._finish(TaskStatus.FAILED)
+                        raise
+                    self._finish(TaskStatus.COMPLETED)
 
                 await TaskMiddleware.call_with_middleware(
                     TaskMiddlewareContext(task=self),
                     mkdir_and_run,
                 )
             except CancelledError:
-                self.status = TaskStatus.CANCELED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → CANCELED")
-                    % {"task_name": self.name}
-                )
+                self._finish(TaskStatus.CANCELED)
                 raise
             except Exception:
-                self.status = TaskStatus.FAILED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → FAILED")
-                    % {"task_name": self.name}
-                )
+                self._finish(TaskStatus.FAILED)
                 raise
             else:
-                self.status = TaskStatus.COMPLETED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → COMPLETED")
-                    % {"task_name": self.name}
-                )
+                self._finish(TaskStatus.COMPLETED)
+
+    def _finish(self, status: TaskStatus) -> None:
+        """
+        Record terminal *status* and ``finished_at``; a no-op if the task is
+        already in that status, so the outer handlers in :meth:`run` keep the
+        timestamp set inside the middleware chain.
+        """
+        if self.status is status:
+            return
+        self.status = status
+        self.finished_at = datetime.now(UTC)
+        messages = {
+            TaskStatus.COMPLETED: _("Task %(task_name)s status → COMPLETED"),
+            TaskStatus.FAILED: _("Task %(task_name)s status → FAILED"),
+            TaskStatus.CANCELED: _("Task %(task_name)s status → CANCELED"),
+        }
+        horus_logger.log.debug(messages[status] % {"task_name": self.name})
 
     async def sync_status(self) -> TaskStatus:
         """
