@@ -35,6 +35,7 @@ from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
@@ -220,6 +221,11 @@ class MapTask(HorusTask):
             for clone in clones
             for artifact in clone.inputs
         }
+
+        # The clones are this task's real work, and they bypass its executor,
+        # which is what flips a task from CONFIGURING to RUNNING; without
+        # this the map reports "configuring" for its whole fan-out.
+        self.status = TaskStatus.RUNNING
 
         pool = TargetPool(self.max_concurrency)
         async with asyncio.TaskGroup() as tg:

@@ -562,6 +562,40 @@ class TestPartialResume:
 
 
 @pytest.mark.unit
+class TestMapStatus:
+    """The map's own status while its clones run."""
+
+    async def test_map_is_running_while_its_clones_run(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Clones bypass the map's executor, the only place a task flips
+        from CONFIGURING to RUNNING, so the map used to report
+        "configuring" for its whole fan-out.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        from horus_builtin.workflow import map as map_module  # noqa: PLC0415
+
+        seen: list[TaskStatus] = []
+        original = map_module.execute_task
+
+        async def spy(*args: object, **kwargs: object) -> None:
+            seen.append(map_task.status)
+            await original(*args, **kwargs)  # type: ignore[arg-type]
+
+        with patch.object(map_module, "execute_task", spy):
+            await wf.run(trigger_id="split")
+
+        assert seen == [TaskStatus.RUNNING, TaskStatus.RUNNING]
+        assert map_task.status == TaskStatus.COMPLETED
+
+
+@pytest.mark.unit
 class TestSkipPropagation:
     """Forcing the map's own ``skip_if_complete`` off propagates to every
     clone (mirrors the CLI's ``--no-skip-all``/``--no-skip``).
