@@ -64,6 +64,7 @@ from horus_builtin.workflow.loop import (
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
@@ -199,6 +200,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     artifacts.
     """
 
+    default_executor: BaseExecutor | None = None
+    """
+    Fallback ``executor`` (HOW a task runs) applied to any task whose own
+    dict omits the field, by :meth:`_apply_placement_defaults`. Lets a
+    reusable task definition (WHAT: its ``runtime``) be authored without
+    committing to a placement, and lets a whole workflow be re-targeted by
+    editing this one field instead of every task.
+    """
+
+    default_target: BaseTarget | None = None
+    """
+    Fallback ``target`` (WHERE a task runs), same mechanics as
+    :attr:`default_executor`.
+    """
+
     status: WorkflowStatus = WorkflowStatus.IDLE
     """
     Current execution state of the workflow. Updated automatically by
@@ -309,6 +325,49 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self._placement is None:
             self._placement = PlacementManager(self.capacity)
         return self._placement
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_placement_defaults(cls, data: object) -> object:
+        """
+        Fill in each task's missing ``executor``/``target`` from this
+        workflow's ``default_executor``/``default_target`` before per-task
+        ``kind``-discriminated parsing runs.
+
+        Defined first among this class's ``mode="before"`` validators so it
+        runs *last* -- pydantic v2 runs same-mode validators in reverse
+        definition order. That ordering matters here: it must see the fully
+        lowered task list (real dicts with a resolvable ``kind``, ``sub:``/
+        ``loop:`` sugar already expanded by :meth:`_lower_subworkflow_tasks`
+        and :meth:`_lower_loop_tasks`) rather than raw sugar blocks, and it
+        must run before task construction -- a task's own default (e.g.
+        ``HorusTask.target = LocalTarget()``) would otherwise silently win
+        over an explicit workflow-level default.
+
+        A no-op when the workflow declares no defaults, or a task already
+        sets both fields itself.
+        """
+        if not isinstance(data, dict):
+            return data
+        default_executor = data.get("default_executor")
+        default_target = data.get("default_target")
+        if default_executor is None and default_target is None:
+            return data
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return data
+
+        def _with_defaults(entry: object) -> object:
+            if not isinstance(entry, dict):
+                return entry
+            filled = dict(entry)
+            if default_executor is not None:
+                filled.setdefault("executor", default_executor)
+            if default_target is not None:
+                filled.setdefault("target", default_target)
+            return filled
+
+        return {**data, "tasks": [_with_defaults(t) for t in tasks]}
 
     @model_validator(mode="before")
     @classmethod
