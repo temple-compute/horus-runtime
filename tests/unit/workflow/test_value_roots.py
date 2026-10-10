@@ -215,3 +215,7 @@ class TestMappedBooleanRoot:
         assert wf.status.value == "completed"
         assert (tmp_path / "report.txt").read_text().strip() == expected
         assert (tmp_path / "roots/device").read_text() == f'"{expected[-3:]}"'
+        # The run's workflow (consumer input included) still reloads.
+        reloaded = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+        consumer = reloaded.tasks[0].inputs[0]
+        assert getattr(consumer, "value", None) == expected[-3:]
