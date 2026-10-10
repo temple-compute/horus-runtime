@@ -1162,6 +1162,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 and hasattr(artifact, "value")
             ):
                 artifact.value = src_artifact.value
+                # Whatever qualifies the value travels with it (a boolean's
+                # on/off mapping): an input declared without it would hold
+                # e.g. ``"gpu"`` as a plain boolean, which fails validation
+                # the next time the run's workflow is dumped and reloaded.
+                if type(artifact) is type(src_artifact):
+                    for name in (
+                        type(artifact).model_fields.keys()
+                        - BaseArtifact.model_fields.keys()
+                    ):
+                        setattr(artifact, name, getattr(src_artifact, name))
 
             # Look up the registered strategy for this (source, dest) pair,
             # falling back to the target-agnostic GenericTransfer when no

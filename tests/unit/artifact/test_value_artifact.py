@@ -190,3 +190,92 @@ class TestValueArtifactMaterialize:
             )
             artifact.materialize()
             assert not target.exists()
+
+
+GPU = {"value": "gpu", "label": "GPU"}
+CPU = {"value": "cpu", "label": None}
+
+
+def _mapped(**kwargs: object) -> BooleanArtifact:
+    return BooleanArtifact.model_validate(
+        {"id": "device", "path": "/d.json", "on": GPU, "off": CPU, **kwargs}
+    )
+
+
+@pytest.mark.unit
+class TestBooleanMapping:
+    """``on``/``off`` map a boolean's two states to the values a task gets."""
+
+    def test_plain_boolean_is_unchanged(self) -> None:
+        """No mapping: value stays a bool, coerced like ``value: bool``."""
+        artifact = BooleanArtifact.model_validate(
+            {"id": "b", "kind": "boolean", "path": "/b", "value": "true"}
+        )
+        assert artifact.value is True
+        assert artifact.on is None and artifact.off is None
+        with pytest.raises(ValueError, match="valid boolean"):
+            BooleanArtifact(id="b", path=Path("/b"), value="gpu")
+
+    def test_default_state_maps_to_off(self) -> None:
+        """An unset value is the off state, i.e. the off value."""
+        assert _mapped().value == "cpu"
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [(True, "gpu"), (False, "cpu"), ("gpu", "gpu"), ("cpu", "cpu")],
+    )
+    def test_value_holds_the_mapped_value(
+        self, given: object, expected: str
+    ) -> None:
+        """A state is translated; a mapped value is kept as-is."""
+        assert _mapped(value=given).value == expected
+
+    def test_dump_reload_round_trips(self) -> None:
+        """The document keeps the mapping and the mapped value."""
+        artifact = _mapped(value=True)
+        dumped = artifact.model_dump(mode="json")
+        assert dumped["value"] == "gpu"
+        assert dumped["on"] == GPU
+        reloaded = BaseArtifact.model_validate(dumped)
+        assert isinstance(reloaded, BooleanArtifact)
+        assert reloaded.value == "gpu"
+        assert reloaded.on == artifact.on
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"value": "tpu"}, "neither the 'on' value"),
+            ({"off": GPU}, "different values"),
+            ({"off": None}, "both 'on' and 'off'"),
+            ({"on": {"value": True}}, "cannot be true/false"),
+        ],
+    )
+    def test_invalid_mappings_are_rejected(
+        self, kwargs: dict[str, object], match: str
+    ) -> None:
+        """Half a mapping, duplicates, bool values and strays all fail."""
+        with pytest.raises(ValueError, match=match):
+            _mapped(**kwargs)
+
+    def test_write_and_read_use_the_mapped_value(
+        self, horus_context: HorusContext
+    ) -> None:
+        """
+        A producer may write the state or the value; the file and read()
+        always carry the value the task receives.
+        """
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "d.json"
+            artifact = _mapped(path=str(target))
+            artifact.write(True)
+            assert target.read_text() == '"gpu"'
+            assert artifact.read() == "gpu"
+            # A producer that wrote the bare state still reads as the value.
+            target.write_text("false")
+            assert artifact.read() == "cpu"
+            # A plain boolean keeps writing JSON true/false.
+            plain = BooleanArtifact(id="b", path=Path(temp_dir) / "b.json")
+            plain.write(False)
+            assert plain.path.read_text() == "false"
+            assert plain.read() is False
