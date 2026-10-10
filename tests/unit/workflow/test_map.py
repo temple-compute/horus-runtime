@@ -37,6 +37,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.map import MapOver, MapTask
+from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.status import TaskStatus
@@ -579,16 +580,14 @@ class TestMapStatus:
         )
         wf = _wire(tmp_path, split=split, map_task=map_task)
 
-        from horus_builtin.workflow import map as map_module  # noqa: PLC0415
-
         seen: list[TaskStatus] = []
-        original = map_module.execute_task
+        original = execute_task
 
         async def spy(*args: object, **kwargs: object) -> None:
             seen.append(map_task.status)
             await original(*args, **kwargs)  # type: ignore[arg-type]
 
-        with patch.object(map_module, "execute_task", spy):
+        with patch("horus_builtin.workflow.map.execute_task", spy):
             await wf.run(trigger_id="split")
 
         assert seen == [TaskStatus.RUNNING, TaskStatus.RUNNING]
