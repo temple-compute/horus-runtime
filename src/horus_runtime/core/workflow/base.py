@@ -34,6 +34,7 @@ import re
 from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -67,6 +68,7 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.transfer.events import TransferEvent, transfer_scope
 from horus_runtime.core.transfer.exceptions import (
     OrchestratorTargetNotSetError,
 )
@@ -101,11 +103,17 @@ class EdgeSource(NamedTuple):
     ``target`` is the producer task's target, or ``None`` for a root source
     (which comes from the orchestrator). ``artifact`` is the producing
     artifact (a task output or a root artifact); it carries the id the data is
-    stored under, which differs from the consumer input id.
+    stored under, which differs from the consumer input id. ``task_id`` is
+    the producer task's id, or ``None`` for a root source. ``report`` is
+    ``False`` for internal hand-offs that are not workflow edges (e.g. a map
+    task feeding its clones), whose transfers emit no
+    :class:`TransferEvent`.
     """
 
     target: BaseTarget | None
     artifact: BaseArtifact | None
+    task_id: str | None = None
+    report: bool = True
 
 
 class BaseWorkflow(AutoRegistry, entry_point="workflow"):
@@ -1048,6 +1056,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 source_map[key] = EdgeSource(
                     producer_target,
                     outputs_by_task.get((edge.source, edge.source_output)),
+                    edge.source,
                 )
             else:
                 # Root source ("artifact-<id>"): sourced from orchestrator.
@@ -1181,7 +1190,34 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
             # Perform the transfer, then point the consumer input at the
             # materialized location so its body templating resolves correctly.
-            await strategy.transfer(transfer_art, source_target, task.target)
+            # The scope reports it as a TransferEvent keyed by the edge it
+            # serves (consumer input + producer), so a UI can animate it;
+            # internal hand-offs (``report=False``) stay silent.
+            scope = (
+                transfer_scope(
+                    TransferEvent(
+                        phase="started",
+                        task_id=task.id,
+                        input_id=artifact.id,
+                        source_task_id=(
+                            source.task_id if source is not None else None
+                        ),
+                        source_artifact_id=transfer_art.id,
+                        strategy=type(strategy).__name__,
+                        same_location=(
+                            source_target.location_id
+                            == task.target.location_id
+                        ),
+                        is_value=hasattr(artifact, "value"),
+                    )
+                )
+                if source is None or source.report
+                else nullcontext()
+            )
+            with scope:
+                await strategy.transfer(
+                    transfer_art, source_target, task.target
+                )
             artifact.path = transfer_art.path
 
     @property

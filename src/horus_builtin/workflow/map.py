@@ -211,8 +211,12 @@ class MapTask(HorusTask):
         # clone target no-ops through BaseTransferStrategy.transfer's
         # same-location_id shortcut, a non-co-located one gets a real
         # transfer via the registered strategy. Nothing needs `pinned`.
+        # These hand-offs are not workflow edges, so they emit no
+        # TransferEvents (one per clone x input would flood the bus).
         source_map: dict[tuple[str, str], EdgeSource] = {
-            (clone.id, artifact.id): EdgeSource(self.target, artifact)
+            (clone.id, artifact.id): EdgeSource(
+                self.target, artifact, report=False
+            )
             for clone in clones
             for artifact in clone.inputs
         }
