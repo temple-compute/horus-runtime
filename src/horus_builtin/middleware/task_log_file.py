@@ -92,13 +92,18 @@ class TaskLogFileMiddleware(TaskMiddleware):
         # sinks are global, so only accept records emitted while this task is
         # the current one (``BaseTask.run`` sets it around the middleware
         # chain); otherwise concurrent tasks would write into each other's log.
+        # Records bound ``operator_only`` (e.g. a provisioning plugin's raw
+        # cloud output) are left out: this file is handed to the task's users.
         task_id = ctx.task.id
         handler_id = logger.add(
             sink=log_path,
             format=horus_logger.format,
             level=horus_logger.level,
             enqueue=False,
-            filter=lambda _record: current_task_id() == task_id,
+            filter=lambda record: (
+                current_task_id() == task_id
+                and not record["extra"].get("operator_only")
+            ),
         )
 
         # Register the log file as a side artifact up front, while we still own
@@ -118,12 +123,11 @@ class TaskLogFileMiddleware(TaskMiddleware):
         out_stream = _LoguruStream("INFO")
         err_stream = _LoguruStream("WARNING")
 
+        # A failure is logged by ``BaseTask.run`` while the task is still
+        # current, so it lands in this file before any middleware's cleanup.
         try:
             with redirect_stdout(out_stream), redirect_stderr(err_stream):
                 return await call_next()
-        except Exception as e:
-            logger.exception(str(e))
-            raise
         finally:
             out_stream.flush()
             err_stream.flush()

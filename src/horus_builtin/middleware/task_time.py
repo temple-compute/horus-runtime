@@ -20,11 +20,16 @@ Builtin plugin to time task execution.
 """
 
 import time
+from asyncio import CancelledError
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext
 from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
+
+R = TypeVar("R")
 
 
 class TaskTimeMiddleware(TaskMiddleware):
@@ -32,32 +37,36 @@ class TaskTimeMiddleware(TaskMiddleware):
     Simple middleware to time task execution.
     """
 
-    _time_start: float = 0.0
-
-    async def before(self, _: TaskMiddlewareContext) -> None:
+    async def wrap(
+        self,
+        middleware_context: TaskMiddlewareContext,
+        call_next: Callable[[], Awaitable[R]],
+    ) -> R:
         """
-        Start the timer.
+        Time the task and report the elapsed time with how it ended.
         """
-        self._time_start = time.perf_counter()
-
-    async def after(self, middleware_context: TaskMiddlewareContext) -> None:
-        """
-        Stop the timer and print the elapsed time.
-        """
-        elapsed = time.perf_counter() - self._time_start
-
-        ctx = HorusContext.get_context()
-        ctx.bus.emit(
-            HorusTaskEvent(
-                task_id=middleware_context.task.id,
-                task_name=middleware_context.task.name,
-                data={"elapsed_time": elapsed},
-                message=_(
-                    "Task %(task_name)s completed in %(elapsed).2f seconds."
-                )
-                % {
-                    "task_name": middleware_context.task.name,
-                    "elapsed": elapsed,
-                },
+        start = time.perf_counter()
+        message = _("Task %(task_name)s failed after %(elapsed).2f seconds.")
+        try:
+            result = await call_next()
+            message = _(
+                "Task %(task_name)s completed in %(elapsed).2f seconds."
             )
-        )
+            return result
+        except CancelledError:
+            message = _(
+                "Task %(task_name)s was canceled after %(elapsed).2f seconds."
+            )
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            task = middleware_context.task
+            HorusContext.get_context().bus.emit(
+                HorusTaskEvent(
+                    task_id=task.id,
+                    task_name=task.name,
+                    data={"elapsed_time": elapsed},
+                    message=message
+                    % {"task_name": task.name, "elapsed": elapsed},
+                )
+            )

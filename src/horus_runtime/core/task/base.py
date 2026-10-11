@@ -39,6 +39,7 @@ from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.exceptions import summarize_exception
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -156,6 +157,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Why the task was skipped, set only alongside ``TaskStatus.SKIPPED``. Lets a
     consumer tell a memoized cache hit apart from a branch that was not taken,
     which are the same status but mean opposite things to a reader.
+    """
+
+    error: str | None = None
+    """
+    One-line summary of why the task failed (``"<Type>: <message>"``), set
+    only alongside ``TaskStatus.FAILED``. The full traceback is in the task's
+    log.
     """
 
     started_at: datetime | None = None
@@ -288,6 +296,11 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``COMPLETED``   — set on clean exit
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
+
+        Terminal statuses are set as soon as ``_run()`` returns or raises,
+        still inside the ``TaskMiddleware`` chain, so middleware sees them on
+        its way out; a middleware that later raises turns them into ``FAILED``
+        or ``CANCELED``.
         """
         ctx = HorusContext.get_context()
         # Publish this task as the "current task" for the duration of its
@@ -318,6 +331,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 return
 
             self.status = TaskStatus.CONFIGURING
+            self.error = None
             self.started_at = datetime.now(UTC)
             self.finished_at = None
             horus_logger.log.debug(
@@ -339,35 +353,64 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     # creating the directory first would create it at the old
                     # path and leave the new one missing.
                     await self.target.mkdir(self.working_dir)
-                    await self._run()
+                    # The terminal status is also set here, inside the chain,
+                    # so every middleware observes it on its way out (e.g. one
+                    # reporting status in its ``finally``), and a failure is
+                    # logged here, while this task is still current, so a
+                    # middleware uploading the task's log in its own cleanup
+                    # (whatever its position in the chain) uploads the error
+                    # too. The outer handlers below still cover failures
+                    # raised by middleware itself.
+                    try:
+                        await self._run()
+                    except CancelledError:
+                        self._finish(TaskStatus.CANCELED)
+                        raise
+                    except Exception as exc:
+                        self._finish(TaskStatus.FAILED, exc)
+                        raise
+                    self._finish(TaskStatus.COMPLETED)
 
                 await TaskMiddleware.call_with_middleware(
                     TaskMiddlewareContext(task=self),
                     mkdir_and_run,
                 )
             except CancelledError:
-                self.status = TaskStatus.CANCELED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → CANCELED")
-                    % {"task_name": self.name}
-                )
+                self._finish(TaskStatus.CANCELED)
                 raise
-            except Exception:
-                self.status = TaskStatus.FAILED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → FAILED")
-                    % {"task_name": self.name}
-                )
+            except Exception as exc:
+                self._finish(TaskStatus.FAILED, exc)
                 raise
             else:
-                self.status = TaskStatus.COMPLETED
-                self.finished_at = datetime.now(UTC)
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → COMPLETED")
-                    % {"task_name": self.name}
-                )
+                self._finish(TaskStatus.COMPLETED)
+
+    def _finish(
+        self, status: TaskStatus, exc: Exception | None = None
+    ) -> None:
+        """
+        Record terminal *status* and ``finished_at``; a no-op if the task is
+        already in that status, so the outer handlers in :meth:`run` keep the
+        timestamp (and error) set inside the middleware chain.
+
+        For ``FAILED``, *exc* is logged with its traceback and summarized
+        into ``error``.
+        """
+        if self.status is status:
+            return
+        self.status = status
+        self.finished_at = datetime.now(UTC)
+        if exc is not None:
+            self.error = summarize_exception(exc)
+            # The attached exception carries the reason (and traceback).
+            horus_logger.log.opt(exception=exc).error(
+                _("Task %(task_name)s failed") % {"task_name": self.name}
+            )
+        messages = {
+            TaskStatus.COMPLETED: _("Task %(task_name)s status → COMPLETED"),
+            TaskStatus.FAILED: _("Task %(task_name)s status → FAILED"),
+            TaskStatus.CANCELED: _("Task %(task_name)s status → CANCELED"),
+        }
+        horus_logger.log.debug(messages[status] % {"task_name": self.name})
 
     async def sync_status(self) -> TaskStatus:
         """
@@ -407,6 +450,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
         """
         self.status = TaskStatus.IDLE
         self.skip_reason = None
+        self.error = None
         self.started_at = None
         self.finished_at = None
         horus_logger.log.debug(

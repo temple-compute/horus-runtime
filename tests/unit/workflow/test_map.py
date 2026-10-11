@@ -22,6 +22,7 @@ fan-out behaviour as an ordinary DAG node.
 
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -36,9 +37,11 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.map import MapOver, MapTask
+from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
@@ -155,6 +158,36 @@ class TestFolderFanOut:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_clone_hand_offs_emit_no_transfer_events(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Only the real split -> score edge reports a transfer; the map's
+        per-clone item hand-offs are not edges and stay silent.
+        """
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        transfers = [
+            c.args[0]
+            for c in emit.call_args_list
+            if isinstance(c.args[0], TransferEvent)
+        ]
+        assert [(e.task_id, e.phase) for e in transfers] == [
+            ("score", "started"),
+            ("score", "finished"),
+        ]
 
     async def test_downstream_task_consumes_the_folder_output(
         self, tmp_path: Path, horus_context: HorusContext
@@ -497,6 +530,68 @@ class TestPartialResume:
         score = next(t for t in wf.tasks if t.id == "score")
         assert score.status == TaskStatus.SKIPPED
         assert [t.id for t in wf.tasks if t.id.startswith("score[")] == []
+
+    async def test_a_changed_upstream_folder_reruns_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The bug this guards: a folder input used to fingerprint as a
+        constant, so after the upstream task rewrote the collection the map
+        and every clone still skipped as complete, keeping stale results.
+        """
+        del horus_context
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
+
+        await _build().run(trigger_id="split")
+
+        wf = _build()
+        # _split_task rewrites the original contents, so change them after.
+        (tmp_path / "batches" / "a.txt").write_text("changed")
+        await wf.run(trigger_id="split")
+
+        score = next(t for t in wf.tasks if t.id == "score")
+        assert score.status == TaskStatus.COMPLETED
+        scored = tmp_path / "scored_out"
+        assert (scored / "0" / "result.txt").read_text() == "changed"
+
+
+@pytest.mark.unit
+class TestMapStatus:
+    """The map's own status while its clones run."""
+
+    async def test_map_is_running_while_its_clones_run(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Clones bypass the map's executor, the only place a task flips
+        from CONFIGURING to RUNNING, so the map used to report
+        "configuring" for its whole fan-out.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        seen: list[TaskStatus] = []
+        original = execute_task
+
+        async def spy(*args: object, **kwargs: object) -> None:
+            seen.append(map_task.status)
+            await original(*args, **kwargs)  # type: ignore[arg-type]
+
+        with patch("horus_builtin.workflow.map.execute_task", spy):
+            await wf.run(trigger_id="split")
+
+        assert seen == [TaskStatus.RUNNING, TaskStatus.RUNNING]
+        assert map_task.status == TaskStatus.COMPLETED
 
 
 @pytest.mark.unit

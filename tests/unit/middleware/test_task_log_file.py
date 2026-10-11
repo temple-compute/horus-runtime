@@ -118,3 +118,28 @@ async def test_concurrent_tasks_log_only_their_own_lines(
     assert log_b.count("line from task_b") == 3
     assert "task_b" not in log_a
     assert "task_a" not in log_b
+
+
+@pytest.mark.unit
+async def test_operator_only_lines_stay_out_of_the_task_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The task log is uploaded for the task's users; records bound
+    ``operator_only`` (raw cloud provisioning output) must not land in it.
+    """
+    monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+    task = _make_task()
+
+    async def call_next() -> None:
+        logger.info("visible line")
+        logger.bind(operator_only=True).info("arn:aws:iam::123456789012:x")
+
+    with running_task(task.id):
+        await TaskLogFileMiddleware().wrap(
+            TaskMiddlewareContext(task=task), call_next
+        )
+
+    log = (tmp_path / "my_task.log").read_text()
+    assert "visible line" in log
+    assert "123456789012" not in log

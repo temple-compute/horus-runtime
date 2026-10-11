@@ -24,6 +24,7 @@ target and performs those operations through the target's artifact-agnostic
 filesystem primitives.
 """
 
+import hashlib
 import shlex
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -37,6 +38,9 @@ if TYPE_CHECKING:
 
 _SHA256_HEX_LEN = 64
 """Length of a hex-encoded sha256, used to sanity-check command output."""
+
+_DIR_MARKER = "horus-dir"
+"""First line of a directory's digest listing, telling it from a file's."""
 
 _STDERR_TAIL = 2000
 """Max characters of a failed command's stderr kept in the error message."""
@@ -62,7 +66,13 @@ class ArtifactStore:
     async def digest(self, artifact: "BaseArtifact") -> str | None:
         """
         sha256 of *artifact*'s bytes as they are on the target, or ``None``
-        when it cannot be hashed (missing, a directory, no hashing tool).
+        when it cannot be hashed (missing, unreadable, no hashing tool).
+
+        A directory digests to the sha256 of its sorted ``<sha256>  <relative
+        path>`` listing, so editing, adding, removing or renaming any file in
+        it changes the digest. Without that a folder input could never
+        invalidate a fingerprint, and a task fed a changed folder skipped as
+        already complete.
 
         Hashing happens target-side through the shell channel, like
         :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
@@ -70,12 +80,20 @@ class ArtifactStore:
         fallback because macOS ships no ``sha256sum``.
         """
         path = shlex.quote(self.target.path_on_target(artifact))
+        # ponytail: empty directories and file modes are not part of a
+        # folder's digest, only regular files' contents and relative paths.
         proc = await self.target.run_command_sync(
-            f"sha256sum {path} 2>/dev/null || shasum -a 256 {path}"
+            "h=sha256sum; command -v sha256sum >/dev/null || h='shasum -a 256'"
+            f"; if [ -d {path} ]; then printf '{_DIR_MARKER}\\n' && cd {path}"
+            " && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r $h"
+            f"; else $h {path}; fi 2>/dev/null"
         )
         out, _stderr = await proc.communicate()
         if await proc.wait() != 0:
             return None
+
+        if out.startswith(f"{_DIR_MARKER}\n".encode()):
+            return hashlib.sha256(out).hexdigest()
 
         fields = out.decode(errors="replace").split()
         if not fields or len(fields[0]) != _SHA256_HEX_LEN:
