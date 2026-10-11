@@ -20,6 +20,9 @@ Builtin plugin to time workflow execution.
 """
 
 import time
+from asyncio import CancelledError
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from horus_builtin.event.workflow_event import HorusWorkflowEvent
 from horus_runtime.context import HorusContext
@@ -29,40 +32,50 @@ from horus_runtime.middleware.workflow import (
     WorkflowMiddlewareContext,
 )
 
+R = TypeVar("R")
+
 
 class WorkflowTimeMiddleware(WorkflowMiddleware):
     """
     Simple middleware to time workflow execution.
     """
 
-    _time_start: float = 0.0
+    async def wrap(
+        self,
+        middleware_context: WorkflowMiddlewareContext,
+        call_next: Callable[[], Awaitable[R]],
+    ) -> R:
+        """
+        Time the workflow and report the elapsed time with how it ended.
 
-    async def before(self, _: WorkflowMiddlewareContext) -> None:
+        ``BaseWorkflow.run`` sets the terminal status only after the
+        middleware chain returns, so the outcome is read from ``call_next``.
         """
-        Start the timer.
-        """
-        self._time_start = time.perf_counter()
-
-    async def after(
-        self, middleware_context: WorkflowMiddlewareContext
-    ) -> None:
-        """
-        Stop the timer and print the elapsed time.
-        """
-        elapsed = time.perf_counter() - self._time_start
-
-        ctx = HorusContext.get_context()
-        ctx.bus.emit(
-            HorusWorkflowEvent(
-                workflow_name=middleware_context.workflow.name,
-                data={"elapsed_time": elapsed},
-                message=_(
-                    "Workflow %(workflow_name)s completed in"
-                    " %(elapsed).2f seconds."
-                )
-                % {
-                    "workflow_name": middleware_context.workflow.name,
-                    "elapsed": elapsed,
-                },
-            )
+        start = time.perf_counter()
+        message = _(
+            "Workflow %(workflow_name)s failed after %(elapsed).2f seconds."
         )
+        try:
+            result = await call_next()
+            message = _(
+                "Workflow %(workflow_name)s completed in"
+                " %(elapsed).2f seconds."
+            )
+            return result
+        except CancelledError:
+            message = _(
+                "Workflow %(workflow_name)s was canceled after"
+                " %(elapsed).2f seconds."
+            )
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            name = middleware_context.workflow.name
+            HorusContext.get_context().bus.emit(
+                HorusWorkflowEvent(
+                    workflow_name=name,
+                    data={"elapsed_time": elapsed},
+                    message=message
+                    % {"workflow_name": name, "elapsed": elapsed},
+                )
+            )

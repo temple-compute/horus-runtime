@@ -38,3 +38,34 @@ class TaskMissingIdError(BaseTaskError):
     assigned. This typically means the task was added to the workflow after
     construction (e.g. via a decorator) without explicitly setting id.
     """
+
+
+def exception_leaves(exc: BaseException) -> list[BaseException]:
+    """
+    The innermost exceptions of *exc*: itself, or for an ``ExceptionGroup``
+    (e.g. from an ``asyncio.TaskGroup``) the leaves of every nested group.
+    The group wrapper only says how many sub-exceptions there were; the
+    leaves say what actually went wrong.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return [
+            leaf for sub in exc.exceptions for leaf in exception_leaves(sub)
+        ]
+    return [exc]
+
+
+def summarize_exception(exc: BaseException) -> str:
+    """
+    A one-line ``"<Type>: <first line of message>"`` summary of *exc*,
+    describing its first leaf (see :func:`exception_leaves`) and counting
+    the rest.
+    """
+    leaves = exception_leaves(exc)
+    first = leaves[0]
+    lines = [line.strip() for line in str(first).splitlines() if line.strip()]
+    summary = type(first).__name__
+    if lines:
+        summary += f": {lines[0]}"
+    if len(leaves) > 1:
+        summary += f" (+{len(leaves) - 1} more)"
+    return summary

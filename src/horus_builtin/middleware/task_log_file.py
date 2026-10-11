@@ -118,12 +118,11 @@ class TaskLogFileMiddleware(TaskMiddleware):
         out_stream = _LoguruStream("INFO")
         err_stream = _LoguruStream("WARNING")
 
+        # A failure is logged by ``BaseTask.run`` while the task is still
+        # current, so it lands in this file before any middleware's cleanup.
         try:
             with redirect_stdout(out_stream), redirect_stderr(err_stream):
                 return await call_next()
-        except Exception as e:
-            logger.exception(str(e))
-            raise
         finally:
             out_stream.flush()
             err_stream.flush()

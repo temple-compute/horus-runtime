@@ -29,11 +29,13 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
+from horus_builtin.middleware.task_log_file import TaskLogFileMiddleware
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import (
     AutoRegistry,
@@ -301,6 +303,18 @@ class TestBaseTaskRun:
         assert task.started_at is None
         assert task.finished_at is None
 
+    async def test_reset_clears_error(self) -> None:
+        """
+        reset() must clear the failure reason so a re-run doesn't show it.
+        """
+        task = _make_concrete_task()
+        task.status = TaskStatus.FAILED
+        task.error = "RuntimeError: boom"
+
+        await task.reset()
+
+        assert task.error is None
+
     async def test_run_sets_started_and_finished_at_on_completion(
         self, horus_context: object
     ) -> None:
@@ -457,6 +471,53 @@ class TestBaseTaskRun:
         assert seen == [expected]
         assert task.status == expected
         assert task.finished_at is not None
+        assert task.error == ("RuntimeError: boom" if fail else None)
+
+    async def test_failure_is_in_the_log_an_inner_middleware_uploads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A middleware inside ``TaskLogFileMiddleware`` that uploads the task's
+        log in its own cleanup (like a side-product upload) runs before the
+        log middleware's cleanup, so the error must already be in the file.
+        """
+        monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+        uploaded: list[str] = []
+        original_registry = list(TaskMiddleware.registry)
+
+        class FailingTask(ConcreteTestTask):
+            kind: str = "failing_log_task"
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                raise RuntimeError("sbatch: error: bad time limit")
+
+        class UploadingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, context: TaskMiddlewareContext) -> None:
+                uploaded.append(
+                    (tmp_path / f"{context.task.name}.log").read_text()
+                )
+
+        TaskMiddleware.registry = [TaskLogFileMiddleware, UploadingMiddleware]
+        try:
+            task = FailingTask(
+                id="test_task_id",
+                name="test_task",
+                skip_if_complete=False,
+                runtime=CommandRuntime(command="echo test"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+            )
+            with pytest.raises(RuntimeError):
+                await task.run()
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert "sbatch: error: bad time limit" in uploaded[0]
+        # Logged once, by the task, not again by the log middleware.
+        assert uploaded[0].count("Traceback") == 1
 
     async def test_middleware_failure_after_run_marks_task_failed(
         self,
@@ -483,6 +544,7 @@ class TestBaseTaskRun:
             TaskMiddleware.registry = original_registry
 
         assert task.status == TaskStatus.FAILED
+        assert task.error == "RuntimeError: middleware boom"
 
 
 @pytest.mark.unit
