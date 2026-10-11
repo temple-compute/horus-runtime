@@ -254,7 +254,7 @@ msgstr ""
 
 #: src/horus_runtime/core/task/base.py
 #, python-format
-msgid "Task %(task_name)s failed: %(error)s"
+msgid "Task %(task_name)s failed"
 msgstr ""
 
 #: src/horus_runtime/core/task/base.py:288

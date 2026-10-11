@@ -281,8 +281,8 @@ msgstr "Estado de la tarea %(task_name)s → FAILED"
 
 #: src/horus_runtime/core/task/base.py
 #, python-format
-msgid "Task %(task_name)s failed: %(error)s"
-msgstr "La tarea %(task_name)s falló: %(error)s"
+msgid "Task %(task_name)s failed"
+msgstr "La tarea %(task_name)s falló"
 
 #: src/horus_runtime/core/task/base.py:288
 #, python-format

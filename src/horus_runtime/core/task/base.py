@@ -401,9 +401,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
         self.finished_at = datetime.now(UTC)
         if exc is not None:
             self.error = summarize_exception(exc)
+            # The attached exception carries the reason (and traceback).
             horus_logger.log.opt(exception=exc).error(
-                _("Task %(task_name)s failed: %(error)s")
-                % {"task_name": self.name, "error": self.error}
+                _("Task %(task_name)s failed") % {"task_name": self.name}
             )
         messages = {
             TaskStatus.COMPLETED: _("Task %(task_name)s status → COMPLETED"),
