@@ -54,6 +54,14 @@ class WorkflowStatus(Enum):
     dispatched remain IDLE.
     """
 
+    CANCELING = "canceling"
+    """
+    Cancellation was requested and the run is still stopping. Not terminal:
+    the runtime never enters it on its own; a host (e.g. a backend that
+    records a user's cancel before the runtime has unwound) sets it, and the
+    run then ends ``CANCELED`` (or whatever terminal status it reached first).
+    """
+
     PARTIAL = "partial"
     """
     The workflow halted cleanly before completing all tasks (e.g. graceful

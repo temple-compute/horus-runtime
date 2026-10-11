@@ -97,6 +97,7 @@ _WF_STATUS_STYLE: dict[WorkflowStatus, str] = {
     WorkflowStatus.COMPLETED: "bold green",
     WorkflowStatus.FAILED: "bold red",
     WorkflowStatus.CANCELED: "magenta",
+    WorkflowStatus.CANCELING: "magenta",
     WorkflowStatus.PARTIAL: "yellow",
 }
 
