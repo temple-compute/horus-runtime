@@ -690,8 +690,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         in the current context, if any).
 
         This is what makes a task added mid-run reachable: the scheduler's
-        scope is ``ancestors(trigger) | descendants(trigger)``, so a task with
-        no path back to the trigger would never run. Gating it behind its
+        scope is the trigger's descendants plus their ancestors, so a task
+        with no path back to the trigger would never run. Gating it behind its
         creator — which is itself in scope — makes it a descendant and orders
         it strictly after the creator completes.
 

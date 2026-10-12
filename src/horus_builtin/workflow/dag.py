@@ -38,6 +38,21 @@ class CyclicDependencyError(WorkflowError):
     pass
 
 
+class StalledWorkflowError(WorkflowError):
+    """
+    Raised when the scheduler can make no further progress although tasks in
+    scope are neither completed, blocked nor failed, and no cycle explains
+    it. Reporting the run as successful would silently skip those tasks.
+    """
+
+    def __init__(self, task_ids: list[str]):
+        self.task_ids = task_ids
+        super().__init__(
+            _("Workflow stalled with unrunnable task(s): %(tasks)s")
+            % {"tasks": ", ".join(task_ids)}
+        )
+
+
 class UnknownTaskError(KeyError, WorkflowError):
     """
     Raised when a task is referenced that does not exist in the DAG.
@@ -112,6 +127,26 @@ def descendants(
         visited.add(node)
         stack.extend(dependents.get(node, set()))
     return visited
+
+
+def trigger_scope(
+    trigger_id: str,
+    dependencies: dict[str, set[str]],
+) -> set[str]:
+    """
+    Returns the task_ids a run triggered from *trigger_id* must consider.
+
+    That is every descendant of the trigger (inclusive) plus every ancestor
+    of those descendants. Pulling in the ancestors of each descendant, not
+    just of the trigger, matters for joins: a downstream task with another
+    parent outside the trigger's own lineage could otherwise never become
+    ready. Already-complete tasks in scope are skipped at run time.
+    """
+    scope: set[str] = set()
+    for task_id in descendants(trigger_id, dependencies):
+        if task_id not in scope:
+            scope |= ancestors(task_id, dependencies)
+    return scope
 
 
 def would_create_cycle(
@@ -200,5 +235,4 @@ def execution_plan(
         raise UnknownTaskError(f"Trigger task '{trigger_id}' not found.")
 
     deps = build_dependencies(tasks, edges)
-    scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
-    return topological_sort(scope, deps)
+    return topological_sort(trigger_scope(trigger_id, deps), deps)

@@ -42,6 +42,7 @@ from horus_builtin.workflow.dag import (
 )
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
@@ -678,6 +679,25 @@ class TestArtifactLessOrderingEdges:
         plan = execution_plan(wf.tasks, trigger_id="last", edges=wf.edges)
         assert plan.index("last") > plan.index("a")
         assert plan.index("last") > plan.index("b")
+
+    def test_trigger_scope_pulls_in_other_parents_of_a_join(self) -> None:
+        """
+        A descendant join's other parent is neither ancestor nor descendant
+        of the trigger, yet the join cannot run without it, so it is planned.
+        """
+        tasks: list[BaseTask] = [
+            _task(task_id=t, inputs=[], outputs=[])
+            for t in ("setup", "fetch", "report", "cleanup", "unrelated")
+        ]
+        edges = [
+            WorkflowEdge(source="setup", target="fetch"),
+            WorkflowEdge(source="fetch", target="report"),
+            WorkflowEdge(source="cleanup", target="fetch"),
+        ]
+        plan = execution_plan(tasks, trigger_id="setup", edges=edges)
+        assert set(plan) == {"setup", "fetch", "report", "cleanup"}
+        assert plan.index("fetch") > plan.index("cleanup")
+        assert plan.index("report") > plan.index("fetch")
 
     def test_add_edge_accepts_many_into_one_task(self, tmp_path: Path) -> None:
         """
