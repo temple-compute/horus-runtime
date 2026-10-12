@@ -31,11 +31,12 @@ from typing import TYPE_CHECKING
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.workflow.condition import compute_liveness
 from horus_builtin.workflow.dag import (
+    StalledWorkflowError,
     UnknownTaskError,
-    ancestors,
     build_dependencies,
     descendants,
     topological_sort,
+    trigger_scope,
 )
 from horus_runtime.context import HorusContext
 from horus_runtime.core.placement import PlacementManager
@@ -474,7 +475,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         # as "ready" below but be missing from a stale lookup.
         tasks_by_id = {task.id: task for task in workflow.tasks}
         deps = _dependencies_with_implicit(workflow)
-        scope = ancestors(trigger_id, deps) | descendants(trigger_id, deps)
+        scope = trigger_scope(trigger_id, deps)
 
         # Deterministic order when several tasks become ready at once,
         # matching topological_sort's tie-breaking. `blocked` tasks are
@@ -498,6 +499,9 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
             # Reuse topological_sort's cycle detection for a consistent
             # error instead of silently stopping short.
             topological_sort(scope, deps)
+            # No cycle, yet nothing can progress: never report this as a
+            # successful run that silently skipped the stuck tasks.
+            raise StalledWorkflowError(sorted(stuck))
 
         if not ready and not running:
             # Nothing left that can ever become ready: either everything in

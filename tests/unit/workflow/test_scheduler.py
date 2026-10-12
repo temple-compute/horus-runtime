@@ -32,6 +32,11 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.dag import (
+    StalledWorkflowError,
+    ancestors,
+    descendants,
+)
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.scheduler import DEFAULT_MAX_CONCURRENCY
 from horus_runtime.context import HorusContext
@@ -477,6 +482,74 @@ class TestConcurrentReadySet:
 
         with pytest.raises(Exception, match="Cycle detected"):
             await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+    @staticmethod
+    def _join_workflow(
+        tmp_path: Path,
+    ) -> tuple[HorusWorkflow, list[HorusTask]]:
+        """
+        Build ``setup -> fetch -> report`` plus ``cleanup -> fetch``:
+        ``cleanup`` is neither ancestor nor descendant of ``setup``.
+        """
+        tasks = [
+            _task(t, tmp_path=tmp_path, task_cls=_PassTask)
+            for t in ("setup", "fetch", "report", "cleanup")
+        ]
+        wf = HorusWorkflow(
+            name="join",
+            tasks=list(tasks),
+            edges=[
+                WorkflowEdge(source="setup", target="fetch"),
+                WorkflowEdge(source="fetch", target="report"),
+                WorkflowEdge(source="cleanup", target="fetch"),
+            ],
+        )
+        return wf, tasks
+
+    async def test_trigger_runs_out_of_branch_parent_of_a_join(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Triggering ``setup`` must also run ``cleanup`` (the join's other
+        parent), so ``fetch`` and ``report`` run instead of being silently
+        skipped.
+        """
+        del horus_context
+        wf, tasks = self._join_workflow(tmp_path)
+
+        await asyncio.wait_for(wf.run(trigger_id="setup"), timeout=10)
+
+        assert [t.runs for t in tasks] == [1, 1, 1, 1]
+        assert wf.status == WorkflowStatus.COMPLETED
+
+    async def test_stalled_run_raises_instead_of_completing(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        If tasks in scope can never become ready and no cycle explains it,
+        the run fails rather than reporting success. Forced here with the
+        old, too-narrow trigger scope that left ``cleanup`` out.
+        """
+        del horus_context
+        wf, tasks = self._join_workflow(tmp_path)
+
+        def narrow_scope(
+            trigger_id: str, deps: dict[str, set[str]]
+        ) -> set[str]:
+            return ancestors(trigger_id, deps) | descendants(trigger_id, deps)
+
+        with (
+            patch(
+                "horus_builtin.workflow.scheduler.trigger_scope",
+                new=narrow_scope,
+            ),
+            pytest.raises(StalledWorkflowError, match="fetch, report"),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="setup"), timeout=10)
+
+        assert tasks[0].runs == 1
+        assert tasks[1].runs == 0
+        assert wf.status == WorkflowStatus.FAILED
 
     async def test_shared_target_instance_gets_idle_clone(
         self, tmp_path: Path, horus_context: HorusContext
