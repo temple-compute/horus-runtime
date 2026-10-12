@@ -42,7 +42,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.i18n import tr as _
@@ -165,13 +165,16 @@ class SubworkflowExpander(HorusTask):
             id=port_name, path=Path(f"{slug}.{port_name}{_PORT_SUFFIX}")
         )
 
-    async def is_complete(self) -> bool:
+    async def is_complete(
+        self, input_digests: InputDigests | None = None
+    ) -> bool:
         """
         Always incomplete: the expander must re-run on every trigger to
         re-derive its deterministic expansion. Each inlined task then
         decides independently, through ordinary ``skip_if_complete``
         behaviour, whether it still has work to do.
         """
+        del input_digests
         return False
 
     async def _reset(self) -> None:

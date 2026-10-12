@@ -65,6 +65,7 @@ from horus_builtin.workflow.loop import (
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
@@ -1124,54 +1125,18 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 continue
 
             source = source_map.get((task.id, artifact.id))
-            # Resolve the source target.
-            source_target = source.target if source is not None else None
-            if source_target is None:
-                # Root input: must come from the orchestrator.
-                if self.orchestrator_target is None:
-                    raise OrchestratorTargetNotSetError(
-                        artifact.id, task.target
-                    )
-                source_target = self.orchestrator_target
+            source_target, src_artifact = self._resolve_source(
+                task, artifact, source
+            )
 
             # Transfer a copy of the *producing* artifact: it carries the id
             # the data is stored under (so the lookup hits) and source path.
             # The consumer input keeps its own id (the template key); we only
             # point its path at the materialized result.
-            src_artifact = source.artifact if source is not None else None
-
-            # A root artifact with an authored value has no producer: write
-            # its bytes the first time a consumer needs them, so the transfer
-            # below has something to move (see BaseArtifact.materialize).
-            if (
-                src_artifact is not None
-                and source is not None
-                and (source.target is None)
-            ):
-                src_artifact.materialize()
-
             transfer_art = (src_artifact or artifact).model_copy()
 
-            # A value root's authored value must reach the consumer's own
-            # input artifact, mirroring the path hand-off above: substitution
-            # renders ``$id`` from the consumer's artifact, so without this it
-            # would see the default value (0/False/"") instead of the root's.
-            if (
-                src_artifact is not None
-                and hasattr(src_artifact, "value")
-                and hasattr(artifact, "value")
-            ):
-                artifact.value = src_artifact.value
-                # Whatever qualifies the value travels with it (a boolean's
-                # on/off mapping): an input declared without it would hold
-                # e.g. ``"gpu"`` as a plain boolean, which fails validation
-                # the next time the run's workflow is dumped and reloaded.
-                if type(artifact) is type(src_artifact):
-                    for name in (
-                        type(artifact).model_fields.keys()
-                        - BaseArtifact.model_fields.keys()
-                    ):
-                        setattr(artifact, name, getattr(src_artifact, name))
+            if src_artifact is not None:
+                self._adopt_value(artifact, src_artifact)
 
             # Look up the registered strategy for this (source, dest) pair,
             # falling back to the target-agnostic GenericTransfer when no
@@ -1229,6 +1194,121 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     transfer_art, source_target, task.target
                 )
             artifact.path = transfer_art.path
+
+    def _resolve_source(
+        self,
+        task: BaseTask,
+        artifact: BaseArtifact,
+        source: EdgeSource | None,
+    ) -> tuple[BaseTarget, BaseArtifact | None]:
+        """
+        Where *task*'s input *artifact* is read from: the source target and
+        the producing artifact (``None`` when the input has no edge and is
+        read as itself).
+
+        An input with no producer (no edge, or a root artifact) is a root
+        input and comes from ``self.orchestrator_target``.
+
+        Raises:
+            OrchestratorTargetNotSetError: For a root input when no
+                orchestrator_target is set.
+        """
+        source_target = source.target if source is not None else None
+        if source_target is None:
+            # Root input: must come from the orchestrator.
+            if self.orchestrator_target is None:
+                raise OrchestratorTargetNotSetError(artifact.id, task.target)
+            source_target = self.orchestrator_target
+
+        src_artifact = source.artifact if source is not None else None
+
+        # A root artifact with an authored value has no producer: write its
+        # bytes the first time a consumer needs them, so there is something
+        # to move or digest (see BaseArtifact.materialize).
+        if (
+            src_artifact is not None
+            and source is not None
+            and (source.target is None)
+        ):
+            src_artifact.materialize()
+
+        return source_target, src_artifact
+
+    @staticmethod
+    def _adopt_value(
+        artifact: BaseArtifact, src_artifact: BaseArtifact
+    ) -> None:
+        """
+        Copy a value source's authored value onto the consumer *artifact*.
+
+        Mirrors the path hand-off of a transfer: substitution renders ``$id``
+        from the consumer's artifact, so without this it would see the
+        default value (0/False/"") instead of the root's.
+        """
+        if not (hasattr(src_artifact, "value") and hasattr(artifact, "value")):
+            return
+        artifact.value = src_artifact.value
+        # Whatever qualifies the value travels with it (a boolean's on/off
+        # mapping): an input declared without it would hold e.g. ``"gpu"`` as
+        # a plain boolean, which fails validation the next time the run's
+        # workflow is dumped and reloaded.
+        if type(artifact) is type(src_artifact):
+            for name in (
+                type(artifact).model_fields.keys()
+                - BaseArtifact.model_fields.keys()
+            ):
+                setattr(artifact, name, getattr(src_artifact, name))
+
+    async def source_digests(
+        self,
+        task: BaseTask,
+        source_map: dict[tuple[str, str], EdgeSource] | None = None,
+    ) -> dict[str, str | None]:
+        """
+        Digest every input of *task* where :meth:`transfer_artifacts` would
+        read it from, without transferring anything.
+
+        A digest does not depend on the path (a file's is its content's
+        sha256, a directory's lists relative paths), so it equals the digest
+        of the staged copy. A pinned input is digested in place on the task's
+        target. ``None`` marks an input that could not be digested.
+        """
+        if source_map is None:
+            source_map = self._build_source_map()
+
+        digests: dict[str, str | None] = {}
+        for artifact in task.inputs:
+            if artifact.pinned:
+                digests[artifact.id] = await ArtifactStore(task.target).digest(
+                    artifact
+                )
+                continue
+            source_target, src_artifact = self._resolve_source(
+                task, artifact, source_map.get((task.id, artifact.id))
+            )
+            digests[artifact.id] = await ArtifactStore(source_target).digest(
+                src_artifact or artifact
+            )
+        return digests
+
+    def adopt_values(
+        self,
+        task: BaseTask,
+        source_map: dict[tuple[str, str], EdgeSource] | None = None,
+    ) -> None:
+        """
+        Give *task*'s value inputs their source's value without transferring
+        them, for a task skipped before transfer: its inputs then still show
+        the values the run used.
+        """
+        if source_map is None:
+            source_map = self._build_source_map()
+
+        for artifact in task.inputs:
+            source = source_map.get((task.id, artifact.id))
+            if artifact.pinned or source is None or source.artifact is None:
+                continue
+            self._adopt_value(artifact, source.artifact)
 
     @property
     def _effective_base(self) -> Path:
