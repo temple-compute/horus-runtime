@@ -22,6 +22,7 @@ fan-out behaviour as an ordinary DAG node.
 
 import shutil
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -560,6 +561,48 @@ class TestPartialResume:
         assert score.status == TaskStatus.COMPLETED
         scored = tmp_path / "scored_out"
         assert (scored / "0" / "result.txt").read_text() == "changed"
+
+    async def test_an_unchanged_clone_skips_before_transfer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A map that lost its manifest (say, interrupted after its clones
+        ran) runs again, but its unchanged clones skip without their inputs
+        being transferred.
+        """
+        del horus_context
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
+
+        first = _build()
+        await first.run(trigger_id="split")
+        stale = cast(MapTask, next(t for t in first.tasks if t.id == "score"))
+        Path(cast(str, stale._manifest_path())).unlink()
+
+        wf = _build()
+        transferred: list[str] = []
+        original = BaseWorkflow.transfer_artifacts
+
+        async def spy(
+            self: BaseWorkflow, task: HorusTask, *args: object
+        ) -> None:
+            transferred.append(task.id)
+            await original(self, task, *args)  # type: ignore[arg-type]
+
+        with patch.object(BaseWorkflow, "transfer_artifacts", spy):
+            await wf.run(trigger_id="split")
+
+        score = next(t for t in wf.tasks if t.id == "score")
+        assert score.status == TaskStatus.COMPLETED
+        clones = [t for t in wf.tasks if t.id.startswith("score[")]
+        assert [t.status for t in clones] == [TaskStatus.SKIPPED] * 2
+        assert not [t for t in transferred if t.startswith("score[")]
 
 
 @pytest.mark.unit

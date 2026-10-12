@@ -25,6 +25,7 @@ now ready are dispatched too, without waiting for unrelated in-flight tasks.
 """
 
 import asyncio
+from functools import partial
 from typing import TYPE_CHECKING
 
 from horus_builtin.event.task_event import HorusTaskEvent
@@ -163,6 +164,19 @@ async def execute_task(
             # resource-aware targets (which may provision lazily at transfer
             # time, before dispatch) can read task.resources.
             target.bind(task)
+
+            # A task already complete is skipped before any of its inputs is
+            # transferred, judged from their digests at the source. A miss
+            # falls through to the transfer and `run()`'s own check.
+            if (
+                task.skip_if_complete
+                and await task.is_complete_before_transfer(
+                    partial(workflow.source_digests, task, source_map)
+                )
+            ):
+                workflow.adopt_values(task, source_map)
+                task.mark_skipped_complete()
+                return
 
             # Transfer input artifacts to the task's target as needed.
             await workflow.transfer_artifacts(task, source_map)
@@ -359,7 +373,8 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     scheduler.
 
     A task is skipped when all of its output artifacts exist (see
-    ``BaseTask.is_complete``, applied inside ``BaseTask.run``). Every task
+    ``BaseTask.is_complete``), checked in :func:`execute_task` before its
+    inputs are transferred and again inside ``BaseTask.run``. Every task
     whose dependencies are already satisfied is dispatched immediately and
     concurrently with any other ready task, bounded by
     ``workflow.max_concurrency`` (or :data:`DEFAULT_MAX_CONCURRENCY` when
@@ -406,8 +421,8 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     # Tasks present from the start get no such benefit of the doubt: the
     # same task object can be reused across repeated `wf.run()` calls (see
     # ``TestSkipReasonDistinguishesCacheHit``), so status alone never says
-    # whether *this* run already handled it -- only `is_complete()` (inside
-    # `BaseTask.run()`) can decide that.
+    # whether *this* run already handled it -- only `is_complete()` (before
+    # transfer in `execute_task`, or inside `BaseTask.run()`) can decide that.
     initial_task_ids = {task.id for task in workflow.tasks}
 
     # No edges means no dependencies: every task runs independently and the

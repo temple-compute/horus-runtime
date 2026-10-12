@@ -23,6 +23,7 @@ executing tasks, and should be ingested by the executor.
 
 from abc import abstractmethod
 from asyncio import CancelledError
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
@@ -48,6 +49,9 @@ from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
+
+InputDigests = Callable[[], Awaitable[dict[str, str | None]]]
+"""Returns each input's digest by id, ``None`` where it cannot be hashed."""
 
 
 class BaseTask(AutoRegistry, entry_point="task"):
@@ -302,7 +306,6 @@ class BaseTask(AutoRegistry, entry_point="task"):
         its way out; a middleware that later raises turns them into ``FAILED``
         or ``CANCELED``.
         """
-        ctx = HorusContext.get_context()
         # Publish this task as the "current task" for the duration of its
         # execution so code it invokes (notably ``BaseWorkflow.add_task``) can
         # discover its creator and gate any runtime-added task behind it.
@@ -312,22 +315,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
             # accidentally reuse the prior invocation's cwd.
             self._execution_id = uuid4().hex
             if self.skip_if_complete and await self.is_complete():
-                ctx.bus.emit(
-                    HorusTaskEvent(
-                        message=_(
-                            "Skipping task %(task_name)s. Already complete."
-                        )
-                        % {"task_name": self.name},
-                        task_id=self.id,
-                        task_name=self.name,
-                    )
-                )
-                self.status = TaskStatus.SKIPPED
-                self.skip_reason = SkipReason.COMPLETE
-                horus_logger.log.debug(
-                    _("Task %(task_name)s status → SKIPPED")
-                    % {"task_name": self.name}
-                )
+                self.mark_skipped_complete()
                 return
 
             self.status = TaskStatus.CONFIGURING
@@ -439,6 +427,39 @@ class BaseTask(AutoRegistry, entry_point="task"):
         subclasses to define the specific logic for determining task completion
         based on its outputs.
         """
+
+    async def is_complete_before_transfer(
+        self, input_digests: InputDigests
+    ) -> bool:
+        """
+        Like :meth:`is_complete`, but decided before any input is staged on
+        the task's target. *input_digests* returns each input's digest at its
+        source (see ``BaseWorkflow.source_digests``); it is only awaited
+        when the outcome depends on it.
+
+        The default cannot decide without staged inputs and returns
+        ``False``: the task is transferred and ``run()`` checks as usual.
+        """
+        del input_digests
+        return False
+
+    def mark_skipped_complete(self) -> None:
+        """
+        Record that the task was skipped because it is already complete.
+        """
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                message=_("Skipping task %(task_name)s. Already complete.")
+                % {"task_name": self.name},
+                task_id=self.id,
+                task_name=self.name,
+            )
+        )
+        self.status = TaskStatus.SKIPPED
+        self.skip_reason = SkipReason.COMPLETE
+        horus_logger.log.debug(
+            _("Task %(task_name)s status → SKIPPED") % {"task_name": self.name}
+        )
 
     @final
     async def reset(self) -> None:

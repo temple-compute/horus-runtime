@@ -33,7 +33,7 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.i18n import tr as _
 
 _UNHASHABLE = "unhashable"
@@ -135,15 +135,26 @@ class HorusTask(BaseTask):
             return None
         return f"{base}/.horus/{self.id}.json"
 
-    async def _fingerprint(self) -> TaskFingerprint:
+    async def _fingerprint(
+        self, input_digests: dict[str, str | None] | None = None
+    ) -> TaskFingerprint:
         """
         Everything that must stay unchanged for the previous run's outputs to
         still be valid: the digest of every input, plus a hash of the task's
         own configuration, so editing the command invalidates the cache too.
+
+        Inputs are digested where they are staged on the task's target,
+        unless *input_digests* already holds them (digested at their source,
+        before any transfer: a digest does not depend on the path).
         """
-        store = ArtifactStore(self.target)
+        if input_digests is None:
+            store = ArtifactStore(self.target)
+            input_digests = {
+                artifact.id: await store.digest(artifact)
+                for artifact in self.inputs
+            }
         inputs = {
-            artifact.id: await store.digest(artifact) or _UNHASHABLE
+            artifact.id: input_digests.get(artifact.id) or _UNHASHABLE
             for artifact in self.inputs
         }
         payload: dict[str, Any] = {
@@ -210,12 +221,19 @@ class HorusTask(BaseTask):
         except Exception:
             return None
 
-    async def is_complete(self) -> bool:
+    async def is_complete(
+        self, input_digests: InputDigests | None = None
+    ) -> bool:
         """
         A HorusTask is complete when all of its output artifacts exist *and*
         its inputs and configuration are the ones the recorded manifest was
         written for. Outputs left over from before manifests existed re-run
         once: we cannot prove their inputs are unchanged.
+
+        *input_digests*, when given, supplies the input digests in place of
+        the staged inputs' (see :meth:`_fingerprint`). An input it cannot
+        digest makes the task incomplete: it would only match a manifest
+        that could not hash it either.
         """
         # If no outputs are declared, we consider the task incomplete and
         # always run it
@@ -228,7 +246,23 @@ class HorusTask(BaseTask):
                 return False
 
         recorded = await self._read_manifest()
-        return recorded is not None and recorded == await self._fingerprint()
+        if recorded is None:
+            return False
+
+        digests = None
+        if input_digests is not None:
+            digests = await input_digests()
+            if None in digests.values():
+                return False
+        return recorded == await self._fingerprint(digests)
+
+    async def is_complete_before_transfer(
+        self, input_digests: InputDigests
+    ) -> bool:
+        """
+        :meth:`is_complete` from the inputs' digests at their source.
+        """
+        return await self.is_complete(input_digests)
 
     async def _reset(self) -> None:
         """

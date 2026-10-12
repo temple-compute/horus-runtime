@@ -20,6 +20,7 @@ Unit tests for the concurrent ready-set scheduler.
 """
 
 import asyncio
+from collections.abc import Generator
 from pathlib import Path
 from typing import ClassVar, cast
 from unittest.mock import AsyncMock, patch
@@ -43,6 +44,8 @@ from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.transfer.events import TransferEvent
+from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.core.workflow.status import WorkflowStatus
@@ -903,3 +906,118 @@ class TestPreRunFailureIsAttributed:
             and "host key is not trusted" in getattr(event, "message", "")
             for event in events
         )
+
+
+class _FarLocalTarget(LocalTarget):
+    """
+    A local target that pretends to live on its own machine: a distinct
+    ``location_id`` keeps transfers from short-circuiting, and artifacts live
+    at ``working_directory/<name>`` the way they do on an SSH target.
+    """
+
+    add_to_registry = False
+
+    @property
+    def location_id(self) -> str:
+        return f"far://{self.resolved_working_directory}"
+
+    def path_on_target(self, artifact: BaseArtifact) -> str:
+        return f"{self.resolved_working_directory}/{Path(artifact.path).name}"
+
+
+@pytest.mark.unit
+class TestSkipBeforeTransfer:
+    """
+    A complete task is skipped before its inputs are transferred, judged
+    from their digests at the source, so a re-run moves no bytes and emits
+    no transfer for it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _generic_transfer(self) -> Generator[None]:
+        """Move bytes for real: local targets otherwise share a no-op."""
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=None
+        ):
+            yield
+
+    @staticmethod
+    def _build(tmp_path: Path) -> tuple[HorusWorkflow, HorusTask]:
+        """``producer`` on one far target feeding ``consumer`` on another."""
+        src, dst = tmp_path / "src", tmp_path / "dst"
+        src.mkdir(exist_ok=True)
+        dst.mkdir(exist_ok=True)
+        producer = HorusTask(
+            id="producer",
+            name="producer",
+            outputs=[FileArtifact(id="data", path=Path("data.txt"))],
+            runtime=CommandRuntime(command=f"echo hi > {src}/data.txt"),
+            executor=ShellExecutor(),
+            target=_FarLocalTarget(working_directory=src.as_posix()),
+        )
+        consumer = HorusTask(
+            id="consumer",
+            name="consumer",
+            inputs=[FileArtifact(id="inp", path=Path("data.txt"))],
+            outputs=[FileArtifact(id="result", path=Path("result.txt"))],
+            runtime=CommandRuntime(
+                command=f"cp {dst}/data.txt {dst}/result.txt"
+            ),
+            executor=ShellExecutor(),
+            target=_FarLocalTarget(working_directory=dst.as_posix()),
+        )
+        wf = HorusWorkflow(
+            name="skip_before_transfer",
+            tasks=[producer, consumer],
+            edges=[_edge("producer", "data", "consumer", "inp")],
+        )
+        return wf, consumer
+
+    async def test_unchanged_rerun_transfers_and_dispatches_nothing(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Both tasks skip without a TransferEvent or a dispatch."""
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        assert wf.status == WorkflowStatus.COMPLETED
+
+        wf, consumer = self._build(tmp_path)
+        events: list[object] = []
+        with (
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            patch.object(
+                _FarLocalTarget, "dispatch", new_callable=AsyncMock
+            ) as dispatch,
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert [t.status for t in wf.tasks] == [TaskStatus.SKIPPED] * 2
+        dispatch.assert_not_awaited()
+        assert not [e for e in events if isinstance(e, TransferEvent)]
+        assert consumer.runs == 0
+
+    async def test_changed_upstream_output_still_transfers_and_runs(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A digest mismatch at the source falls through to a real run."""
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        # The producer stays complete (no inputs, same config) but now
+        # hands the consumer different bytes.
+        (tmp_path / "src" / "data.txt").write_text("changed\n")
+
+        wf, consumer = self._build(tmp_path)
+        events: list[object] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert consumer.status == TaskStatus.COMPLETED
+        phases = [
+            e.phase
+            for e in events
+            if isinstance(e, TransferEvent) and e.task_id == "consumer"
+        ]
+        assert (phases[0], phases[-1]) == ("started", "finished")
+        assert (tmp_path / "dst" / "result.txt").read_text() == "changed\n"

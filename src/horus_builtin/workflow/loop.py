@@ -35,7 +35,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
 from horus_runtime.i18n import tr as _
@@ -183,12 +183,15 @@ class LoopController(HorusTask):
                 )
         return self
 
-    async def is_complete(self) -> bool:
+    async def is_complete(
+        self, input_digests: InputDigests | None = None
+    ) -> bool:
         """
         Always incomplete: a fresh :class:`LoopController` instance is
         created for every iteration boundary, so each one only ever needs to
         run once, and never needs to report complete to be skipped.
         """
+        del input_digests
         return False
 
     async def _reset(self) -> None:

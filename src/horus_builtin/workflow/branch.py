@@ -78,6 +78,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.base import InputDigests
 from horus_runtime.core.workflow.condition import EdgeCondition, derive_ref
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
@@ -200,12 +201,15 @@ class BranchRouter(HorusTask):
             )
         return self
 
-    async def is_complete(self) -> bool:
+    async def is_complete(
+        self, input_digests: InputDigests | None = None
+    ) -> bool:
         """
         Always incomplete: the router must re-run on every trigger to
         re-derive its decision. A sentinel left over from an earlier run
         would otherwise pin a resumed run to the branch it took last time.
         """
+        del input_digests
         return False
 
     async def _reset(self) -> None:
