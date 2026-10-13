@@ -24,12 +24,15 @@ output.
 """
 
 import asyncio
+import json
 from pathlib import Path
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.substitution import placeholder_roots
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -253,6 +256,23 @@ class MapTask(HorusTask):
             % {"id": self.id, "n": len(clones)}
         )
 
+    def _body_may_read(self, artifact_id: str) -> bool:
+        """
+        Whether the body can read *artifact_id*. Only a command body is
+        known not to: it reaches artifacts solely through ``$`` placeholders
+        (``${task...}`` counts as reaching all of them). Any other runtime,
+        e.g. a Python function given artifacts by parameter name, may.
+        """
+        if not isinstance(self.runtime, CommandRuntime):
+            return True
+        text = json.dumps(
+            [
+                self.runtime.model_dump(mode="json"),
+                self.executor.model_dump(mode="json"),
+            ]
+        )
+        return bool(placeholder_roots(text) & {artifact_id, "task"})
+
     def _clone(
         self, slot: str, item: BaseArtifact, slot_root: Path
     ) -> BaseTask:
@@ -310,6 +330,13 @@ class MapTask(HorusTask):
             outputs=[output],
             target=self.target.idle_copy(),
         )
+
+        # The item already fingerprints this clone's slice of the
+        # collection. Hashing the whole collection as well made every clone
+        # read every sibling's data (quadratic in the map's size) and rerun
+        # when any other item changed. Keep it only when the body names it.
+        if not self._body_may_read(self.over.input_id):
+            clone.unfingerprinted_inputs = [self.over.input_id]
 
         # Register this clone's item as a side artifact, so the upload
         # middleware persists it to S3 under the clone's own task id and the

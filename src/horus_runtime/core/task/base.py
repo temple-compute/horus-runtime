@@ -110,6 +110,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
     depends on.
     """
 
+    unfingerprinted_inputs: list[str] = Field(default_factory=list)
+    """
+    Ids of inputs left out of the task's fingerprint, so a change to them
+    does not invalidate its recorded outputs. A map sets it on its clones
+    for the collection being mapped, which each clone's item already covers.
+    Stored with the task so a clone reloaded from a snapshot still matches
+    the manifest it wrote.
+    """
+
     outputs: list[BaseArtifact] = Field(default_factory=list)
     """
     Output artifacts for this task. These are the artifacts that the task
@@ -216,6 +225,15 @@ class BaseTask(AutoRegistry, entry_point="task"):
     reason as :attr:`_execution_id`: it must be recomputed fresh from the
     current run every time, never round-tripped through a stored snapshot.
     """
+
+    @property
+    def fingerprinted_inputs(self) -> list[BaseArtifact]:
+        """
+        The inputs whose content decides whether recorded outputs are stale.
+        """
+        return [
+            a for a in self.inputs if a.id not in self.unfingerprinted_inputs
+        ]
 
     @property
     def working_dir(self) -> str:

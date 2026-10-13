@@ -151,11 +151,11 @@ class HorusTask(BaseTask):
             store = ArtifactStore(self.target)
             input_digests = {
                 artifact.id: await store.digest(artifact)
-                for artifact in self.inputs
+                for artifact in self.fingerprinted_inputs
             }
         inputs = {
             artifact.id: input_digests.get(artifact.id) or _UNHASHABLE
-            for artifact in self.inputs
+            for artifact in self.fingerprinted_inputs
         }
         payload: dict[str, Any] = {
             "runtime": self.runtime.model_dump(mode="json"),
