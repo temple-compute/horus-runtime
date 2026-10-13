@@ -240,3 +240,69 @@ class TestHorusEventBusEmit:
         assert published
         assert len(transport.published_events) == 1
         assert transport.published_events[0] is event
+
+    def test_emit_does_not_wait_for_a_slow_transport(self) -> None:
+        """
+        Test that emit returns while the transport is still publishing, and
+        that flush waits for the backlog and keeps emission order.
+        """
+        release = threading.Event()
+
+        class _SlowTransport(BaseBusTransport):
+            transport_type: str = "slow"
+            published_events: list[BaseEvent] = Field(default_factory=list)
+
+            async def publish(self, event: BaseEvent) -> None:
+                # Blocking, like a sync HTTP client on the bus thread.
+                release.wait(timeout=5.0)
+                self.published_events.append(event)
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        bus = HorusEventBus()
+        transport = _SlowTransport()
+        bus.add_transport(transport)
+
+        events = [_TestEvent() for _ in range(3)]
+        for event in events:
+            bus.emit(event)
+
+        # Every emit returned although nothing has been published yet.
+        assert transport.published_events == []
+
+        release.set()
+        bus.flush()
+        assert transport.published_events == events
+
+    def test_flush_gives_up_after_its_timeout(self) -> None:
+        """
+        Test that flush returns once its timeout passes, so a hung transport
+        cannot block the caller forever.
+        """
+        release = threading.Event()
+
+        class _HungTransport(BaseBusTransport):
+            transport_type: str = "hung"
+
+            async def publish(self, _: BaseEvent) -> None:
+                release.wait(timeout=5.0)
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        bus = HorusEventBus()
+        bus.add_transport(_HungTransport())
+        bus.emit(_TestEvent())
+
+        bus.flush(timeout=0.05)
+        assert bus._pending
+        release.set()
+        bus.flush()
+        assert not [f for f in bus._pending if not f.done()]

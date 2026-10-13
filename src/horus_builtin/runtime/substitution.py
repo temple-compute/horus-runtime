@@ -143,6 +143,19 @@ class _Resolver(Mapping[str, str]):
         return len(self._roots)
 
 
+def placeholder_roots(text: str) -> set[str]:
+    """
+    Root ids of the ``$id`` / ``${id.attr}`` placeholders in *text*, e.g.
+    ``{"org", "task"}`` for ``"--in ${org} --name ${task.name}"``.
+    """
+    roots: set[str] = set()
+    for match in _DotTemplate.pattern.finditer(text):
+        name = match.group("named") or match.group("braced")
+        if name:
+            roots.add(name.split(".")[0])
+    return roots
+
+
 def is_template(value: "str | PurePath") -> bool:
     """
     True if *value* carries a ``$`` placeholder and so must be rendered by

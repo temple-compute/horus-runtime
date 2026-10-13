@@ -1265,8 +1265,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         source_map: dict[tuple[str, str], EdgeSource] | None = None,
     ) -> dict[str, str | None]:
         """
-        Digest every input of *task* where :meth:`transfer_artifacts` would
-        read it from, without transferring anything.
+        Digest every fingerprinted input of *task* where
+        :meth:`transfer_artifacts` would read it from, without transferring
+        anything.
 
         A digest does not depend on the path (a file's is its content's
         sha256, a directory's lists relative paths), so it equals the digest
@@ -1277,7 +1278,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             source_map = self._build_source_map()
 
         digests: dict[str, str | None] = {}
-        for artifact in task.inputs:
+        for artifact in task.fingerprinted_inputs:
             if artifact.pinned:
                 digests[artifact.id] = await ArtifactStore(task.target).digest(
                     artifact

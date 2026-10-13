@@ -20,9 +20,11 @@
 Event bus base for horus-runtime.
 """
 
+import time
 from collections import defaultdict
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from functools import partial
 
 from horus_runtime.event.async_loop import BusAsyncLoopThread
 from horus_runtime.event.base import BaseEvent
@@ -62,6 +64,11 @@ class HorusEventBus:
     Whether the event bus has been started. Used to prevent multiple starts.
     """
 
+    _pending: set[Future[None]] = field(default_factory=set)
+    """
+    Publishes submitted to the transports that have not finished yet.
+    """
+
     def add_transport(self, transport: BaseBusTransport) -> None:
         """
         Add a transport mechanism to the event bus.
@@ -90,22 +97,55 @@ class HorusEventBus:
         """
         Emit an event to the bus.
         """
-        futures = [
-            self._event_loop_thread.submit(transport.publish(event))
-            for transport in self._transports
-        ]
-
-        for future in futures:
-            try:
-                future.result()
-            except Exception as e:
-                horus_logger.log.error(
-                    _("Error publishing event %(event)s: %(error)s")
-                    % {"event": event, "error": str(e)}
-                )
+        # Publishing is fire-and-forget: a transport may do network I/O, and
+        # waiting on it here would stall the caller's event loop (every
+        # concurrent task) for one round-trip per event. The bus thread runs
+        # publishes in submission order; `flush` waits for the backlog.
+        for transport in self._transports:
+            future = self._event_loop_thread.submit(transport.publish(event))
+            self._pending.add(future)
+            future.add_done_callback(partial(self._settle, event=event))
 
         # In-process dispatch to handlers
         self._dispatch(event)
+
+    def _settle(self, future: Future[None], event: BaseEvent) -> None:
+        """
+        Forget a finished publish, logging it if it failed.
+        """
+        self._pending.discard(future)
+        if future.cancelled() or future.exception() is None:
+            return
+        horus_logger.log.error(
+            _("Error publishing event %(event)s: %(error)s")
+            % {"event": event, "error": str(future.exception())}
+        )
+
+    def flush(self, timeout: float | None = None) -> None:
+        """
+        Block until every event emitted so far, including any emitted while
+        flushing, has been published (or has failed, which `_settle` logs).
+        Gives up after *timeout* seconds, so a hung transport cannot hold
+        the caller forever.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while waiting := [f for f in list(self._pending) if not f.done()]:
+            for future in waiting:
+                left = (
+                    None if deadline is None else deadline - time.monotonic()
+                )
+                try:
+                    future.result(
+                        timeout=None if left is None else max(left, 0)
+                    )
+                except TimeoutError:
+                    horus_logger.log.warning(
+                        _("Gave up flushing %(n)d unpublished event(s).")
+                        % {"n": len(self._pending)}
+                    )
+                    return
+                except Exception:  # already logged by _settle
+                    pass
 
     def _dispatch(self, event: BaseEvent) -> None:
         """
@@ -165,6 +205,9 @@ class HorusEventBus:
         """
         Stop the event bus and its transport.
         """
+        # Deliver what is still queued before the transports go away
+        self.flush()
+
         # Schedule transport shutdown on the event loop thread
         for transport in self._transports:
             horus_logger.log.debug(

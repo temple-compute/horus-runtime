@@ -34,6 +34,7 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
+from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
@@ -50,6 +51,11 @@ from horus_runtime.core.workflow.edge import WorkflowEdge
 # from still under its own id (`batches`), and the folder output id (`scored`)
 # bound to its own slot directory.
 _BODY = "cp $batch $scored/result.txt"
+
+
+def _reads_everything(batch: Path, batches: Path) -> None:
+    """A function body: artifacts arrive by parameter name, no ``$``."""
+    del batch, batches
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
@@ -468,6 +474,73 @@ class TestPartialResume:
         assert (scored / "0" / "result.txt").read_text() == "STALE"
         assert (scored / "2" / "result.txt").read_text() == "STALE"
         assert (scored / "1" / "result.txt").read_text() == "b.txt"
+
+    async def test_changing_one_item_reruns_only_its_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone fingerprints its own item, not the whole collection: when
+        one item changes, the map re-expands but its siblings stay skipped
+        (their poisoned outputs survive) and only the changed slot reruns.
+        """
+        del horus_context
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+            )
+            return _wire(tmp_path, split=split, map_task=map_task)
+
+        await _build().run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        for slot in ("0", "1"):
+            (scored / slot / "result.txt").write_text("STALE")
+        wf = _build()
+        # After _build, which seeds every file with its own name.
+        (tmp_path / "batches" / "c.txt").write_text("changed")
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert (scored / "0" / "result.txt").read_text() == "STALE"
+        assert (scored / "1" / "result.txt").read_text() == "STALE"
+        assert (scored / "2" / "result.txt").read_text() == "changed"
+
+    def test_a_body_reading_the_collection_fingerprints_it(self) -> None:
+        """A body that may read the whole collection depends on all of it, so
+        its clones keep the collection in their fingerprint.
+        """
+        over = FolderArtifact(id="batches", path=Path("batches_in"))
+        plain = _map_task(over_artifact=over)
+        assert not plain._body_may_read("batches")
+        for command in ("ls $batches > $scored/a", "echo ${task.inputs}"):
+            named = _map_task(over_artifact=over, command=command)
+            assert named._body_may_read("batches")
+        function = _map_task(over_artifact=over)
+        function.runtime = PythonFunctionRuntime(func=_reads_everything)
+        assert function._body_may_read("batches")
+
+    async def test_a_reloaded_clone_keeps_its_fingerprint_scope(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone reloaded from a dump (how tc-os reruns from a snapshot)
+        still leaves the collection out, so it matches its own manifest.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        await wf.run(trigger_id="split")
+        dump = tmp_path / "dump.yaml"
+        wf.to_yaml(dump)
+
+        reloaded = BaseWorkflow.from_yaml(dump)
+        clone = next(t for t in reloaded.tasks if t.id == "score[0]")
+        assert clone.unfingerprinted_inputs == ["batches"]
 
     async def test_shrinking_map_drops_stale_clones_and_slots(
         self, tmp_path: Path, horus_context: HorusContext
