@@ -43,6 +43,7 @@ from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import EdgeSource
+from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactLostError,
@@ -60,7 +61,7 @@ class FakeNode(LocalTarget):
     kind: str = "fake_node"
     releasable: ClassVar[bool] = True
     hold_s: float = 30.0
-    parallel: int | None = None
+    max_parallel: int | None = None
     capacity: ResourceCapacity | None = None
 
     _node: dict[str, Any] = PrivateAttr(
@@ -79,9 +80,9 @@ class FakeNode(LocalTarget):
         return self.hold_s
 
     @property
-    def max_parallel(self) -> int | None:
-        """Member cap."""
-        return self.parallel
+    def member_cap(self) -> int | None:
+        """Member cap, from a field named like terraform's."""
+        return self.max_parallel
 
     @property
     def is_live(self) -> bool:
@@ -124,10 +125,18 @@ class FakeNode(LocalTarget):
         """Count the ping."""
         self._node["keepalives"] += 1
 
+    async def path_exists(self, path: str) -> bool:
+        """Refuse a read off a released node, after a yield."""
+        await asyncio.sleep(0.01)
+        if not self._node["live"]:
+            raise RuntimeError("read from a released node")
+        return await super().path_exists(path)
+
     def emit_node_phase(self, phase: str, **fields: Any) -> None:
         """Record the phase."""
         del fields
         self._node["phases"].append(phase)
+        self._node[f"pinged_at_{phase}"] = self._node["keepalives"]
 
 
 class _Step(HorusTask):
@@ -462,7 +471,8 @@ class TestRelease:
     ) -> None:
         """
         Data a pending task needs is never destroyed: a failed drain keeps
-        the machine until run end, and the consumer pulls from it directly.
+        the machine until the consumer pulled from it directly, then it is
+        released.
         """
         del horus_context
         evacuator.fail = True
@@ -474,7 +484,7 @@ class TestRelease:
         await wf.run(trigger_id="a")
 
         assert "drain_failed" in node.phases
-        assert node.released == ["run_end"]
+        assert node.released == ["done"]
         assert c.runs == 1
 
     async def test_blocked_members_release_the_machine(
@@ -591,6 +601,105 @@ class TestRelease:
         assert node._node["keepalives"] > 0
         assert node.released == ["done"]
 
+    async def test_condition_sentinel_outlives_its_machine(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A branch condition on a released machine's output is read before
+        the machine goes, and the release waits for a read in progress.
+        """
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix())
+
+        class _Writes(_Step):
+            async def _run(self) -> None:
+                Path(self.outputs[0].path).write_text('{"go": true}')
+
+        a = _Writes(
+            id="a",
+            name="a",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=node,
+            outputs=[FileArtifact(id="out", path=tmp_path / "a.out")],
+        )
+        c = _step("c", LocalTarget(), tmp_path)
+        edge = WorkflowEdge(
+            source="a",
+            target="c",
+            condition=EdgeCondition(source_output="out", key="go"),
+        )
+        wf = _workflow(tmp_path, [a, c], [edge])
+
+        await wf.run(trigger_id="a")
+
+        assert node.released == ["drained"]
+        assert c.runs == 1
+
+    async def test_member_queued_on_the_pool_lets_the_machine_hold(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A member waiting for a ``max_concurrency`` slot does not keep an
+        idle machine past its hold.
+        """
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0.05)
+        a = _step("a", node, tmp_path)
+        b = _step("b_long", LocalTarget(), tmp_path, delay=0.3, inputs=["x"])
+        c = _step("c", node, tmp_path, inputs=["x"])
+        wf = _workflow(
+            tmp_path,
+            [a, b, c],
+            [_edge("a", "b_long", "x"), _edge("a", "c", "x")],
+            max_concurrency=1,
+        )
+
+        await wf.run(trigger_id="a")
+
+        assert node.released == ["idle_cap", "done"]
+        assert node.generation == 2
+        assert c.runs == 1
+
+    async def test_machine_kept_after_a_failed_drain_is_not_pinged(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Only a machine with a member running or in its hold is pinged: one
+        kept after a failed drain lets its life cap run.
+        """
+        del horus_context
+        monkeypatch.setattr(
+            lease_module.LeaseManager, "keepalive_interval_s", 0.01
+        )
+        evacuator.fail = True
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        g = _step("g", LocalTarget(), tmp_path, delay=0.2)
+        c = _step("c", LocalTarget(), tmp_path, inputs=["x", "y"])
+        wf = _workflow(
+            tmp_path,
+            [a, g, c],
+            [_edge("a", "c", "x"), _edge("g", "c", "y")],
+        )
+
+        await wf.run(trigger_id="a")
+
+        assert "drain_failed" in node.phases
+        assert node._node["keepalives"] == node._node["pinged_at_drain_failed"]
+        assert node.released == ["done"]
+        assert c.runs == 1
+
     async def test_non_releasable_targets_get_no_lease(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -616,7 +725,7 @@ class TestSlotsAndCapacity:
     ) -> None:
         """At most ``max_parallel`` members run at once."""
         del horus_context, evacuator
-        node = FakeNode(working_directory=tmp_path.as_posix(), parallel=1)
+        node = FakeNode(working_directory=tmp_path.as_posix(), max_parallel=1)
         running: list[int] = [0]
         peak: list[int] = [0]
 
@@ -825,7 +934,7 @@ class TestMapOnSharedMachine:
             target=LocalTarget(),
             outputs=[FolderArtifact(id="batches", path=batches)],
         )
-        node = FakeNode(working_directory=tmp_path.as_posix(), parallel=1)
+        node = FakeNode(working_directory=tmp_path.as_posix(), max_parallel=1)
         score = MapTask(
             id="score",
             name="score",

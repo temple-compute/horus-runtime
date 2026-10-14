@@ -117,6 +117,11 @@ class TargetPool:
         # currently in use: mint another clone as an extra slot.
         return declared_target.idle_copy()
 
+    @property
+    def full(self) -> bool:
+        """Whether :meth:`acquire` would wait for a concurrency slot."""
+        return self._semaphore.locked()
+
     def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
         """
         Return *target* (previously returned by :meth:`acquire` for
@@ -152,7 +157,7 @@ async def execute_task(
     dispatch and cancellation handling.
 
     A task on a releasable machine also reports to the workflow's lease
-    manager (``max_parallel`` slot, started, inputs pulled, finished), which
+    manager (``member_cap`` slot, started, inputs pulled, finished), which
     decides when that machine is released.
     """
     leases = workflow.leases
@@ -184,6 +189,8 @@ async def _execute_on_target(
     resources = None if task.dispatches_children else task.resources
     await placement.acquire(task.name, location_id, resources)
     try:
+        if pool.full:
+            workflow.leases.member_queued(task)
         target = await pool.acquire(declared_target)
         # `transfer_artifacts` and `dispatch` both operate off `task.target`,
         # so point it at the target we actually acquired for the duration of
@@ -481,7 +488,12 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         # Shielded: a second cancel must not leave machines running.
         await asyncio.shield(workflow.leases.aclose(abort=True))
         raise
-    await workflow.leases.aclose(abort=False)
+    try:
+        await workflow.leases.aclose(abort=False)
+    except BaseException:
+        # Cancelled mid-release: release what is left, shielded.
+        await asyncio.shield(workflow.leases.aclose(abort=True))
+        raise
 
 
 async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:

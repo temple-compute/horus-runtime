@@ -24,7 +24,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
@@ -33,6 +33,7 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.i18n import tr as _
 
@@ -72,7 +73,9 @@ class HorusTask(BaseTask):
     kind_name: ClassVar[str] = "Horus Task"
     kind_description: ClassVar[str] = _("Basic Horus task")
 
-    target: BaseTarget = LocalTarget()
+    target: BaseTarget = Field(
+        default=LocalTarget(), json_schema_extra=target_or_ref_schema
+    )
     """
     The default target for a HorusTask is LocalTarget (in-process).
     """

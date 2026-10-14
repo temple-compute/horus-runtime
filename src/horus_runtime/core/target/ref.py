@@ -23,6 +23,8 @@ A task whose ``target`` is ``{ref: <name>}`` runs on the one shared
 that name, so every task with the same ref lands on the same machine.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 TARGET_NAME_PATTERN = r"^[a-z][a-z0-9_-]{0,62}$"
@@ -41,9 +43,21 @@ class TargetRef(BaseModel):
 def ref_name(value: object) -> str | None:
     """
     The name *value* refers to when it is a ``{ref: <name>}`` dict, else
-    ``None``. A dict with ``ref`` and no ``kind`` is validated as a
-    :class:`TargetRef`, so extra keys or a bad name raise.
+    ``None``. Any dict with ``ref`` is validated as a :class:`TargetRef`,
+    so extra keys (``kind`` included) or a bad name raise: a full target
+    that also names a ref would read differently to different readers.
     """
-    if isinstance(value, dict) and "ref" in value and "kind" not in value:
+    if isinstance(value, dict) and "ref" in value:
         return TargetRef.model_validate(value).ref
     return None
+
+
+def target_or_ref_schema(schema: dict[str, Any]) -> None:
+    """
+    ``json_schema_extra`` for a task's ``target`` field: widen its JSON
+    schema to also accept ``{ref: <name>}``.
+    """
+    target = {k: v for k, v in schema.items() if k != "default"}
+    for key in target:
+        del schema[key]
+    schema["anyOf"] = [target, TargetRef.model_json_schema()]

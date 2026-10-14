@@ -92,6 +92,10 @@ def _resolve_entry(entry: object, scope: Mapping[str, BaseTarget]) -> object:
     body = entry.get("body")
     if entry.get("kind") == "subworkflow" and isinstance(body, dict):
         entry = {**entry, "body": resolve_target_refs(body, scope)}
+    # A nested `sub:` is not lowered yet: resolve its body the same way.
+    sub = entry.get("sub")
+    if isinstance(sub, dict):
+        entry = {**entry, "sub": resolve_target_refs(sub, scope)}
     return entry
 
 

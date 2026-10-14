@@ -47,6 +47,7 @@ from horus_runtime.core.interaction.transport import BaseInteractionTransport
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.exceptions import summarize_exception
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.i18n import tr as _
@@ -162,9 +163,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
     the actual command, program or script to run.
     """
 
-    target: BaseTarget
+    target: BaseTarget = Field(json_schema_extra=target_or_ref_schema)
     """
-    The target that indicates where this task should be dispatched.
+    The target that indicates where this task should be dispatched, or, in
+    a document, ``{ref: <name>}`` naming one of the workflow's ``targets:``.
     """
 
     @field_serializer("target", mode="wrap")

@@ -43,6 +43,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -79,7 +80,9 @@ class SubworkflowExpander(HorusTask):
     """
 
     executor: BaseExecutor = Field(default_factory=ShellExecutor)
-    target: BaseTarget = Field(default_factory=LocalTarget)
+    target: BaseTarget = Field(
+        default_factory=LocalTarget, json_schema_extra=target_or_ref_schema
+    )
 
     body: BaseWorkflow
     """
@@ -242,6 +245,7 @@ class SubworkflowExpander(HorusTask):
 
         edges.extend(self._out_port_edges(wf, out_ports, by_id))
 
+        _hoist_named(wf, tasks)
         wf.expand(tasks=tasks, edges=edges, artifacts=artifacts)
         horus_logger.log.debug(
             _("Subworkflow '%(id)s' inlined %(n)d task(s).")
@@ -519,15 +523,47 @@ def _is_pinned(artifacts: list[BaseArtifact], port_name: str) -> bool:
     )
 
 
+def _named_targets(task: BaseTask) -> list[BaseTarget]:
+    """
+    Named (shared) targets *task* uses: its own, plus those a subworkflow
+    body it carries declares or uses, at any depth.
+    """
+    named = [task.target] if task.target._ref is not None else []  # noqa: SLF001
+    body = getattr(task, "body", None)
+    if isinstance(body, BaseWorkflow):
+        named += body.targets.values()
+        for inner in body.tasks:
+            named += _named_targets(inner)
+    return named
+
+
 def _copy_task(entry: BaseTask) -> BaseTask:
     """
-    A deep copy of *entry*, except that a named (shared) target stays the
-    one shared instance, so the inlined task still lands on that machine.
+    A deep copy of *entry*, except that every named (shared) target stays
+    the one shared instance, so the inlined task, or a nested body's, still
+    lands on that machine.
     """
-    target = entry.target
-    if target._ref is not None:  # noqa: SLF001
-        return deepcopy(entry, {id(target): target})
-    return entry.model_copy(deep=True)
+    memo: dict[int, Any] = {id(t): t for t in _named_targets(entry)}
+    return deepcopy(entry, memo)
+
+
+def _hoist_named(wf: BaseWorkflow, tasks: list[BaseTask]) -> None:
+    """
+    Declare in *wf*'s ``targets:`` every named target of *tasks* that is not
+    there yet (a body's own, or one shadowing a parent name), under a free
+    name, so a dump of *wf* still resolves each ``{ref}`` to its machine.
+    """
+    for task in tasks:
+        for target in _named_targets(task):
+            if any(t is target for t in wf.targets.values()):
+                continue
+            base = name = str(target._ref)  # noqa: SLF001
+            n = 2
+            while name in wf.targets:
+                name = f"{base[:58]}-{n}"
+                n += 1
+            wf.targets[name] = target
+            target._ref = name  # noqa: SLF001
 
 
 def _pin(artifact: BaseArtifact, path: Path) -> None:

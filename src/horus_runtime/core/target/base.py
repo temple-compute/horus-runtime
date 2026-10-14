@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self, final
 from uuid import uuid4
 
-from pydantic import PrivateAttr, field_validator
+from pydantic import PrivateAttr, field_validator, model_validator
 
 from horus_runtime.core.resources import ResourceScope
 from horus_runtime.core.target.channel import (
@@ -102,6 +102,17 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     :attr:`resolved_working_directory`.
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_ref(cls, data: object) -> object:
+        """
+        A full target may not also carry ``ref``: it is either a
+        ``{ref: <name>}`` or a target, never both.
+        """
+        if isinstance(data, dict) and "ref" in data:
+            raise ValueError(_("A target with 'kind' cannot also have 'ref'."))
+        return data
+
     @field_validator("working_directory")
     @classmethod
     def _strip_trailing_slash(cls, value: str | None) -> str | None:
@@ -162,8 +173,12 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         return None
 
     @property
-    def max_parallel(self) -> int | None:
-        """Cap on members running at once on this machine (``None``: none)."""
+    def member_cap(self) -> int | None:
+        """
+        Cap on members running at once on this machine (``None``: none).
+        Not named ``max_parallel``: a subclass field of that name would be
+        shadowed by this property.
+        """
         return None
 
     @property

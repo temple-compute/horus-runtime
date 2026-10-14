@@ -78,6 +78,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import InputDigests
 from horus_runtime.core.workflow.condition import EdgeCondition, derive_ref
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -126,7 +127,9 @@ class BranchRouter(HorusTask):
     """
 
     executor: BaseExecutor = Field(default_factory=ShellExecutor)
-    target: BaseTarget = Field(default_factory=LocalTarget)
+    target: BaseTarget = Field(
+        default_factory=LocalTarget, json_schema_extra=target_or_ref_schema
+    )
 
     routes: list[str]
     """

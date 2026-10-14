@@ -36,7 +36,7 @@ from abc import abstractmethod
 from collections.abc import Collection, Coroutine, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.i18n import tr as _
@@ -50,7 +50,10 @@ if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 
 KEEPALIVE_INTERVAL_S = 300.0
-"""Seconds between ``keepalive()`` calls on every live machine."""
+"""Seconds between ``keepalive()`` calls on every busy or holding machine."""
+
+EVACUATION_TIMEOUT_S = 6 * 3600.0
+"""Cap on one drain; past it the drain fails and the machine is kept."""
 
 EVACUATION_CONCURRENCY = 4
 """Outputs evacuated at once from one machine."""
@@ -83,7 +86,9 @@ class Lease:
     slots: asyncio.Semaphore | None = None
     phase: Phase = Phase.COLD
     pinned: bool = False
-    """Left alone until run end, after a failed drain or destroy."""
+    """Left alone until run end, after a failed destroy."""
+    no_cap: bool = False
+    """After a failed drain: never released while anything still needs it."""
 
 
 @dataclass(frozen=True)
@@ -207,13 +212,17 @@ class LeaseManager:
     """
 
     keepalive_interval_s: float = KEEPALIVE_INTERVAL_S
+    evacuation_timeout_s: float = EVACUATION_TIMEOUT_S
 
     def __init__(self, workflow: "BaseWorkflow") -> None:
         self.workflow = workflow
         self._leases: dict[str, Lease] = {}
         self._inputs_done: set[str] = set()
         self._pulling: set[str] = set()
+        self._queued: set[str] = set()
         self._pulled = asyncio.Event()
+        self._reading: dict[str, int] = {}
+        self._snapshots: dict[tuple[str, str], bytes | None] = {}
         self._produced: dict[tuple[str, str], int] = {}
         self._state: LeaseState | None = None
         self._keeper: asyncio.Task[None] | None = None
@@ -240,8 +249,9 @@ class LeaseManager:
         lease = self._leases.get(target.lease_key)
         if lease is None:
             lease = Lease(key=target.lease_key, target=target)
-            if target.max_parallel is not None:
-                lease.slots = asyncio.Semaphore(target.max_parallel)
+            cap = target.member_cap
+            if cap is not None:
+                lease.slots = asyncio.Semaphore(cap)
             self._declare_capacity(target, self.workflow.placement)
             self._leases[lease.key] = lease
             if self._keeper is None:
@@ -270,7 +280,7 @@ class LeaseManager:
 
     async def member_slot(self, task: "BaseTask") -> None:
         """
-        Wait for a ``max_parallel`` slot on *task*'s machine. A task that
+        Wait for a ``member_cap`` slot on *task*'s machine. A task that
         dispatches its own children (a map) takes none, or a cap of 1 would
         deadlock it against its clones.
         """
@@ -284,6 +294,7 @@ class LeaseManager:
 
     def member_started(self, task: "BaseTask") -> None:
         """*task* is bound to its machine and about to pull its inputs."""
+        self._queued.discard(task.id)
         self._pulling.add(task.id)
         lease = self._lease_for(task.target)
         if lease is None:
@@ -312,6 +323,7 @@ class LeaseManager:
         decided by the scheduler's next :meth:`reconcile`.
         """
         self._done_pulling(task)
+        self._queued.discard(task.id)
         lease = self._lease_for(task.target)
         if lease is None:
             return
@@ -331,27 +343,39 @@ class LeaseManager:
         work runs in the background.
         """
         self._state = state
+        pending = state.pending
+        starting = set(state.in_flight) - self._queued
+        members_of: dict[str, set[str]] = {}
+        for task_id in pending:
+            for key in _lease_keys(state.tasks[task_id]):
+                members_of.setdefault(key, set()).add(task_id)
         for lease in self._leases.values():
             if lease.work is not None or lease.pinned or lease.running:
                 continue
             if not lease.target.is_live:
                 continue
-            members = self._members(lease, state)
-            if members & set(state.in_flight):
-                # About to start (waiting on a slot, placement or the pool).
+            members = members_of.get(lease.key, set())
+            if members & starting:
+                # About to start (waiting on its own slot or placement).
                 self._cancel_timer(lease)
                 continue
-            needed = self._needed(lease, state)
-            if not members:
-                self._cancel_timer(lease)
-                reason = "drained" if needed else "done"
-                lease.work = asyncio.create_task(
-                    self._release(lease, needed, reason)
-                )
-            elif lease.timer is None:
-                lease.phase = Phase.HOLDING
-                lease.target.emit_node_phase("holding")
-                lease.timer = asyncio.create_task(self._hold(lease))
+            if members:
+                if lease.timer is None and not lease.no_cap:
+                    if lease.phase is not Phase.HOLDING:
+                        lease.phase = Phase.HOLDING
+                        lease.target.emit_node_phase("holding")
+                    lease.timer = asyncio.create_task(self._hold(lease))
+                continue
+            needed = self._needed(lease, state, pending)
+            sentinels = self._sentinels(lease, state, pending)
+            if lease.no_cap and needed:
+                # Consumers pull from the machine directly.
+                continue
+            self._cancel_timer(lease)
+            reason = "drained" if needed or sentinels else "done"
+            lease.work = asyncio.create_task(
+                self._release(lease, needed, reason, sentinels)
+            )
 
     def _source_map(self) -> "dict[tuple[str, str], EdgeSource]":
         self._source_map_cache = self.workflow.cached_source_map(
@@ -377,14 +401,74 @@ class LeaseManager:
             if lease.key in _lease_keys(state.tasks[task_id])
         }
 
-    def _needed(self, lease: Lease, state: LeaseState) -> set[tuple[str, str]]:
+    def _sentinels(
+        self, lease: Lease, state: LeaseState, pending: set[str]
+    ) -> set[tuple[str, str]]:
+        """
+        ``(producer, output)`` on *lease*'s machine that a pending task reads
+        straight off the producer's target, outside any transfer: an edge
+        condition's sentinel, or a loop body's signal.
+        """
+        sentinels: set[tuple[str, str]] = set()
+        for edge in self.workflow.edges:
+            consumer = state.tasks.get(edge.target)
+            if consumer is None or edge.target not in pending:
+                continue
+            condition = edge.condition
+            if condition is not None:
+                key = (
+                    condition.source_task or edge.source,
+                    condition.source_output or edge.source_output,
+                )
+            # A loop checker reads the previous body's signal output.
+            elif edge.source_output is not None and edge.source_output == (
+                getattr(consumer, "signal_output", None)
+            ):
+                key = (edge.source, edge.source_output)
+            else:
+                continue
+            producer = state.tasks.get(key[0])
+            if (
+                key[1] is not None
+                and producer is not None
+                and producer.target.lease_key == lease.key
+                and key not in self._snapshots
+            ):
+                sentinels.add(cast(tuple[str, str], key))
+        return sentinels
+
+    async def read_output(
+        self, task: "BaseTask", artifact: "BaseArtifact"
+    ) -> bytes | None:
+        """
+        Bytes of *task*'s *artifact* read off its target, or from the
+        snapshot taken before that machine was released; ``None`` when it
+        was never written.
+        """
+        key = (task.id, artifact.id)
+        if key in self._snapshots:
+            return self._snapshots[key]
+        lease_key = task.target.lease_key
+        # A release waits for reads in progress (see `_release`).
+        self._reading[lease_key] = self._reading.get(lease_key, 0) + 1
+        try:
+            path = task.target.path_on_target(artifact)
+            if not await task.target.path_exists(path):
+                return None
+            return await task.target.get_file(path)
+        finally:
+            self._reading[lease_key] -= 1
+            self._pulled.set()
+
+    def _needed(
+        self, lease: Lease, state: LeaseState, pending: set[str]
+    ) -> set[tuple[str, str]]:
         """
         ``(producer, output)`` on *lease*'s machine that a pending task has
         not pulled yet, members included: they may re-provision elsewhere.
         A pending subworkflow needs whatever feeds it, data edge or not: its
         body re-emits those edges onto real consumers when it expands.
         """
-        pending = state.pending
         needed = {
             (str(src.task_id), src.artifact.id)
             for (consumer, _input), src in self._source_map().items()
@@ -424,6 +508,15 @@ class LeaseManager:
             for edge in self.workflow.edges
         )
 
+    def member_queued(self, task: "BaseTask") -> None:
+        """
+        *task* waits for a ``max_concurrency`` slot: until it gets one it
+        does not keep its machine from holding (see :meth:`reconcile`).
+        """
+        self._queued.add(task.id)
+        if self._state is not None and self._lease_for(task.target):
+            self.reconcile(self._state)
+
     async def _hold(self, lease: Lease) -> None:
         """Release *lease* if it is still idle when the hold expires."""
         await asyncio.sleep(lease.target.hold_timeout_s or 0)
@@ -433,31 +526,46 @@ class LeaseManager:
             lease.running
             or lease.work is not None
             or state is None
-            or self._members(lease, state) & set(state.in_flight)
+            or self._members(lease, state)
+            & (set(state.in_flight) - self._queued)
         ):
             return
-        needed = self._needed(lease, state)
+        pending = state.pending
         lease.work = asyncio.create_task(
-            self._release(lease, needed, "idle_cap")
+            self._release(
+                lease,
+                self._needed(lease, state, pending),
+                "idle_cap",
+                self._sentinels(lease, state, pending),
+            )
         )
 
     async def _release(
-        self, lease: Lease, needed: set[tuple[str, str]], reason: str
+        self,
+        lease: Lease,
+        needed: set[tuple[str, str]],
+        reason: str,
+        sentinels: set[tuple[str, str]] = frozenset(),  # type: ignore[assignment]
     ) -> None:
-        """Evacuate *needed*, then destroy the machine. Never raises."""
+        """
+        Snapshot *sentinels*, evacuate *needed*, then destroy the machine.
+        Never raises.
+        """
         try:
-            if needed:
+            if needed or sentinels:
                 lease.phase = Phase.DRAINING
                 lease.target.emit_node_phase("draining", outputs=len(needed))
-                if not await self._evacuate(lease, needed):
+                if not await self._snapshot(
+                    lease, sentinels
+                ) or not await self._evacuate(lease, needed):
                     # Never destroy data a pending task still needs: keep
                     # the machine and let consumers pull from it directly.
                     lease.target.emit_node_phase("drain_failed")
-                    lease.pinned = True
+                    lease.no_cap = True
                     return
-            # A transfer that started before the relocation still reads
-            # from this machine: let it finish.
-            while self._pulling_from(lease):
+            # A transfer or read that started before the relocation still
+            # reads from this machine: let it finish.
+            while self._pulling_from(lease) or self._reading.get(lease.key):
                 self._pulled.clear()
                 await self._pulled.wait()
             if lease.running:
@@ -483,6 +591,26 @@ class LeaseManager:
                 else Phase.COLD
             )
 
+    async def _snapshot(
+        self, lease: Lease, sentinels: set[tuple[str, str]]
+    ) -> bool:
+        """Keep the bytes of every output in *sentinels*; whether it worked."""
+        tasks = {task.id: task for task in self.workflow.tasks}
+        try:
+            for task_id, output_id in sorted(sentinels):
+                task = tasks[task_id]
+                output = next(o for o in task.outputs if o.id == output_id)
+                self._snapshots[(task_id, output_id)] = await self.read_output(
+                    task, output
+                )
+        except Exception as exc:
+            horus_logger.log.error(
+                _("Evacuating from machine '%(key)s' failed: %(error)s")
+                % {"key": lease.key, "error": exc}
+            )
+            return False
+        return True
+
     async def _evacuate(
         self, lease: Lease, needed: set[tuple[str, str]]
     ) -> bool:
@@ -498,9 +626,16 @@ class LeaseManager:
                 source = await evacuator.evacuate(task, output, lease.target)
                 self.workflow.relocate_output(task_id, output_id, source)
 
-        results = await asyncio.gather(
-            *(one(*key) for key in sorted(needed)), return_exceptions=True
-        )
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *(one(*key) for key in sorted(needed)),
+                    return_exceptions=True,
+                ),
+                self.evacuation_timeout_s,
+            )
+        except TimeoutError as exc:
+            results = [exc]
         errors = [r for r in results if isinstance(r, BaseException)]
         for error in errors:
             horus_logger.log.error(
@@ -510,13 +645,16 @@ class LeaseManager:
         return not errors
 
     async def _keep_alive(self) -> None:
-        """Ping every live machine periodically (idle watchdog, life cap)."""
+        """
+        Ping every live machine that a member is running on, or that is in
+        its hold, so its idle watchdog and life cap do not fire. A machine
+        stuck draining, kept after a failed drain or destroy, is not pinged.
+        """
         while True:
             await asyncio.sleep(self.keepalive_interval_s)
             for lease in list(self._leases.values()):
-                if lease.target.is_live and lease.phase not in (
-                    Phase.RELEASING,
-                    Phase.COLD,
+                if lease.target.is_live and (
+                    lease.running or lease.timer is not None
                 ):
                     try:
                         await lease.target.keepalive()
@@ -574,6 +712,10 @@ class LeaseManager:
         self._leases.clear()
         self._inputs_done.clear()
         self._pulling.clear()
+        self._queued.clear()
+        self._reading.clear()
+        self._snapshots.clear()
+        self._pulled = asyncio.Event()
         self._produced.clear()
         self._state = None
         self.workflow.clear_relocations()

@@ -371,6 +371,10 @@ class AutoRegistry(BaseModel, ABC):
                     field_json = json_handler(
                         TypeAdapter(annotation).core_schema
                     )
+                # E.g. a task's `target`, widened to accept `{ref}`.
+                if callable(fi.json_schema_extra):
+                    field_json = dict(field_json)
+                    fi.json_schema_extra(field_json)
                 if fi.title:
                     field_json = {**field_json, "title": fi.title}
                 if fi.description:

@@ -31,9 +31,12 @@ from pydantic import ValidationError
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_builtin.workflow.loop import loop_task
 from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
+from horus_runtime.context import HorusContext
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.workflow.exceptions import TargetRefInLoopError
 from horus_runtime.secrets import Secret, iter_secret_fields
 
 HUNTER2 = "hunter2"  # test fixture value, not a real secret
@@ -119,6 +122,7 @@ class TestResolution:
             ({"x": {"ref": "y"}}, {"kind": "local"}, "cannot itself be a"),
             (HEAVY, {"ref": "heavy", "extra": 1}, "Extra inputs"),
             (HEAVY, {"ref": "Bad Name"}, "should match pattern"),
+            (HEAVY, {"ref": "heavy", "kind": "local"}, "Extra inputs"),
         ],
     )
     def test_invalid_documents_are_rejected(
@@ -169,6 +173,31 @@ class TestResolution:
         with pytest.raises(ValidationError, match="'heavy' needs cpus"):
             HorusWorkflow.model_validate(
                 _doc([_task("a", {"ref": "heavy"})], unsized)
+            )
+
+    def test_full_target_with_a_ref_is_rejected(self) -> None:
+        """A target with ``kind`` and ``ref`` is rejected outside a doc too."""
+        with pytest.raises(ValidationError, match="cannot also have 'ref'"):
+            HorusTask.model_validate(
+                _task("a", {"kind": "local", "ref": "heavy"})
+            )
+
+    def test_target_schema_accepts_a_ref(self) -> None:
+        """The task ``target`` JSON schema offers ``{ref}`` too."""
+        target = HorusTask.model_json_schema()["properties"]["target"]
+
+        refs = [s for s in target["anyOf"] if "ref" in s.get("properties", {})]
+        assert refs[0]["required"] == ["ref"]
+        assert any(s.get("required") == ["kind"] for s in target["anyOf"])
+
+    def test_loop_task_rejects_a_named_body(self) -> None:
+        """``wf.loop`` with a body on a named target fails at once."""
+        wf = HorusWorkflow.model_validate(
+            _doc([_task("a", {"ref": "heavy"})], HEAVY)
+        )
+        with pytest.raises(TargetRefInLoopError):
+            loop_task(
+                wf, id="l", body=wf.tasks[0], until="out", max_iterations=2
             )
 
     def test_standalone_task_ref_has_a_clear_error(self) -> None:
@@ -313,6 +342,63 @@ class TestSubworkflowScope:
         body = _doc([_task("inner", {"ref": "light"})])
         with pytest.raises(ValidationError, match="unknown target 'light'"):
             HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+
+    def test_nested_sub_sees_the_grandparent_targets(self) -> None:
+        """A raw ``sub:`` inside a body resolves refs to the outer scope."""
+        nested = _doc([_task("leaf", {"ref": "heavy"})])
+        body = _doc([_sub("nested", nested)])
+        wf = HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+
+        outer = wf.tasks[0]
+        assert isinstance(outer, SubworkflowExpander)
+        inner = outer.body.tasks[0]
+        assert isinstance(inner, SubworkflowExpander)
+        assert inner.body.tasks[0].target is wf.targets["heavy"]
+
+    def test_expanding_keeps_a_nested_body_on_the_named_target(
+        self, tmp_path: Path
+    ) -> None:
+        """Inlining a nested subworkflow does not fork its named target."""
+        nested = _doc([_task("leaf", {"ref": "heavy"})])
+        body = _doc([_sub("nested", nested)])
+        wf = HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+        outer = wf.tasks[0]
+        assert isinstance(outer, SubworkflowExpander)
+
+        (inner,) = outer._build_inner_tasks(tmp_path)
+
+        assert isinstance(inner, SubworkflowExpander)
+        assert inner.body.tasks[0].target is wf.targets["heavy"]
+
+    @pytest.mark.parametrize("name", ["inner", "heavy"])
+    async def test_snapshot_after_expansion_keeps_body_targets(
+        self, tmp_path: Path, horus_context: HorusContext, name: str
+    ) -> None:
+        """
+        A dump taken after a body with its own target (new, or shadowing a
+        parent name) was inlined reloads onto that same machine.
+        """
+        del horus_context
+        body = _doc(
+            [_task("inner", {"ref": name})],
+            {name: {"kind": "pw_target", "cpus": 1}},
+        )
+        doc = _doc([_sub("sub", body)], HEAVY)
+        doc["orchestrator_target"] = {
+            "kind": "local",
+            "working_directory": tmp_path.as_posix(),
+        }
+        wf = HorusWorkflow.model_validate(doc)
+
+        await wf.run(trigger_id="sub")
+        again = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+
+        task = next(t for t in again.tasks if t.id == "sub/inner")
+        ref = task.target._ref
+        assert ref is not None
+        assert task.target is again.targets[ref]
+        assert task.target.cpus == 1  # type: ignore[attr-defined]
+        assert again.targets["heavy"].cpus == 8  # type: ignore[attr-defined]
 
     def test_dumped_parent_round_trips_the_body_refs(self) -> None:
         """Dumped parent round trips the body refs."""
