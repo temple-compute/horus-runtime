@@ -67,8 +67,9 @@ class TaskStatus(Enum):
 
     SKIPPED = "skipped"
     """
-    The task did not execute, but counts as satisfied: downstream tasks run.
-    See ``SkipReason`` for why it was skipped.
+    The task did not execute. See ``SkipReason`` for why. A cache hit or an
+    untaken branch counts as satisfied, so downstream tasks run; a task
+    skipped because an upstream task failed does not.
     """
 
 
@@ -87,11 +88,12 @@ class SkipReason(Enum):
     """
     Why a ``SKIPPED`` task was skipped.
 
-    Both reasons produce the same ``TaskStatus`` because the scheduler treats
-    them identically (a skipped task is "done", so the DAG moves on). They are
+    Every reason produces the same ``TaskStatus``: the task never ran. They are
     distinguished here rather than by widening ``TaskStatus`` because that enum
-    is persisted and shared across repositories, and the difference matters
-    only for display: a cache hit and an untaken branch should not look alike.
+    is persisted and shared across repositories. The scheduler tracks what a
+    skip means for the DAG itself (``UPSTREAM_FAILED`` blocks its descendants,
+    the others let them run); the reason is what a reader sees, so a cache
+    hit, an untaken branch and a blocked task do not look alike.
     """
 
     COMPLETE = "complete"
@@ -103,4 +105,11 @@ class SkipReason(Enum):
     INACTIVE = "inactive"
     """
     No incoming edge was live, so this task is on a branch that was not taken.
+    """
+
+    UPSTREAM_FAILED = "upstream_failed"
+    """
+    An upstream task failed under the ``"continue"`` failure policy, so this
+    task could never get its inputs. Unlike the other reasons, it does not
+    count as satisfied: everything downstream of it is skipped too.
     """

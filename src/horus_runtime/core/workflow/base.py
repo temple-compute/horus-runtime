@@ -247,8 +247,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
       other task still in flight and the run stops immediately, matching the
       runtime's historical behavior.
     - ``"continue"``: a failed task does not abort the run. Its descendants
-      are never dispatched (they permanently lack a satisfied dependency),
-      but every other branch of the DAG keeps running to completion. Once
+      are never dispatched (they end ``SKIPPED`` with
+      ``SkipReason.UPSTREAM_FAILED``), but every other branch of the DAG
+      keeps running to completion, and a map's clones run independently of
+      each other. Once
       nothing more can run, the workflow still ends ``FAILED`` if any task
       failed, naming every failed task.
 

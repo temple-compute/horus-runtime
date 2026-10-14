@@ -368,6 +368,43 @@ def _dispatch_ready(
         running[wrapper] = task_id
 
 
+def _mark_blocked(
+    blocked_ids: list[str],
+    *,
+    failed_task: "BaseTask",
+    tasks_by_id: dict[str, "BaseTask"],
+    initial_task_ids: set[str],
+) -> None:
+    """
+    Mark each of *blocked_ids* ``SKIPPED`` with ``UPSTREAM_FAILED`` and say
+    why on the bus. A clone its composite already ran (see
+    ``_dispatch_ready``) keeps its real status; anything else never ran.
+    """
+    for blocked_id in blocked_ids:
+        blocked_task = tasks_by_id[blocked_id]
+        if (
+            blocked_id in initial_task_ids
+            or blocked_task.status not in TERMINAL_STATUSES
+        ):
+            blocked_task.status = TaskStatus.SKIPPED
+            blocked_task.skip_reason = SkipReason.UPSTREAM_FAILED
+        message = _(
+            "Task %(task_name)s blocked: upstream task "
+            "%(failed_task_name)s failed."
+        ) % {
+            "task_name": blocked_task.name,
+            "failed_task_name": failed_task.name,
+        }
+        horus_logger.log.debug(message)
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=blocked_id,
+                task_name=blocked_task.name,
+                message=message,
+            )
+        )
+
+
 async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     """
     Execute *workflow* from *trigger_id* with a concurrent ready-set
@@ -395,7 +432,8 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
       mistaking the resulting deadlock for a genuine cycle). Every other
       branch keeps running to completion. Once nothing more can run, if any
       task failed, :exc:`WorkflowExecutionError` is raised naming every
-      failed task, so the workflow still ends ``FAILED``.
+      failed task, so the workflow still ends ``FAILED``. Each blocked task
+      is marked ``SKIPPED`` with ``SkipReason.UPSTREAM_FAILED``.
 
     Raises:
         UnknownTaskError: If trigger_id is not a task in the workflow.
@@ -558,23 +596,12 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
             failed[task_id] = exc
             newly_blocked = descendants(task_id, deps) - blocked
             blocked |= newly_blocked
-            for blocked_id in sorted(newly_blocked - {task_id}):
-                blocked_task = tasks_by_id[blocked_id]
-                message = _(
-                    "Task %(task_name)s blocked: upstream task "
-                    "%(failed_task_name)s failed."
-                ) % {
-                    "task_name": blocked_task.name,
-                    "failed_task_name": tasks_by_id[task_id].name,
-                }
-                horus_logger.log.debug(message)
-                HorusContext.get_context().bus.emit(
-                    HorusTaskEvent(
-                        task_id=blocked_id,
-                        task_name=blocked_task.name,
-                        message=message,
-                    )
-                )
+            _mark_blocked(
+                sorted(newly_blocked - {task_id}),
+                failed_task=tasks_by_id[task_id],
+                tasks_by_id=tasks_by_id,
+                initial_task_ids=initial_task_ids,
+            )
 
     if failed:
         raise WorkflowExecutionError(sorted(failed)) from next(

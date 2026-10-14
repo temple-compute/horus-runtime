@@ -231,17 +231,35 @@ class MapTask(HorusTask):
         self.status = TaskStatus.RUNNING
 
         pool = TargetPool(self.max_concurrency)
-        async with asyncio.TaskGroup() as tg:
-            for clone in clones:
-                tg.create_task(
-                    execute_task(
-                        wf,
-                        clone,
-                        source_map=source_map,
-                        pool=pool,
-                        placement=wf.placement,
-                    )
+        runs = [
+            execute_task(
+                wf,
+                clone,
+                source_map=source_map,
+                pool=pool,
+                placement=wf.placement,
+            )
+            for clone in clones
+        ]
+        if wf.failure_policy == "continue":
+            # Clones are independent: one failing must not cancel the rest.
+            # The map still fails once they have all finished.
+            results = await asyncio.gather(*runs, return_exceptions=True)
+            errors = [r for r in results if isinstance(r, BaseException)]
+            # A cancelled clone is a cancel, not a failure: never group it.
+            for error in errors:
+                if isinstance(error, asyncio.CancelledError):
+                    raise error
+            if errors:
+                raise BaseExceptionGroup(
+                    _("%(n)d of %(total)d map clone(s) failed.")
+                    % {"n": len(errors), "total": len(clones)},
+                    errors,
                 )
+        else:
+            async with asyncio.TaskGroup() as tg:
+                for run in runs:
+                    tg.create_task(run)
 
         # Deliberately NOT merging the clones' side artifacts into this
         # task's own list: each clone's upload middleware registers them

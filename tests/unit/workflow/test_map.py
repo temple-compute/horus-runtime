@@ -774,6 +774,43 @@ class TestCloneFailure:
 
         assert wf.status.value == "failed"
 
+    async def test_continue_policy_lets_sibling_clones_finish(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``failure_policy="continue"`` one failing clone does not
+        cancel its siblings, yet the map and the workflow still fail.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        # b fails at once; a and c finish after it, so a fail-fast map would
+        # have cancelled them.
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                '[ "$(basename $batch)" = b.txt ] && exit 1; '
+                "sleep 0.2 && cp $batch $scored/result.txt"
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.failure_policy = "continue"
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        clones = {
+            t.id: t.status for t in wf.tasks if t.id.startswith("score[")
+        }
+        assert clones == {
+            "score[0]": TaskStatus.COMPLETED,
+            "score[1]": TaskStatus.FAILED,
+            "score[2]": TaskStatus.COMPLETED,
+        }
+        assert map_task.status == TaskStatus.FAILED
+        assert wf.status.value == "failed"
+
 
 @pytest.mark.unit
 class TestConcurrency:
