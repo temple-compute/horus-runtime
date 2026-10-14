@@ -203,6 +203,14 @@ class HorusTask(BaseTask):
         body = fingerprint.model_dump_json().encode()
         await self.target.put_file(body, path)
 
+    async def _remove_manifest(self) -> None:
+        """
+        Remove the recorded fingerprint, so the next run executes the task.
+        """
+        path = self._manifest_path()
+        if path is not None:
+            await self.target.remove(path)
+
     async def _read_manifest(self) -> TaskFingerprint | None:
         """
         The fingerprint recorded by the last successful run, or ``None`` when
@@ -285,8 +293,6 @@ class HorusTask(BaseTask):
             await store.delete(artifact)
 
         # The manifest only describes those outputs, so it goes with them.
-        path = self._manifest_path()
-        if path is not None:
-            await self.target.remove(path)
+        await self._remove_manifest()
 
         self.runs = 0
