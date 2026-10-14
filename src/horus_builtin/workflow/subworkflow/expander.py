@@ -245,7 +245,7 @@ class SubworkflowExpander(HorusTask):
 
         edges.extend(self._out_port_edges(wf, out_ports, by_id))
 
-        _hoist_named(wf, tasks)
+        _hoist_named(wf, tasks, self.body)
         wf.expand(tasks=tasks, edges=edges, artifacts=artifacts)
         horus_logger.log.debug(
             _("Subworkflow '%(id)s' inlined %(n)d task(s).")
@@ -547,23 +547,48 @@ def _copy_task(entry: BaseTask) -> BaseTask:
     return deepcopy(entry, memo)
 
 
-def _hoist_named(wf: BaseWorkflow, tasks: list[BaseTask]) -> None:
+def _body_scopes(body: BaseWorkflow) -> list[dict[str, BaseTarget]]:
+    """The ``targets:`` of *body* and of every body nested in it."""
+    scopes = [body.targets]
+    for task in body.tasks:
+        inner = getattr(task, "body", None)
+        if isinstance(inner, BaseWorkflow):
+            scopes += _body_scopes(inner)
+    return scopes
+
+
+def _hoist_named(
+    wf: BaseWorkflow, tasks: list[BaseTask], body: BaseWorkflow
+) -> None:
     """
-    Declare in *wf*'s ``targets:`` every named target of *tasks* that is not
-    there yet (a body's own, or one shadowing a parent name), under a free
-    name, so a dump of *wf* still resolves each ``{ref}`` to its machine.
+    Move into *wf*'s ``targets:`` every named target of *tasks* (inlined
+    from *body*) that is not there yet, under a name free in *wf* and in
+    every nested body, so a dump of *wf* resolves each ``{ref}`` to its
+    machine, and a re-run from that dump finds the same instance.
     """
+    # The inlined tasks carry copies of the nested bodies.
+    scopes = _body_scopes(body)
+    for task in tasks:
+        inner = getattr(task, "body", None)
+        if isinstance(inner, BaseWorkflow):
+            scopes += _body_scopes(inner)
     for task in tasks:
         for target in _named_targets(task):
             if any(t is target for t in wf.targets.values()):
                 continue
             base = name = str(target._ref)  # noqa: SLF001
             n = 2
-            while name in wf.targets:
+            while name in wf.targets or any(
+                scope.get(name, target) is not target for scope in scopes
+            ):
                 name = f"{base[:58]}-{n}"
                 n += 1
             wf.targets[name] = target
             target._ref = name  # noqa: SLF001
+    hoisted = {id(t) for t in wf.targets.values()}
+    for scope in scopes:
+        for name in [k for k, t in scope.items() if id(t) in hoisted]:
+            del scope[name]
 
 
 def _pin(artifact: BaseArtifact, path: Path) -> None:

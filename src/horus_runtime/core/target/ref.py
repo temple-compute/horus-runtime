@@ -60,4 +60,6 @@ def target_or_ref_schema(schema: dict[str, Any]) -> None:
     target = {k: v for k, v in schema.items() if k != "default"}
     for key in target:
         del schema[key]
+    # The runtime rejects `{ref, kind}`; so must a schema validator.
+    target["not"] = {"required": ["ref"]}
     schema["anyOf"] = [target, TargetRef.model_json_schema()]

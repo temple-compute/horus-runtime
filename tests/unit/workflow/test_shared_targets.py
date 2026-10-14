@@ -190,6 +190,15 @@ class TestResolution:
         assert refs[0]["required"] == ["ref"]
         assert any(s.get("required") == ["kind"] for s in target["anyOf"])
 
+    def test_target_schema_rejects_a_ref_with_target_fields(self) -> None:
+        """No ``anyOf`` branch takes ``{ref, kind}``, as the runtime does."""
+        target = HorusTask.model_json_schema()["properties"]["target"]
+
+        full = [
+            s for s in target["anyOf"] if "ref" not in s.get("properties", {})
+        ]
+        assert full[0]["not"] == {"required": ["ref"]}
+
     def test_loop_task_rejects_a_named_body(self) -> None:
         """``wf.loop`` with a body on a named target fails at once."""
         wf = HorusWorkflow.model_validate(
@@ -399,6 +408,70 @@ class TestSubworkflowScope:
         assert task.target is again.targets[ref]
         assert task.target.cpus == 1  # type: ignore[attr-defined]
         assert again.targets["heavy"].cpus == 8  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("name", ["inner", "heavy"])
+    async def test_rerun_from_a_snapshot_keeps_the_machine_names(
+        self, tmp_path: Path, horus_context: HorusContext, name: str
+    ) -> None:
+        """
+        Re-running from a dump does not hoist the body's machine again
+        under a new name each time.
+        """
+        del horus_context
+        body = _doc(
+            [_task("inner", {"ref": name})],
+            {name: {"kind": "pw_target", "cpus": 1}},
+        )
+        doc = _doc([_sub("sub", body)], HEAVY)
+        doc["orchestrator_target"] = {
+            "kind": "local",
+            "working_directory": tmp_path.as_posix(),
+        }
+        wf = HorusWorkflow.model_validate(doc)
+        await wf.run(trigger_id="sub")
+        names = sorted(wf.targets)
+
+        for _ in range(2):
+            wf = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+            await wf.run(trigger_id="sub")
+
+        assert sorted(wf.targets) == names
+        task = next(t for t in wf.tasks if t.id == "sub/inner")
+        assert task.target.cpus == 1  # type: ignore[attr-defined]
+
+    async def test_hoisted_rename_skips_names_of_nested_bodies(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A renamed body machine does not take a name a nested body declares,
+        so a reloaded dump keeps each task on its own machine.
+        """
+        del horus_context
+        nested = _doc(
+            [
+                _task("leaf", {"ref": "heavy"}),
+                _task("own", {"ref": "heavy-2"}),
+            ],
+            {"heavy-2": {"kind": "pw_target", "cpus": 2}},
+        )
+        body = _doc(
+            [_task("top", {"ref": "heavy"}), _sub("s2", nested)],
+            {"heavy": {"kind": "pw_target", "cpus": 1}},
+        )
+        doc = _doc([_sub("s1", body)], HEAVY)
+        doc["orchestrator_target"] = {
+            "kind": "local",
+            "working_directory": tmp_path.as_posix(),
+        }
+        wf = HorusWorkflow.model_validate(doc)
+        await wf.run(trigger_id="s1")
+
+        again = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+
+        s2 = next(t for t in again.tasks if t.id == "s1/s2")
+        assert isinstance(s2, SubworkflowExpander)
+        cpus = {t.id: t.target.cpus for t in s2.body.tasks}  # type: ignore[attr-defined]
+        assert cpus == {"leaf": 1, "own": 2}
 
     def test_dumped_parent_round_trips_the_body_refs(self) -> None:
         """Dumped parent round trips the body refs."""
