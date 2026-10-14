@@ -713,6 +713,11 @@ class TestFailurePolicy:
         assert b_child.runs == 0
         assert b_child.status == TaskStatus.SKIPPED
         assert b_child.skip_reason == SkipReason.UPSTREAM_FAILED
+
+        # Running it later clears the stale reason.
+        await b_child.run()
+        assert b_child.runs == 1
+        assert b_child.skip_reason is None
         assert wf.status == WorkflowStatus.FAILED
 
     async def test_continue_policy_with_no_failures_completes_normally(

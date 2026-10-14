@@ -246,6 +246,10 @@ class MapTask(HorusTask):
             # The map still fails once they have all finished.
             results = await asyncio.gather(*runs, return_exceptions=True)
             errors = [r for r in results if isinstance(r, BaseException)]
+            # A cancelled clone is a cancel, not a failure: never group it.
+            for error in errors:
+                if isinstance(error, asyncio.CancelledError):
+                    raise error
             if errors:
                 raise BaseExceptionGroup(
                     _("%(n)d of %(total)d map clone(s) failed.")

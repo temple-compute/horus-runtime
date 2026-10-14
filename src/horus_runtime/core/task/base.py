@@ -339,6 +339,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
 
             self.status = TaskStatus.CONFIGURING
             self.error = None
+            self.skip_reason = None
             self.started_at = datetime.now(UTC)
             self.finished_at = None
             horus_logger.log.debug(
