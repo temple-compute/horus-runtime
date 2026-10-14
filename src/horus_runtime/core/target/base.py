@@ -24,8 +24,10 @@ import functools
 import shlex
 import socket
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Self, final
+from typing import TYPE_CHECKING, Any, ClassVar, Self, final
+from uuid import uuid4
 
 from pydantic import PrivateAttr, field_validator
 
@@ -54,7 +56,9 @@ from horus_runtime.registry.auto_registry import AutoRegistry
 
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
+    from horus_runtime.core.placement import ResourceCapacity
     from horus_runtime.core.task.base import BaseTask
+    from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 
 
 @functools.cache
@@ -114,6 +118,114 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
     _task: "BaseTask | None" = PrivateAttr(default=None)
     _task_future: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+
+    _ref: str | None = PrivateAttr(default=None)
+    """
+    Name under the workflow's ``targets:`` map, set by the workflow when this
+    is a named (shared) target; ``None`` for an inline target.
+    """
+
+    _uid: str = PrivateAttr(default_factory=lambda: uuid4().hex[:12])
+    """
+    Minted once per declared target. ``idle_copy`` and map clones share it
+    (``model_copy`` is shallow over private attributes).
+    """
+
+    @property
+    def lease_key(self) -> str:
+        """Identity of the declared target, stable across copies."""
+        return self._uid
+
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
+        """
+        A deep copy is a separate machine, so it gets its own ``_uid``.
+
+        A shallow :meth:`idle_copy` is another slot on the same machine.
+        """
+        copy = super().__deepcopy__(memo)
+        copy._uid = uuid4().hex[:12]  # noqa: SLF001
+        return copy
+
+    # Lease hooks, driven by the workflow's lease manager
+    # (:mod:`horus_runtime.core.lease`). The defaults make a target not
+    # releasable: it is never held, drained or released early.
+
+    releasable: ClassVar[bool] = False
+    """Whether the lease manager may release this target's machine early."""
+
+    @property
+    def hold_timeout_s(self) -> float | None:
+        """
+        Seconds the machine may sit idle while members are still pending
+        before it is drained and released. ``None`` for non-releasable.
+        """
+        return None
+
+    @property
+    def max_parallel(self) -> int | None:
+        """Cap on members running at once on this machine (``None``: none)."""
+        return None
+
+    @property
+    def is_live(self) -> bool:
+        """Whether the machine exists right now."""
+        return False
+
+    @property
+    def generation(self) -> int:
+        """Incremented once per successful provision of the machine."""
+        return 0
+
+    def node_capacity(self) -> "ResourceCapacity | None":
+        """The machine's compute capacity, when known before provisioning."""
+        return None
+
+    def validate_member(self, task: "BaseTask") -> list[str]:
+        """Errors for *task* running on this named target (none by default)."""
+        del task
+        return []
+
+    def validate_named(self) -> list[str]:
+        """Errors for this target being declared under ``targets:``."""
+        return []
+
+    def on_ready(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """
+        Run *callback* once per generation, right after the machine is ready
+        and before any member dispatches. A no-op for non-releasable targets.
+        """
+        del callback
+
+    async def release(self, reason: str) -> None:
+        """
+        Destroy the machine. Idempotent, safe to call concurrently with
+        provisioning, raises when the destroy fails. *reason* is one of
+        ``done | drained | idle_cap | run_end | abort``.
+        """
+        del reason
+
+    async def keepalive(self) -> None:
+        """
+        Called periodically by the lease manager while the machine is live
+        (busy or holding), so idle watchdogs and lifetime caps do not fire
+        while the run still needs it. Must not raise.
+        """
+
+    def emit_node_phase(self, phase: str, **fields: Any) -> None:
+        """Publish a lease phase (``holding``, ``busy``, ``draining``, ...)."""
+        del phase, fields
+
+    def fallback_transfer(self) -> "BaseTransferStrategy":
+        """
+        Strategy for moving artifacts from this target when none is
+        registered for the ``(source, destination)`` pair.
+        """
+        # Local import: the generic strategy module imports this one.
+        from horus_runtime.core.transfer.generic import (  # noqa: PLC0415
+            GenericTransfer,
+        )
+
+        return GenericTransfer()
 
     @property
     def resolved_working_directory(self) -> str:

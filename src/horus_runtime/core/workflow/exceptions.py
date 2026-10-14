@@ -157,3 +157,82 @@ class WorkflowExecutionError(WorkflowError):
             _("Workflow finished with failed task(s): %(tasks)s.")
             % {"tasks": ", ".join(failed_task_ids)}
         )
+
+
+class UnknownTargetRefError(WorkflowError):
+    """
+    Raised when a task's ``{ref: <name>}`` names no entry of ``targets:`` in
+    its own workflow or any enclosing subworkflow scope.
+    """
+
+    def __init__(self, task_id: str, ref: str):
+        super().__init__(
+            _("Task '%(task)s' refers to unknown target '%(ref)s'.")
+            % {"task": task_id, "ref": ref}
+        )
+
+
+class InvalidTargetNameError(WorkflowError):
+    """Raised when a ``targets:`` key is not a valid target name."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            _(
+                "Target name '%(name)s' must be lower-case letters, digits, "
+                "'-' or '_'."
+            )
+            % {"name": name}
+        )
+
+
+class TargetIsReferenceError(WorkflowError):
+    """Raised when an entry of ``targets:`` is itself a ``{ref}``."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            _("Target '%(name)s' cannot itself be a reference.")
+            % {"name": name}
+        )
+
+
+class TargetRefInLoopError(WorkflowError):
+    """
+    Raised for a ``{ref}`` inside a loop body: loops deep-copy and
+    re-validate their body every iteration, which would break the sharing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            _(
+                "Shared targets are not supported inside loop bodies yet; "
+                "use an inline target."
+            )
+        )
+
+
+class SharedTargetError(WorkflowError):
+    """
+    Raised when a named target rejects its own configuration or one of the
+    tasks that reference it (see ``BaseTarget.validate_named`` and
+    ``BaseTarget.validate_member``).
+    """
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__(" ".join(errors))
+
+
+class ArtifactLostError(WorkflowError):
+    """
+    Raised when an input's producer output lived on a machine that has since
+    been released (or lost) and was not evacuated first.
+    """
+
+    def __init__(self, output_id: str, task_id: str, ref: str, gen: int):
+        super().__init__(
+            _(
+                "Output '%(out)s' of '%(task)s' was on machine '%(ref)s' "
+                "(gen %(g)s), which has been released."
+            )
+            % {"out": output_id, "task": task_id, "ref": ref, "g": gen}
+        )

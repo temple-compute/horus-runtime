@@ -1,0 +1,328 @@
+#
+# horus-runtime
+# Copyright (C) 2026 Temple Compute
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+"""
+Tests for a workflow's named targets (``targets:``) and the
+``{ref: <name>}`` task targets that share them.
+"""
+
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from horus_builtin.target.local import LocalTarget
+from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
+from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.base import BaseTask
+from horus_runtime.secrets import Secret, iter_secret_fields
+
+HUNTER2 = "hunter2"  # test fixture value, not a real secret
+
+
+class _PasswordTarget(LocalTarget):
+    """A target with a secret field and a one-CPU member rule."""
+
+    kind: str = "pw_target"
+    password: Secret | None = None
+    cpus: int | None = None
+
+    def validate_member(self, task: BaseTask) -> list[str]:
+        wanted = task.resources.cpus if task.resources else None
+        if self.cpus is not None and wanted and wanted > self.cpus:
+            return [f"Task '{task.id}' needs {wanted} cpus."]
+        return []
+
+    def validate_named(self) -> list[str]:
+        return (
+            [] if self.cpus else [f"Shared machine '{self._ref}' needs cpus."]
+        )
+
+
+def _task(task_id: str, target: Any, **extra: Any) -> dict[str, Any]:
+    return {
+        "kind": "horus_task",
+        "id": task_id,
+        "name": task_id,
+        "executor": {"kind": "shell"},
+        "runtime": {"kind": "command", "command": "true"},
+        "target": target,
+        **extra,
+    }
+
+
+def _doc(tasks: list[Any], targets: Any = None) -> dict[str, Any]:
+    doc: dict[str, Any] = {
+        "kind": "horus_workflow",
+        "name": "wf",
+        "tasks": tasks,
+    }
+    if targets is not None:
+        doc["targets"] = targets
+    return doc
+
+
+HEAVY = {"heavy": {"kind": "pw_target", "cpus": 8}}
+
+
+@pytest.mark.unit
+class TestResolution:
+    """``{ref}`` resolves to the one declared instance."""
+
+    def test_tasks_with_the_same_ref_share_one_instance(self) -> None:
+        """Tasks with the same ref share one instance."""
+        wf = HorusWorkflow.model_validate(
+            _doc(
+                [_task("a", {"ref": "heavy"}), _task("b", {"ref": "heavy"})],
+                HEAVY,
+            )
+        )
+
+        a, b = wf.tasks
+        assert a.target is b.target is wf.targets["heavy"]
+        assert a.target._ref == "heavy"
+
+    def test_inline_targets_are_unchanged(self) -> None:
+        """Inline targets are unchanged."""
+        wf = HorusWorkflow.model_validate(
+            _doc([_task("a", {"kind": "local"})], HEAVY)
+        )
+
+        assert wf.tasks[0].target._ref is None
+        assert wf.tasks[0].target is not wf.targets["heavy"]
+
+    @pytest.mark.parametrize(
+        ("targets", "task_target", "message"),
+        [
+            (HEAVY, {"ref": "light"}, "refers to unknown target 'light'"),
+            (None, {"ref": "light"}, "refers to unknown target 'light'"),
+            ({"Heavy": {"kind": "local"}}, {"kind": "local"}, "lower-case"),
+            ({"x": {"ref": "y"}}, {"kind": "local"}, "cannot itself be a"),
+            (HEAVY, {"ref": "heavy", "extra": 1}, "Extra inputs"),
+            (HEAVY, {"ref": "Bad Name"}, "should match pattern"),
+        ],
+    )
+    def test_invalid_documents_are_rejected(
+        self, targets: Any, task_target: Any, message: str
+    ) -> None:
+        """Invalid documents are rejected."""
+        with pytest.raises(ValidationError, match=message):
+            HorusWorkflow.model_validate(
+                _doc([_task("a", task_target)], targets)
+            )
+
+    def test_ref_in_a_loop_body_is_rejected(self) -> None:
+        """Ref in a loop body is rejected."""
+        loop = {
+            "id": "lp",
+            "loop": {
+                "body": _task("body", {"ref": "heavy"}),
+                "until": "signal",
+                "max_iterations": 2,
+            },
+        }
+
+        with pytest.raises(ValidationError, match="inside loop bodies"):
+            HorusWorkflow.model_validate(_doc([loop], HEAVY))
+
+    def test_member_and_named_checks_surface(self) -> None:
+        """Member and named checks surface."""
+        big = _task("a", {"ref": "heavy"}, resources={"cpus": 64})
+        with pytest.raises(ValidationError, match="needs 64 cpus"):
+            HorusWorkflow.model_validate(_doc([big], HEAVY))
+
+        unsized = {"heavy": {"kind": "pw_target"}}
+        with pytest.raises(ValidationError, match="'heavy' needs cpus"):
+            HorusWorkflow.model_validate(
+                _doc([_task("a", {"ref": "heavy"})], unsized)
+            )
+
+    def test_standalone_task_ref_has_a_clear_error(self) -> None:
+        """Standalone task ref has a clear error."""
+        with pytest.raises(ValidationError, match="can only be resolved"):
+            BaseTask.model_validate(_task("a", {"ref": "heavy"}))
+
+    def test_task_ids_may_not_start_with_at(self) -> None:
+        """Task ids may not start with at."""
+        with pytest.raises(ValidationError, match="should match pattern"):
+            HorusWorkflow.model_validate(
+                _doc([_task("@node", {"kind": "local"})])
+            )
+
+
+@pytest.mark.unit
+class TestSerialization:
+    """A dump keeps the sharing."""
+
+    def test_dump_emits_refs_and_round_trips_identity(self) -> None:
+        """Dump emits refs and round trips identity."""
+        wf = HorusWorkflow.model_validate(
+            _doc(
+                [_task("a", {"ref": "heavy"}), _task("b", {"ref": "heavy"})],
+                HEAVY,
+            )
+        )
+
+        dumped = wf.model_dump(mode="json")
+
+        assert [t["target"] for t in dumped["tasks"]] == [{"ref": "heavy"}] * 2
+        assert dumped["targets"]["heavy"]["kind"] == "pw_target"
+        again = HorusWorkflow.model_validate(dumped)
+        assert again.tasks[0].target is again.tasks[1].target
+
+    def test_inline_targets_context_inlines(self) -> None:
+        """Inline targets context inlines."""
+        wf = HorusWorkflow.model_validate(
+            _doc([_task("a", {"ref": "heavy"})], HEAVY)
+        )
+
+        dumped = wf.model_dump(mode="json", context={"inline_targets": True})
+
+        assert dumped["tasks"][0]["target"]["kind"] == "pw_target"
+
+    def test_secret_is_yielded_once_under_targets(
+        self, tmp_path: Path
+    ) -> None:
+        """Secret is yielded once under targets."""
+        targets = {
+            "heavy": {"kind": "pw_target", "cpus": 2, "password": HUNTER2}
+        }
+        wf = HorusWorkflow.model_validate(
+            _doc(
+                [_task("a", {"ref": "heavy"}), _task("b", {"ref": "heavy"})],
+                targets,
+            )
+        )
+
+        assert [p for p, _ in iter_secret_fields(wf)] == [
+            "targets.heavy.password"
+        ]
+        out = tmp_path / "wf.yaml"
+        wf.to_yaml(out)
+        text = out.read_text()
+        assert HUNTER2 not in text
+        written = yaml.safe_load(text)
+        assert written["tasks"][0]["target"] == {"ref": "heavy"}
+        assert written["targets"]["heavy"]["password"].startswith("${secret:")
+
+
+@pytest.mark.unit
+class TestCopies:
+    """Copies of a target and the machine identity they carry."""
+
+    def test_idle_copy_shares_the_lease_key(self) -> None:
+        """Idle copy shares the lease key."""
+        target = LocalTarget()
+        assert target.idle_copy().lease_key == target.lease_key
+
+    def test_deep_copy_is_another_machine(self) -> None:
+        """Deep copy is another machine."""
+        target = LocalTarget()
+        assert deepcopy(target).lease_key != target.lease_key
+
+
+def _sub(task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    return {"id": task_id, "sub": body}
+
+
+@pytest.mark.unit
+class TestSubworkflowScope:
+    """A subworkflow body sees its enclosing workflows' targets."""
+
+    def test_body_ref_to_parent_target_is_the_parent_instance(
+        self, tmp_path: Path
+    ) -> None:
+        """Body ref to parent target is the parent instance."""
+        body = _doc([_task("inner", {"ref": "heavy"})])
+        wf = HorusWorkflow.model_validate(
+            _doc([_task("outer", {"ref": "heavy"}), _sub("sub", body)], HEAVY)
+        )
+        expander = wf.tasks[1]
+        assert isinstance(expander, SubworkflowExpander)
+
+        (inner,) = expander._build_inner_tasks(tmp_path)
+
+        assert inner.id == "sub/inner"
+        assert inner.target is wf.targets["heavy"]
+
+    def test_inner_name_shadows_the_outer_one(self, tmp_path: Path) -> None:
+        """Inner name shadows the outer one."""
+        body = _doc(
+            [_task("inner", {"ref": "heavy"})],
+            {"heavy": {"kind": "pw_target", "cpus": 1}},
+        )
+        wf = HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+        expander = wf.tasks[0]
+        assert isinstance(expander, SubworkflowExpander)
+
+        (inner,) = expander._build_inner_tasks(tmp_path)
+
+        assert inner.target is expander.body.targets["heavy"]
+        assert inner.target is not wf.targets["heavy"]
+
+    def test_inlined_inline_targets_are_separate_machines(
+        self, tmp_path: Path
+    ) -> None:
+        """Two expansions of one body must not share an inline target."""
+        body = _doc([_task("inner", {"kind": "local"})])
+        wf = HorusWorkflow.model_validate(_doc([_sub("sub", body)]))
+        expander = wf.tasks[0]
+        assert isinstance(expander, SubworkflowExpander)
+
+        (first,) = expander._build_inner_tasks(tmp_path)
+        (second,) = expander._build_inner_tasks(tmp_path)
+
+        assert first.target.lease_key != second.target.lease_key
+
+    def test_unknown_ref_in_a_body_is_rejected(self) -> None:
+        """Unknown ref in a body is rejected."""
+        body = _doc([_task("inner", {"ref": "light"})])
+        with pytest.raises(ValidationError, match="unknown target 'light'"):
+            HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+
+    def test_dumped_parent_round_trips_the_body_refs(self) -> None:
+        """Dumped parent round trips the body refs."""
+        body = _doc([_task("inner", {"ref": "heavy"})])
+        wf = HorusWorkflow.model_validate(_doc([_sub("sub", body)], HEAVY))
+
+        again = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+        expander = again.tasks[0]
+        assert isinstance(expander, SubworkflowExpander)
+        assert expander.body.tasks[0].target is again.targets["heavy"]
+
+
+@pytest.mark.unit
+class TestPythonConstruction:
+    """Building a workflow from objects names the shared instance."""
+
+    def test_instance_under_targets_gets_its_name(self) -> None:
+        """Instance under targets gets its name."""
+        shared: BaseTarget = LocalTarget()
+        task = HorusTask.model_validate(_task("a", {"kind": "local"}))
+        task.target = shared
+
+        wf = HorusWorkflow(name="wf", targets={"box": shared}, tasks=[task])
+
+        assert wf.tasks[0].target._ref == "box"
+        assert wf.model_dump(mode="json")["tasks"][0]["target"] == {
+            "ref": "box"
+        }

@@ -150,6 +150,20 @@ class PlacementManager:
         }
         self._condition = asyncio.Condition()
 
+    def declare(self, location_id: str, capacity: ResourceCapacity) -> None:
+        """
+        Declare *capacity* for *location_id*, e.g. a machine whose size is
+        known before it exists. A no-op when the location already has one.
+        """
+        if location_id in self._total:
+            return
+        self._total[location_id] = capacity
+        self._remaining[location_id] = {
+            dim: getattr(capacity, dim)
+            for dim in _DIMENSIONS
+            if getattr(capacity, dim) is not None
+        }
+
     def _fits(self, location_id: str, requested: dict[str, int]) -> bool:
         remaining = self._remaining[location_id]
         return all(

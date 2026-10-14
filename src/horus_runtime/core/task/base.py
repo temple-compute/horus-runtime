@@ -29,7 +29,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 from uuid import uuid4
 
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import (
+    Field,
+    PrivateAttr,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_serializer,
+    model_validator,
+)
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext, running_task
@@ -80,10 +87,18 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Description of this task type, used in the UI.
     """
 
-    id: str
+    dispatches_children: ClassVar[bool] = False
+    """
+    Whether running this task means dispatching child tasks and waiting on
+    them (a map). Such a task holds no machine slot or capacity of its own,
+    or its children could never get one.
+    """
+
+    id: str = Field(pattern=r"^([^@]|$)")
     """
     The task ID. Unique within a workflow: it is the DAG node key (edges,
-    ``working_dir``, and UI positions all reference it).
+    ``working_dir``, and UI positions all reference it). May not start with
+    ``@``, which marks synthetic (per-machine) ledger rows.
     """
 
     definition_id: str | None = None
@@ -151,6 +166,23 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
     The target that indicates where this task should be dispatched.
     """
+
+    @field_serializer("target", mode="wrap")
+    def _dump_target(
+        self,
+        target: BaseTarget,
+        handler: SerializerFunctionWrapHandler,
+        info: SerializationInfo,
+    ) -> object:
+        """
+        Dump a named (shared) target as ``{ref: <name>}`` so a dumped
+        workflow keeps sharing it; ``context={"inline_targets": True}``
+        dumps it in full instead.
+        """
+        name = target._ref  # noqa: SLF001
+        if name is not None and not (info.context or {}).get("inline_targets"):
+            return {"ref": name}
+        return handler(target)
 
     resources: ResourceRequest | None = None
     """

@@ -48,7 +48,7 @@ from typing import (
 from uuid import UUID, uuid4
 
 import yaml
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, ValidationInfo, model_validator
 
 from horus_builtin.workflow.branch import BranchRouter, branch_task
 from horus_builtin.workflow.dag import (
@@ -66,6 +66,7 @@ from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
@@ -73,17 +74,19 @@ from horus_runtime.core.transfer.events import TransferEvent, transfer_scope
 from horus_runtime.core.transfer.exceptions import (
     OrchestratorTargetNotSetError,
 )
-from horus_runtime.core.transfer.generic import GenericTransfer
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
+    ArtifactLostError,
     DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
+    SharedTargetError,
     TaskIdsAreNotUniqueError,
     UnknownEdgeEndpointError,
 )
 from horus_runtime.core.workflow.status import WorkflowStatus
+from horus_runtime.core.workflow.targets import resolve_target_refs
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.workflow import (
@@ -173,6 +176,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     caller such as the orchestrator composes it (e.g. ``f"{workflow_slug}/
     {run_id}"``) and assigns it before :meth:`run`. Transient: never part of
     a persisted snapshot's meaning, only ever read fresh at anchor time.
+    """
+
+    targets: dict[str, BaseTarget] = Field(default_factory=dict)
+    """
+    Named targets shared by tasks. A task whose ``target`` is
+    ``{ref: <name>}`` runs on the one instance declared here (or in an
+    enclosing workflow's ``targets:``, for a subworkflow body), so tasks with
+    the same ref share one machine.
     """
 
     tasks: list[BaseTask] = Field(
@@ -299,6 +310,18 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     without any changes to the scheduler itself.
     """
 
+    _relocations: dict[tuple[str, str], EdgeSource] = PrivateAttr(
+        default_factory=dict
+    )
+    """
+    ``(producer task id, output id) -> new source`` for outputs moved off
+    their producer's machine before it was released (see
+    :meth:`relocate_output`). Consulted by :meth:`_build_source_map`.
+    """
+
+    _leases: LeaseManager | None = PrivateAttr(default=None)
+    """Backing store for :attr:`leases`."""
+
     _placement: PlacementManager | None = PrivateAttr(default=None)
     """
     Lazily-constructed, shared :class:`~horus_runtime.core.placement.
@@ -320,6 +343,75 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self._placement is None:
             self._placement = PlacementManager(self.capacity)
         return self._placement
+
+    @property
+    def leases(self) -> LeaseManager:
+        """
+        The single :class:`~horus_runtime.core.lease.LeaseManager` for this
+        workflow run, which releases shared machines once nothing needs them.
+        """
+        if self._leases is None:
+            self._leases = LeaseManager(self)
+        return self._leases
+
+    def relocate_output(
+        self, task_id: str, output_id: str, source: EdgeSource
+    ) -> None:
+        """
+        Record that output *output_id* of *task_id* now lives at *source*
+        (e.g. evacuated before its machine was released), so consumers that
+        have not pulled it yet read it from there.
+        """
+        self._relocations[(task_id, output_id)] = source
+        self._revision += 1
+
+    def clear_relocations(self) -> None:
+        """Forget every :meth:`relocate_output` (at the end of a run)."""
+        if self._relocations:
+            self._relocations.clear()
+            self._revision += 1
+
+    # Defined before the lowering hooks below so it runs after them (pydantic
+    # runs "before" validators in reverse definition order): every entry is
+    # then in its native `kind:` form.
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_target_refs(
+        cls, data: object, info: ValidationInfo
+    ) -> object:
+        """
+        Build ``targets:`` into named instances and replace every task's
+        ``{ref: <name>}`` with the instance it names (see
+        :func:`horus_runtime.core.workflow.targets.resolve_target_refs`).
+        ``info.context["target_scope"]`` may carry enclosing targets.
+        """
+        if not isinstance(data, dict):
+            return data
+        scope = (info.context or {}).get("target_scope")
+        return resolve_target_refs(data, scope)
+
+    @model_validator(mode="after")
+    def _check_shared_targets(self) -> Self:
+        """
+        Let each named target reject its own configuration and the tasks
+        that reference it (e.g. a GPU task on a machine without GPUs).
+        """
+        errors = [
+            error
+            for target in self.targets.values()
+            for error in target.validate_named()
+        ]
+        # getattr: covers refs to an enclosing workflow's targets too, and
+        # tolerates spec'd mocks standing in for targets.
+        errors += [
+            error
+            for task in self.tasks
+            if getattr(task.target, "_ref", None) is not None
+            for error in task.target.validate_member(task)
+        ]
+        if errors:
+            raise SharedTargetError(errors)
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -1054,7 +1146,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 continue
             key = (edge.target, edge.target_input)
             producer_target = targets_by_task.get(edge.source)
-            if producer_target is not None:
+            relocated = self._relocations.get(
+                (edge.source, edge.source_output)
+            )
+            if relocated is not None:
+                source_map[key] = relocated
+            elif producer_target is not None:
                 # Task source: producer's target + its output artifact.
                 source_map[key] = EdgeSource(
                     producer_target,
@@ -1130,6 +1227,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source
             )
+            if source is not None and source.task_id is not None:
+                self._check_not_lost(source, source_target)
 
             # Transfer a copy of the *producing* artifact: it carries the id
             # the data is stored under (so the lookup hits) and source path.
@@ -1141,15 +1240,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 self._adopt_value(artifact, src_artifact)
 
             # Look up the registered strategy for this (source, dest) pair,
-            # falling back to the target-agnostic GenericTransfer when no
-            # location-specific strategy is registered.
+            # falling back to the source's own fallback (the target-agnostic
+            # GenericTransfer by default) when none is registered.
             strategy_cls = BaseTransferStrategy.get_from_registry(
                 source_target, task.target
             )
             strategy = (
                 strategy_cls()
                 if strategy_cls is not None
-                else GenericTransfer()
+                else source_target.fallback_transfer()
             )
 
             horus_logger.log.debug(
@@ -1196,6 +1295,32 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     transfer_art, source_target, task.target
                 )
             artifact.path = transfer_art.path
+
+    def _check_not_lost(
+        self, source: EdgeSource, source_target: BaseTarget
+    ) -> None:
+        """
+        Refuse to read an output from a released machine: its producer ran on
+        a generation that no longer exists, and it was not evacuated.
+
+        Raises:
+            ArtifactLostError: When the recorded production generation is
+                not the machine's live one.
+        """
+        if not source_target.releasable or source.artifact is None:
+            return
+        produced = self.leases.produced_generation(
+            str(source.task_id), source.artifact.id
+        )
+        if produced is None:
+            return
+        if not source_target.is_live or produced != source_target.generation:
+            raise ArtifactLostError(
+                source.artifact.id,
+                str(source.task_id),
+                source_target._ref or source_target.lease_key,  # noqa: SLF001
+                produced,
+            )
 
     def _resolve_source(
         self,
@@ -1289,9 +1414,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source_map.get((task.id, artifact.id))
             )
-            digests[artifact.id] = await ArtifactStore(source_target).digest(
-                src_artifact or artifact
-            )
+            try:
+                digests[artifact.id] = await ArtifactStore(
+                    source_target
+                ).digest(src_artifact or artifact)
+            except NotImplementedError:
+                # A storage-only source (e.g. an evacuated output) has no
+                # shell to hash with: a miss, so the task just runs.
+                digests[artifact.id] = None
         return digests
 
     def adopt_values(

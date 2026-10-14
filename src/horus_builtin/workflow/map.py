@@ -87,6 +87,7 @@ class MapTask(HorusTask):
         "Runs this task's body once per item of an iterable input, each run "
         "writing into its own slot of a single folder output."
     )
+    dispatches_children: ClassVar[bool] = True
 
     over: MapOver
     """

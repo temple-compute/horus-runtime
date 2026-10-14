@@ -270,6 +270,20 @@ class AutoRegistry(BaseModel, ABC):
                     % {"origin": origin.__name__, "type": type(data)}
                 )
             discriminator = data.get(origin.registry_key)
+            if (
+                not discriminator
+                and "ref" in data
+                and origin._registry_roots[origin] == "horus.target"  # noqa: SLF001
+            ):
+                # A `{ref: name}` outside a workflow: only a workflow's
+                # `targets:` map can resolve it.
+                raise ValueError(
+                    _(
+                        "Target reference '%(ref)s' can only be resolved "
+                        "inside a workflow that declares targets:"
+                    )
+                    % {"ref": data["ref"]}
+                )
             if not discriminator:
                 raise ValueError(
                     _("Missing '%(registry_key)s' discriminator in data")
@@ -296,7 +310,7 @@ class AutoRegistry(BaseModel, ABC):
             if isinstance(value, BaseModel):
                 mode = getattr(info, "mode", "python")
                 return value.__pydantic_serializer__.to_python(
-                    value, mode=mode
+                    value, mode=mode, context=getattr(info, "context", None)
                 )
             return value
 

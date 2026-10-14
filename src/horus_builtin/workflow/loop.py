@@ -457,7 +457,12 @@ class LoopController(HorusTask):
         # (an un-pickleable asyncio Task in its private attrs), so a deep
         # copy would fail. A JSON round-trip strips that transient state,
         # yielding a fresh, unbound target of the same kind/config.
-        target = BaseTarget.model_validate(self.target.model_dump(mode="json"))
+        # A named target is shared on purpose: another slot on the same one.
+        target = (
+            self.target.idle_copy()
+            if self.target._ref is not None  # noqa: SLF001
+            else BaseTarget.model_validate(self.target.model_dump(mode="json"))
+        )
         return LoopController(
             id=checker_id,
             name=checker_id,

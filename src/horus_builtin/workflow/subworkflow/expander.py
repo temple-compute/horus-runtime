@@ -20,6 +20,7 @@
 live DAG. See :mod:`horus_builtin.workflow.subworkflow` for the full design.
 """
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
@@ -284,14 +285,13 @@ class SubworkflowExpander(HorusTask):
                     )
                     % {"id": self.id, "inner": entry.id}
                 )
-            task = entry.model_copy(deep=True)
+            task = _copy_task(entry)
             task.id = self._prefixed(entry.id)
             task.name = task.id
             # A forced re-run of the expander (e.g. CLI --no-skip-all)
             # must reach the tasks it inlines.
             if not self.skip_if_complete:
                 task.skip_if_complete = False
-            task.target = task.target.model_copy(deep=True)
             self._localize_paths(task, run_root)
             tasks.append(task)
         return tasks
@@ -516,6 +516,17 @@ def _is_pinned(artifacts: list[BaseArtifact], port_name: str) -> bool:
         and artifact.declared_path is not None
         and artifact.declared_path.is_absolute()
     )
+
+
+def _copy_task(entry: BaseTask) -> BaseTask:
+    """
+    A deep copy of *entry*, except that a named (shared) target stays the
+    one shared instance, so the inlined task still lands on that machine.
+    """
+    target = entry.target
+    if target._ref is not None:  # noqa: SLF001
+        return deepcopy(entry, {id(target): target})
+    return entry.model_copy(deep=True)
 
 
 def _pin(artifact: BaseArtifact, path: Path) -> None:

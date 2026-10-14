@@ -187,6 +187,10 @@ def iter_secret_fields(
     if isinstance(obj, BaseModel):
         for name in type(obj).model_fields:
             value = getattr(obj, name, None)
+            if name == "target" and getattr(value, "_ref", None) is not None:
+                # A named target dumps as `{ref}` here; its secrets are
+                # yielded once, under `targets.<name>`.
+                continue
             path = f"{_prefix}.{name}" if _prefix else name
             yield from iter_secret_fields(value, path)
         return
