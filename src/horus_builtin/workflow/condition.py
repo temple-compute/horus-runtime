@@ -168,8 +168,9 @@ async def _read_source_document(
             % {"output": output_id, "task": task_id}
         )
 
-    path = task.target.path_on_target(artifact)
-    if not await task.target.path_exists(path):
+    # Through the lease manager: the producer's machine may be released.
+    raw = await wf.leases.read_output(task, artifact)
+    if raw is None:
         raise ConditionEvaluationError(
             _(
                 "Condition reads output '%(output)s' of task '%(task)s', "
@@ -177,8 +178,6 @@ async def _read_source_document(
             )
             % {"output": output_id, "task": task_id}
         )
-
-    raw = await task.target.get_file(path)
     try:
         return json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

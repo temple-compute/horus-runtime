@@ -35,9 +35,13 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import WorkflowError
+from horus_runtime.core.workflow.exceptions import (
+    TargetRefInLoopError,
+    WorkflowError,
+)
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
@@ -79,7 +83,9 @@ class LoopController(HorusTask):
     """
 
     executor: BaseExecutor = Field(default_factory=ShellExecutor)
-    target: BaseTarget = Field(default_factory=LocalTarget)
+    target: BaseTarget = Field(
+        default_factory=LocalTarget, json_schema_extra=target_or_ref_schema
+    )
 
     loop_id: str
     """
@@ -325,8 +331,9 @@ class LoopController(HorusTask):
                 }
             )
 
-        target_path = body_task.target.path_on_target(artifact)
-        if not await body_task.target.path_exists(target_path):
+        # Through the lease manager: the body's machine may be released.
+        raw = await wf.leases.read_output(body_task, artifact)
+        if raw is None:
             raise LoopConfigurationError(
                 _(
                     "Loop controller '%(id)s' body task '%(body_id)s' did "
@@ -339,7 +346,6 @@ class LoopController(HorusTask):
                 }
             )
 
-        raw = await body_task.target.get_file(target_path)
         try:
             parsed = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -457,7 +463,12 @@ class LoopController(HorusTask):
         # (an un-pickleable asyncio Task in its private attrs), so a deep
         # copy would fail. A JSON round-trip strips that transient state,
         # yielding a fresh, unbound target of the same kind/config.
-        target = BaseTarget.model_validate(self.target.model_dump(mode="json"))
+        # A named target is shared on purpose: another slot on the same one.
+        target = (
+            self.target.idle_copy()
+            if self.target._ref is not None  # noqa: SLF001
+            else BaseTarget.model_validate(self.target.model_dump(mode="json"))
+        )
         return LoopController(
             id=checker_id,
             name=checker_id,
@@ -563,6 +574,8 @@ def loop_task(
     Returns:
         The appended :class:`LoopController`.
     """
+    if body.target._ref is not None:  # noqa: SLF001
+        raise TargetRefInLoopError
     body_data = body.model_dump(mode="json")
 
     kwargs: dict[str, Any] = {

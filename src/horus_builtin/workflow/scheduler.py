@@ -25,6 +25,7 @@ now ready are dispatched too, without waiting for unrelated in-flight tasks.
 """
 
 import asyncio
+from collections.abc import Collection
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,7 @@ from horus_builtin.workflow.dag import (
     trigger_scope,
 )
 from horus_runtime.context import HorusContext
+from horus_runtime.core.lease import LeaseState
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.status import (
@@ -115,6 +117,11 @@ class TargetPool:
         # currently in use: mint another clone as an extra slot.
         return declared_target.idle_copy()
 
+    @property
+    def full(self) -> bool:
+        """Whether :meth:`acquire` would wait for a concurrency slot."""
+        return self._semaphore.locked()
+
     def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
         """
         Return *target* (previously returned by :meth:`acquire` for
@@ -148,11 +155,42 @@ async def execute_task(
     that dispatches its own sub-tasks directly (e.g. a ``horus_map`` task
     awaiting its clones), so both paths get identical placement, transfer,
     dispatch and cancellation handling.
+
+    A task on a releasable machine also reports to the workflow's lease
+    manager (``member_cap`` slot, started, inputs pulled, finished), which
+    decides when that machine is released.
     """
+    leases = workflow.leases
+    await leases.member_slot(task)
+    try:
+        await _execute_on_target(
+            workflow,
+            task,
+            source_map=source_map,
+            pool=pool,
+            placement=placement,
+        )
+    finally:
+        leases.member_finished(task)
+
+
+async def _execute_on_target(
+    workflow: BaseWorkflow,
+    task: "BaseTask",
+    *,
+    source_map: dict[tuple[str, str], EdgeSource],
+    pool: TargetPool,
+    placement: PlacementManager,
+) -> None:
+    """The body of :func:`execute_task`, inside its lease slot."""
     declared_target = task.target
     location_id = declared_target.location_id
-    await placement.acquire(task.name, location_id, task.resources)
+    # A map waiting on its clones reserves nothing: they need the room.
+    resources = None if task.dispatches_children else task.resources
+    await placement.acquire(task.name, location_id, resources)
     try:
+        if pool.full:
+            workflow.leases.member_queued(task)
         target = await pool.acquire(declared_target)
         # `transfer_artifacts` and `dispatch` both operate off `task.target`,
         # so point it at the target we actually acquired for the duration of
@@ -165,6 +203,7 @@ async def execute_task(
             # resource-aware targets (which may provision lazily at transfer
             # time, before dispatch) can read task.resources.
             target.bind(task)
+            workflow.leases.member_started(task)
 
             # A task already complete is skipped before any of its inputs is
             # transferred, judged from their digests at the source. A miss
@@ -181,6 +220,7 @@ async def execute_task(
 
             # Transfer input artifacts to the task's target as needed.
             await workflow.transfer_artifacts(task, source_map)
+            workflow.leases.inputs_transferred(task)
 
             # Execute the task on its target and wait for it to finish.
             try:
@@ -223,7 +263,7 @@ async def execute_task(
             )
         raise
     finally:
-        await placement.release(location_id, task.resources)
+        await placement.release(location_id, resources)
 
 
 async def _execute_ready_task(
@@ -405,7 +445,58 @@ def _mark_blocked(
         )
 
 
+def _reconcile_leases(
+    workflow: BaseWorkflow,
+    *,
+    tasks_by_id: dict[str, "BaseTask"],
+    scope: set[str],
+    completed: set[str],
+    blocked: set[str],
+    failed: Collection[str],
+    running: dict[asyncio.Task[None], str],
+) -> None:
+    """
+    Let the lease manager re-decide its machines from the current run state.
+    Called once per loop iteration, with the scope derived at its top: a
+    task that expanded the DAG mid-batch (a map, a subworkflow) left any
+    older copy stale, and a stale scope would miss the new members and
+    release their machine early.
+    """
+    if not workflow.leases.has_leases:
+        return
+    workflow.leases.reconcile(
+        LeaseState(
+            tasks=tasks_by_id,
+            scope=scope,
+            completed=completed,
+            blocked=blocked,
+            failed=failed,
+            in_flight=set(running.values()),
+        )
+    )
+
+
 async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
+    """
+    Execute *workflow* from *trigger_id* (see :func:`_run_ready_set`), then
+    release every machine the run's lease manager still holds. On any
+    failure or cancellation they are released at once, without evacuation.
+    """
+    try:
+        await _run_ready_set(workflow, trigger_id)
+    except BaseException:
+        # Shielded: a second cancel must not leave machines running.
+        await asyncio.shield(workflow.leases.aclose(abort=True))
+        raise
+    try:
+        await workflow.leases.aclose(abort=False)
+    except BaseException:
+        # Cancelled mid-release: release what is left, shielded.
+        await asyncio.shield(workflow.leases.aclose(abort=True))
+        raise
+
+
+async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
     """
     Execute *workflow* from *trigger_id* with a concurrent ready-set
     scheduler.
@@ -541,10 +632,22 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
             # successful run that silently skipped the stuck tasks.
             raise StalledWorkflowError(sorted(stuck))
 
+        reconcile = partial(
+            _reconcile_leases,
+            workflow,
+            tasks_by_id=tasks_by_id,
+            scope=scope,
+            completed=completed,
+            blocked=blocked,
+            failed=failed.keys(),
+            running=running,
+        )
+
         if not ready and not running:
             # Nothing left that can ever become ready: either everything in
             # scope completed, or (continue policy) the rest is permanently
             # blocked behind a failure. Report any failures below the loop.
+            reconcile()
             break
 
         if ready:
@@ -562,6 +665,10 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
                 placement=placement,
                 liveness=liveness,
             )
+
+        # After dispatch, so a member about to start counts as busy and
+        # its machine does not flap to "holding" between two members.
+        reconcile()
 
         if not running:
             # Every ready task this iteration was the terminal-status

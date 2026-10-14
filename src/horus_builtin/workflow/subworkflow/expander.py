@@ -20,6 +20,7 @@
 live DAG. See :mod:`horus_builtin.workflow.subworkflow` for the full design.
 """
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
@@ -42,9 +43,11 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.targets import resolve_target_refs
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
@@ -77,7 +80,9 @@ class SubworkflowExpander(HorusTask):
     """
 
     executor: BaseExecutor = Field(default_factory=ShellExecutor)
-    target: BaseTarget = Field(default_factory=LocalTarget)
+    target: BaseTarget = Field(
+        default_factory=LocalTarget, json_schema_extra=target_or_ref_schema
+    )
 
     body: BaseWorkflow
     """
@@ -240,6 +245,7 @@ class SubworkflowExpander(HorusTask):
 
         edges.extend(self._out_port_edges(wf, out_ports, by_id))
 
+        _hoist_named(wf, tasks, self.body)
         wf.expand(tasks=tasks, edges=edges, artifacts=artifacts)
         horus_logger.log.debug(
             _("Subworkflow '%(id)s' inlined %(n)d task(s).")
@@ -284,14 +290,13 @@ class SubworkflowExpander(HorusTask):
                     )
                     % {"id": self.id, "inner": entry.id}
                 )
-            task = entry.model_copy(deep=True)
+            task = _copy_task(entry)
             task.id = self._prefixed(entry.id)
             task.name = task.id
             # A forced re-run of the expander (e.g. CLI --no-skip-all)
             # must reach the tasks it inlines.
             if not self.skip_if_complete:
                 task.skip_if_complete = False
-            task.target = task.target.model_copy(deep=True)
             self._localize_paths(task, run_root)
             tasks.append(task)
         return tasks
@@ -518,6 +523,74 @@ def _is_pinned(artifacts: list[BaseArtifact], port_name: str) -> bool:
     )
 
 
+def _named_targets(task: BaseTask) -> list[BaseTarget]:
+    """
+    Named (shared) targets *task* uses: its own, plus those a subworkflow
+    body it carries declares or uses, at any depth.
+    """
+    named = [task.target] if task.target._ref is not None else []  # noqa: SLF001
+    body = getattr(task, "body", None)
+    if isinstance(body, BaseWorkflow):
+        named += body.targets.values()
+        for inner in body.tasks:
+            named += _named_targets(inner)
+    return named
+
+
+def _copy_task(entry: BaseTask) -> BaseTask:
+    """
+    A deep copy of *entry*, except that every named (shared) target stays
+    the one shared instance, so the inlined task, or a nested body's, still
+    lands on that machine.
+    """
+    memo: dict[int, Any] = {id(t): t for t in _named_targets(entry)}
+    return deepcopy(entry, memo)
+
+
+def _body_scopes(body: BaseWorkflow) -> list[dict[str, BaseTarget]]:
+    """The ``targets:`` of *body* and of every body nested in it."""
+    scopes = [body.targets]
+    for task in body.tasks:
+        inner = getattr(task, "body", None)
+        if isinstance(inner, BaseWorkflow):
+            scopes += _body_scopes(inner)
+    return scopes
+
+
+def _hoist_named(
+    wf: BaseWorkflow, tasks: list[BaseTask], body: BaseWorkflow
+) -> None:
+    """
+    Move into *wf*'s ``targets:`` every named target of *tasks* (inlined
+    from *body*) that is not there yet, under a name free in *wf* and in
+    every nested body, so a dump of *wf* resolves each ``{ref}`` to its
+    machine, and a re-run from that dump finds the same instance.
+    """
+    # The inlined tasks carry copies of the nested bodies.
+    scopes = _body_scopes(body)
+    for task in tasks:
+        inner = getattr(task, "body", None)
+        if isinstance(inner, BaseWorkflow):
+            scopes += _body_scopes(inner)
+    for task in tasks:
+        for target in _named_targets(task):
+            if any(t is target for t in wf.targets.values()):
+                continue
+            base = name = str(target._ref)  # noqa: SLF001
+            n = 2
+            while name in wf.targets or any(
+                scope.get(name, target) is not target for scope in scopes
+            ):
+                name = f"{base[:58]}-{n}"
+                n += 1
+            wf.targets[name] = target
+            target._ref = name  # noqa: SLF001
+    hoisted = {id(t) for t in wf.targets.values()}
+    for scope in scopes:
+        for name in [k for k, t in scope.items() if id(t) in hoisted]:
+            del scope[name]
+
+
 def _pin(artifact: BaseArtifact, path: Path) -> None:
     """
     Point *artifact* at *path* and mark it anchored, so the workflow's
@@ -559,6 +632,9 @@ def subworkflow_task(
     Returns:
         The appended :class:`SubworkflowExpander`.
     """
+    if isinstance(body, dict):
+        # Its refs may name this workflow's targets.
+        body = resolve_target_refs(body, wf.targets)
     kwargs: dict[str, Any] = {
         "id": id,
         "name": name or id,
