@@ -58,6 +58,9 @@ EVACUATION_TIMEOUT_S = 6 * 3600.0
 EVACUATION_CONCURRENCY = 4
 """Outputs evacuated at once from one machine."""
 
+RELEASE_RETRY_S = 60.0
+"""First wait before retrying a failed release; doubles up to an hour."""
+
 
 class Phase(StrEnum):
     """Where a lease's machine is in its life."""
@@ -85,8 +88,10 @@ class Lease:
     work: "asyncio.Task[None] | None" = None
     slots: asyncio.Semaphore | None = None
     phase: Phase = Phase.COLD
-    pinned: bool = False
-    """Left alone until run end, after a failed destroy."""
+    retry: "asyncio.Task[None] | None" = None
+    """Pending retry after a failed destroy; the lease is left alone."""
+    failures: int = 0
+    """Failed releases in a row, for the retry backoff."""
     no_cap: bool = False
     """After a failed drain: never released while anything still needs it."""
 
@@ -212,6 +217,7 @@ class LeaseManager:
     """
 
     keepalive_interval_s: float = KEEPALIVE_INTERVAL_S
+    release_retry_s: float = RELEASE_RETRY_S
     evacuation_timeout_s: float = EVACUATION_TIMEOUT_S
 
     def __init__(self, workflow: "BaseWorkflow") -> None:
@@ -350,7 +356,7 @@ class LeaseManager:
             for key in _lease_keys(state.tasks[task_id]):
                 members_of.setdefault(key, set()).add(task_id)
         for lease in self._leases.values():
-            if lease.work is not None or lease.pinned or lease.running:
+            if lease.work is not None or lease.retry or lease.running:
                 continue
             if not lease.target.is_live:
                 continue
@@ -514,7 +520,14 @@ class LeaseManager:
         does not keep its machine from holding (see :meth:`reconcile`).
         """
         self._queued.add(task.id)
-        if self._state is not None and self._lease_for(task.target):
+        lease = self._lease_for(task.target)
+        # A running member, hold, drain or retry already decides the lease:
+        # skip the full reconcile, which a map fan-out would run per clone.
+        if (
+            self._state is not None
+            and lease is not None
+            and not (lease.running or lease.timer or lease.work or lease.retry)
+        ):
             self.reconcile(self._state)
 
     async def _hold(self, lease: Lease) -> None:
@@ -574,22 +587,40 @@ class LeaseManager:
                 return
             lease.phase = Phase.RELEASING
             await lease.target.release(reason)
+            lease.failures = 0
+            lease.no_cap = False
         except Exception as exc:
-            # The run-end teardown retries; this run must not fail for it.
-            lease.pinned = True
+            # Retried with backoff; this run must not fail for it.
+            lease.retry = asyncio.create_task(self._retry_release(lease))
             horus_logger.log.error(
                 _("Releasing machine '%(key)s' failed: %(error)s")
                 % {"key": lease.key, "error": exc}
             )
         finally:
             lease.work = None
-            lease.phase = (
+            phase = (
                 Phase.BUSY
                 if lease.running
                 else Phase.HOLDING
                 if lease.target.is_live
                 else Phase.COLD
             )
+            # Back to busy after a drain, or kept after a failed destroy.
+            if (
+                phase is Phase.BUSY
+                and lease.phase in (Phase.DRAINING, Phase.RELEASING)
+            ) or (phase is Phase.HOLDING and lease.phase is Phase.RELEASING):
+                lease.target.emit_node_phase(phase.value)
+            lease.phase = phase
+
+    async def _retry_release(self, lease: Lease) -> None:
+        """Re-decide *lease* after a backoff that doubles per failure."""
+        delay = min(self.release_retry_s * 2**lease.failures, 3600.0)
+        lease.failures += 1
+        await asyncio.sleep(delay)
+        lease.retry = None
+        if self._state is not None:
+            self.reconcile(self._state)
 
     async def _snapshot(
         self, lease: Lease, sentinels: set[tuple[str, str]]
@@ -677,9 +708,10 @@ class LeaseManager:
             background.append(self._keeper)
             self._keeper = None
         for lease in self._leases.values():
-            if lease.timer is not None:
-                background.append(lease.timer)
-                lease.timer = None
+            for task in (lease.timer, lease.retry):
+                if task is not None:
+                    background.append(task)
+            lease.timer = lease.retry = None
         if abort:
             background += [
                 lease.work

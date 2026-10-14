@@ -71,6 +71,7 @@ class FakeNode(LocalTarget):
             "released": [],
             "phases": [],
             "keepalives": 0,
+            "failing_releases": 0,
         }
     )
 
@@ -117,6 +118,9 @@ class FakeNode(LocalTarget):
 
     async def release(self, reason: str) -> None:
         """Record the release."""
+        if self._node["failing_releases"]:
+            self._node["failing_releases"] -= 1
+            raise RuntimeError("destroy failed")
         if self._node["live"]:
             self._node["released"].append(reason)
             self._node["live"] = False
@@ -699,6 +703,66 @@ class TestRelease:
         assert node._node["keepalives"] == node._node["pinged_at_drain_failed"]
         assert node.released == ["done"]
         assert c.runs == 1
+
+    async def test_failed_destroy_is_retried_with_backoff(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A failed destroy is retried while the run goes on, not left until
+        run end, and the kept machine reports itself idle meanwhile.
+        """
+        del horus_context, evacuator
+        monkeypatch.setattr(lease_module.LeaseManager, "release_retry_s", 0.02)
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        node._node["failing_releases"] = 2
+        a = _step("a", node, tmp_path)
+        g = _step("g", LocalTarget(), tmp_path, delay=0.5, inputs=["x"])
+        wf = _workflow(tmp_path, [a, g], [_edge("a", "g", "x")])
+
+        await wf.run(trigger_id="a")
+
+        assert node.released == ["done"]
+        assert node.phases.count("holding") == 2
+        assert node._node["failing_releases"] == 0
+
+    async def test_queued_member_skips_reconcile_on_a_decided_lease(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A member queued while another runs on its machine changes nothing,
+        so it does not pay for a full reconcile (a map fan-out queues many).
+        """
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", node, tmp_path)
+        wf = _workflow(tmp_path, [a, b], [])
+        leases = wf.leases
+        lease = leases._open_lease(node)
+        assert lease is not None
+        leases._state = lease_module.LeaseState(
+            tasks={"a": a, "b": b},
+            scope=("a", "b"),
+            completed=(),
+            blocked=(),
+            failed=(),
+            in_flight=("a", "b"),
+        )
+        lease.running.add("a")
+        calls: list[object] = []
+        monkeypatch.setattr(leases, "reconcile", calls.append)
+
+        leases.member_queued(b)
+
+        assert calls == []
+        await leases.aclose(abort=True)
 
     async def test_non_releasable_targets_get_no_lease(
         self, tmp_path: Path, horus_context: HorusContext
