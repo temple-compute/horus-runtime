@@ -20,6 +20,7 @@ Unit tests for the ``horus_map`` task: MapTask, its port validation, and its
 fan-out behaviour as an ordinary DAG node.
 """
 
+import asyncio
 import shutil
 from pathlib import Path
 from typing import cast
@@ -1024,3 +1025,238 @@ class TestCloneSideArtifacts:
         assert not [
             a for a in map_task.side_artifacts if a.id.startswith("score[")
         ]
+
+
+# Fails (exit 137, as an OOM kill would) for any item whose content is
+# "bad"; b.txt fails at once, the others finish after it, so a fail-fast map
+# would have cancelled them.
+_FLAKY = (
+    'grep -q bad "$batch" && exit 137; '
+    "sleep 0.2 && cp $batch $scored/result.txt"
+)
+
+
+def _dropping_map(**kwargs: object) -> MapTask:
+    """A map over the split folder that drops failed items."""
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in")),
+        **kwargs,  # type: ignore[arg-type]
+    )
+    map_task.on_item_failure = "drop"
+    return map_task
+
+
+def _report_map() -> MapTask:
+    """A second map iterating the first map's (``score``) slots."""
+    return MapTask(
+        id="report",
+        name="report",
+        over=MapOver(input_id="scored_in", item_id="slot"),
+        runtime=CommandRuntime(command="cp $slot/result.txt $reports/"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id="scored_in", path=Path("scored_in"))],
+        outputs=[FolderArtifact(id="reports", path=Path("reports_out"))],
+        on_item_failure="drop",
+    )
+
+
+def _chain(tmp_path: Path, names: list[str]) -> HorusWorkflow:
+    """The chain ``split -> score -> report``, both maps dropping."""
+    report = _report_map()
+    return _wire(
+        tmp_path,
+        split=_split_task(tmp_path, names),
+        map_task=_dropping_map(command=_FLAKY),
+        extra_tasks=[report],
+        extra_edges=[
+            WorkflowEdge(
+                source="score",
+                source_output="scored",
+                target="report",
+                target_input="scored_in",
+            )
+        ],
+    )
+
+
+@pytest.mark.unit
+class TestDropFailedItems:
+    """``on_item_failure: drop``: a failed clone is dropped from the map's
+    output instead of failing the map.
+    """
+
+    async def test_a_failed_item_is_dropped_and_the_run_completes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Under the default fail_fast policy: the siblings are not
+        cancelled, the failed slot is removed and recorded, the clone stays
+        FAILED, and the map and the run complete.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        map_task = _dropping_map(command=_FLAKY)
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert map_task.status == TaskStatus.COMPLETED
+        clones = {
+            t.id: t.status for t in wf.tasks if t.id.startswith("score[")
+        }
+        assert clones == {
+            "score[0]": TaskStatus.COMPLETED,
+            "score[1]": TaskStatus.FAILED,
+            "score[2]": TaskStatus.COMPLETED,
+        }
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "2"]
+
+        dumped = map_task.model_dump(mode="json")["dropped_items"]
+        assert [(d["slot"], d["item"]) for d in dumped] == [("1", "b.txt")]
+        assert dumped[0]["error"]
+        report = next(
+            a for a in map_task.side_artifacts if a.id == "score_dropped"
+        )
+        assert isinstance(report, JSONArtifact)
+        assert report.read() == dumped
+
+    async def test_every_item_failing_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Nothing left to hand downstream: the map and the run fail."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _dropping_map(command="exit 1")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.FAILED
+        assert wf.status.value == "failed"
+
+    async def test_a_rerun_retries_only_the_dropped_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A partial run leaves no map manifest, so the next run re-enters
+        the map: the dropped clone runs again, the others skip on their own
+        manifests, and the now-full map writes its manifest.
+        """
+        del horus_context
+        manifest = tmp_path / ".horus" / "score.json"
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+            return _wire(
+                tmp_path,
+                split=split,
+                map_task=_dropping_map(command=_FLAKY),
+            )
+
+        # _build() rewrites every item to its own name, which fixes b.txt.
+        first = _build()
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        await first.run(trigger_id="split")
+        assert not manifest.exists()
+
+        wf = _build()
+        await wf.run(trigger_id="split")
+
+        tasks = {t.id: t for t in wf.tasks}
+        assert tasks["score[1]"].status == TaskStatus.COMPLETED
+        assert tasks["score[1]"].runs == 1
+        for slot in ("0", "2"):
+            assert tasks[f"score[{slot}]"].status == TaskStatus.SKIPPED
+            assert tasks[f"score[{slot}]"].runs == 0
+        score = tasks["score"]
+        assert isinstance(score, MapTask)
+        assert score.dropped_items == []
+        assert manifest.exists()
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
+
+    async def test_cancelling_a_dropping_map_cancels(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A cancel is never absorbed as a dropped item."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _dropping_map(command="sleep 5")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        run = asyncio.create_task(wf.run(trigger_id="split"))
+        await asyncio.sleep(0.5)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+
+        assert wf.status.value == "canceled"
+        assert map_task.status != TaskStatus.COMPLETED
+        assert map_task.dropped_items == []
+
+
+@pytest.mark.unit
+class TestSlotNames:
+    """A map over another map's output keeps the upstream slot names."""
+
+    async def test_a_dropped_upstream_slot_leaves_a_gap(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """report[2] still processes score[2] after score[1] is dropped."""
+        del horus_context
+        wf = _chain(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        reports = tmp_path / "reports_out"
+        assert sorted(p.name for p in reports.iterdir()) == ["0", "2"]
+        assert (reports / "2" / "result.txt").read_text() == "c.txt"
+
+    async def test_without_a_gap_the_slot_names_are_unchanged(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Same names as index slots, so existing caches stay valid."""
+        del horus_context
+        wf = _chain(tmp_path, ["a.txt", "b.txt", "c.txt"])
+
+        await wf.run(trigger_id="split")
+
+        assert sorted(
+            t.id for t in wf.tasks if t.id.startswith("report[")
+        ) == ["report[0]", "report[1]", "report[2]"]
+
+    async def test_a_newly_dropped_item_removes_its_stale_downstream_slot(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """An earlier result for an item that now fails cannot survive."""
+        del horus_context
+        await _chain(tmp_path, ["a.txt", "b.txt", "c.txt"]).run(
+            trigger_id="split"
+        )
+        reports = tmp_path / "reports_out"
+        assert sorted(p.name for p in reports.iterdir()) == ["0", "1", "2"]
+
+        wf = _chain(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert sorted(p.name for p in reports.iterdir()) == ["0", "2"]
+
+    async def test_a_first_map_over_numeric_names_uses_index_slots(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Numeric-looking entry names do not make a map inherit them."""
+        del horus_context
+        split = _split_task(tmp_path, ["102202209", "102202300"])
+        wf = _wire(tmp_path, split=split, map_task=_dropping_map())
+
+        await wf.run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
