@@ -61,6 +61,22 @@ def _build_targets(raw: object) -> dict[str, BaseTarget]:
     return built
 
 
+def _has_ref(entry: object) -> bool:
+    """Whether a raw task dict, or any task of a body it carries, has a ref."""
+    if not isinstance(entry, dict):
+        return False
+    if ref_name(entry.get("target")) is not None:
+        return True
+    nested = [entry.get("body_template")]
+    for key in ("body", "sub"):
+        body = entry.get(key)
+        if isinstance(body, dict) and isinstance(body.get("tasks"), list):
+            nested += body["tasks"]
+    if isinstance(entry.get("loop"), dict):
+        nested.append(entry["loop"].get("body"))
+    return any(_has_ref(task) for task in nested)
+
+
 def _resolve_entry(entry: object, scope: Mapping[str, BaseTarget]) -> object:
     """One task entry with its ``{ref}`` (and any nested body's) resolved."""
     if not isinstance(entry, dict):
@@ -71,10 +87,7 @@ def _resolve_entry(entry: object, scope: Mapping[str, BaseTarget]) -> object:
         if name not in scope:
             raise UnknownTargetRefError(str(entry.get("id")), name)
         entry = {**entry, "target": scope[name]}
-    body_template = entry.get("body_template")
-    if isinstance(body_template, dict) and (
-        ref_name(body_template.get("target")) is not None
-    ):
+    if _has_ref(entry.get("body_template")):
         raise TargetRefInLoopError
     body = entry.get("body")
     if entry.get("kind") == "subworkflow" and isinstance(body, dict):

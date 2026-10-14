@@ -1223,7 +1223,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 # not a transfer edge and not a root input either.
                 continue
 
-            source = source_map.get((task.id, artifact.id))
+            source = self._relocated(source_map.get((task.id, artifact.id)))
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source
             )
@@ -1295,6 +1295,18 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     transfer_art, source_target, task.target
                 )
             artifact.path = transfer_art.path
+
+    def _relocated(self, source: EdgeSource | None) -> EdgeSource | None:
+        """
+        *source*, or where its output was relocated to since the caller's
+        source map was built (a task dispatched before the relocation).
+        """
+        if source is None or source.task_id is None or source.artifact is None:
+            return source
+        relocated: EdgeSource = self._relocations.get(
+            (source.task_id, source.artifact.id), source
+        )
+        return relocated
 
     def _check_not_lost(
         self, source: EdgeSource, source_target: BaseTarget
@@ -1412,7 +1424,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 )
                 continue
             source_target, src_artifact = self._resolve_source(
-                task, artifact, source_map.get((task.id, artifact.id))
+                task,
+                artifact,
+                self._relocated(source_map.get((task.id, artifact.id))),
             )
             try:
                 digests[artifact.id] = await ArtifactStore(

@@ -144,6 +144,21 @@ class TestResolution:
         with pytest.raises(ValidationError, match="inside loop bodies"):
             HorusWorkflow.model_validate(_doc([loop], HEAVY))
 
+    def test_ref_in_a_subworkflow_inside_a_loop_is_rejected(self) -> None:
+        """Rejected at load time, not at the iteration that inlines it."""
+        body = _doc([_task("inner", {"ref": "heavy"})])
+        loop = {
+            "id": "lp",
+            "loop": {
+                "body": {"id": "sub", "sub": body},
+                "until": "signal",
+                "max_iterations": 2,
+            },
+        }
+
+        with pytest.raises(ValidationError, match="inside loop bodies"):
+            HorusWorkflow.model_validate(_doc([loop], HEAVY))
+
     def test_member_and_named_checks_surface(self) -> None:
         """Member and named checks surface."""
         big = _task("a", {"ref": "heavy"}, resources={"cpus": 64})

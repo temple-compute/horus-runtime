@@ -46,6 +46,7 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.targets import resolve_target_refs
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 
@@ -570,6 +571,9 @@ def subworkflow_task(
     Returns:
         The appended :class:`SubworkflowExpander`.
     """
+    if isinstance(body, dict):
+        # Its refs may name this workflow's targets.
+        body = resolve_target_refs(body, wf.targets)
     kwargs: dict[str, Any] = {
         "id": id,
         "name": name or id,

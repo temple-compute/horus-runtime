@@ -203,11 +203,13 @@ class _RecordingEvacuator(BaseEvacuator):
     kind: str = "recording"
     calls: ClassVar[list[tuple[str, str]]] = []
     fail: ClassVar[bool] = False
+    delay: ClassVar[float] = 0.0
 
     async def evacuate(
         self, task: Any, output: BaseArtifact, source: BaseTarget
     ) -> EdgeSource:
         del source
+        await asyncio.sleep(self.delay)
         if self.fail:
             raise RuntimeError("upload failed")
         self.calls.append((task.id, output.id))
@@ -219,6 +221,7 @@ def evacuator(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingEvacuator]:
     """Evacuator."""
     _RecordingEvacuator.calls = []
     _RecordingEvacuator.fail = False
+    _RecordingEvacuator.delay = 0.0
     monkeypatch.setattr(lease_module, "_pick_evacuator", _RecordingEvacuator)
     return _RecordingEvacuator
 
@@ -368,6 +371,88 @@ class TestRelease:
 
         assert node.released == ["idle_cap", "done"]
         assert node.generation == 2
+
+    async def test_member_starting_mid_drain_keeps_the_machine(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A member that starts while the machine drains is not destroyed
+        under: the release is called off once the drain finishes.
+        """
+        del horus_context
+        evacuator.delay = 0.3
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0)
+        a = _step("a", node, tmp_path)
+        g = _step("g", LocalTarget(), tmp_path, delay=0.05)
+        b = _step("b", node, tmp_path, delay=0.4, inputs=["x", "y"])
+        wf = _workflow(
+            tmp_path,
+            [a, g, b],
+            [_edge("a", "b", "x"), _edge("g", "b", "y")],
+        )
+
+        await wf.run(trigger_id="a")
+
+        assert evacuator.calls == [("a", "out")]
+        assert node.released == ["done"]
+        assert node.generation == 1
+        assert b.runs == 1
+
+    async def test_pending_subworkflow_holds_its_body_machines(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A subworkflow not inlined yet counts as a member of the machines its
+        body uses, so the producer it feeds is not released under it.
+        """
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        g = _step("g", LocalTarget(), tmp_path, delay=0.2)
+        inner = _step("x", node, tmp_path, inputs=["seed"])
+        child = HorusWorkflow(
+            name="child",
+            tasks=[inner],
+            artifacts=[FileArtifact(id="seed", path=tmp_path / "seed")],
+            edges=[
+                WorkflowEdge(
+                    source="artifact-seed",
+                    source_output="seed",
+                    target="x",
+                    target_input="seed",
+                )
+            ],
+        )
+        wf = _workflow(tmp_path, [a, g], [], targets={"box": node})
+        wf.subworkflow(id="sub", body=child)
+        wf.edges += [
+            WorkflowEdge(
+                source="a",
+                source_output="out",
+                target="sub",
+                target_input="seed",
+                transfer=False,
+            ),
+            WorkflowEdge(source="g", target="sub"),
+        ]
+        start = _step("start", LocalTarget(), tmp_path)
+        wf.tasks.append(start)
+        wf.edges += [
+            WorkflowEdge(source="start", target="a"),
+            WorkflowEdge(source="start", target="g"),
+        ]
+
+        await wf.run(trigger_id="start")
+
+        assert wf.status.value == "completed"
+        assert node.released == ["done"]
+        assert node.generation == 1
 
     async def test_failed_evacuation_keeps_the_machine(
         self,
@@ -640,6 +725,27 @@ class TestLostArtifacts:
 
         with pytest.raises(ArtifactLostError, match="gen 1"):
             await wf.transfer_artifacts(b)
+
+    async def test_stale_source_map_follows_a_relocation(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A task dispatched before its input was evacuated still reads the
+        relocated copy, not the released machine.
+        """
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(tmp_path, [a, b], [_edge("a", "b", "x")])
+        stale = wf.cached_source_map(None)[1]
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=False, gen=1)
+        wf.relocate_output(
+            "a", "out", EdgeSource(LocalTarget(), a.outputs[0], "a")
+        )
+
+        await wf.transfer_artifacts(b, stale)
 
     async def test_transfer_from_the_live_generation_is_fine(
         self, tmp_path: Path, horus_context: HorusContext

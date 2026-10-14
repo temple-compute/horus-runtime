@@ -178,6 +178,18 @@ class OrchestratorEvacuator(BaseEvacuator):
         return EdgeSource(destination, copy, task.id)
 
 
+def _lease_keys(task: "BaseTask") -> set[str]:
+    """
+    Machines *task* will use: its own target's, plus those of the tasks of
+    a subworkflow body it has not inlined yet.
+    """
+    keys = {task.target.lease_key}
+    body = getattr(task, "body", None)
+    for inner in getattr(body, "tasks", ()):
+        keys |= _lease_keys(inner)
+    return keys
+
+
 def _pick_evacuator() -> BaseEvacuator:
     """The registered evacuator with the highest priority."""
     evacuator = max(
@@ -200,6 +212,8 @@ class LeaseManager:
         self.workflow = workflow
         self._leases: dict[str, Lease] = {}
         self._inputs_done: set[str] = set()
+        self._pulling: set[str] = set()
+        self._pulled = asyncio.Event()
         self._produced: dict[tuple[str, str], int] = {}
         self._state: LeaseState | None = None
         self._keeper: asyncio.Task[None] | None = None
@@ -215,6 +229,10 @@ class LeaseManager:
         return bool(self._leases)
 
     def _lease_for(self, target: BaseTarget) -> Lease | None:
+        """The lease on *target*, if it has one."""
+        return self._leases.get(target.lease_key)
+
+    def _open_lease(self, target: BaseTarget) -> Lease | None:
         """The lease on *target*, created on first sight; ``None`` if none."""
         # `auto_teardown: false` is an explicit request to keep the machine.
         if not target.releasable or not getattr(target, "auto_teardown", True):
@@ -256,7 +274,7 @@ class LeaseManager:
         dispatches its own children (a map) takes none, or a cap of 1 would
         deadlock it against its clones.
         """
-        lease = self._lease_for(task.target)
+        lease = self._open_lease(task.target)
         if (
             lease is not None
             and lease.slots is not None
@@ -265,7 +283,8 @@ class LeaseManager:
             await lease.slots.acquire()
 
     def member_started(self, task: "BaseTask") -> None:
-        """*task* is bound to its machine and about to use it."""
+        """*task* is bound to its machine and about to pull its inputs."""
+        self._pulling.add(task.id)
         lease = self._lease_for(task.target)
         if lease is None:
             return
@@ -281,12 +300,18 @@ class LeaseManager:
     def inputs_transferred(self, task: "BaseTask") -> None:
         """*task* no longer needs any other machine's outputs."""
         self._inputs_done.add(task.id)
+        self._done_pulling(task)
+
+    def _done_pulling(self, task: "BaseTask") -> None:
+        self._pulling.discard(task.id)
+        self._pulled.set()
 
     def member_finished(self, task: "BaseTask") -> None:
         """
         *task* stopped using its machine (any outcome). What happens next is
         decided by the scheduler's next :meth:`reconcile`.
         """
+        self._done_pulling(task)
         lease = self._lease_for(task.target)
         if lease is None:
             return
@@ -306,22 +331,19 @@ class LeaseManager:
         work runs in the background.
         """
         self._state = state
-        pending = state.pending
-        source_map = self._source_map()
         for lease in self._leases.values():
             if lease.work is not None or lease.pinned or lease.running:
                 continue
             if not lease.target.is_live:
                 continue
-            members = {
-                task_id
-                for task_id in pending
-                if state.tasks[task_id].target.lease_key == lease.key
-            }
+            members = self._members(lease, state)
             if members & set(state.in_flight):
+                # About to start (waiting on a slot, placement or the pool).
+                self._cancel_timer(lease)
                 continue
-            needed = self._needed(lease, pending, source_map)
+            needed = self._needed(lease, state)
             if not members:
+                self._cancel_timer(lease)
                 reason = "drained" if needed else "done"
                 lease.work = asyncio.create_task(
                     self._release(lease, needed, reason)
@@ -337,19 +359,35 @@ class LeaseManager:
         )
         return self._source_map_cache[1]
 
-    def _needed(
-        self,
-        lease: Lease,
-        pending: set[str],
-        source_map: "Mapping[tuple[str, str], EdgeSource]",
-    ) -> set[tuple[str, str]]:
+    @staticmethod
+    def _cancel_timer(lease: Lease) -> None:
+        if lease.timer is not None:
+            lease.timer.cancel()
+            lease.timer = None
+
+    @staticmethod
+    def _members(lease: Lease, state: LeaseState) -> set[str]:
+        """
+        Pending tasks that will run on *lease*'s machine, counting a
+        not-yet-expanded subworkflow whose body has a task there.
+        """
+        return {
+            task_id
+            for task_id in state.pending
+            if lease.key in _lease_keys(state.tasks[task_id])
+        }
+
+    def _needed(self, lease: Lease, state: LeaseState) -> set[tuple[str, str]]:
         """
         ``(producer, output)`` on *lease*'s machine that a pending task has
         not pulled yet, members included: they may re-provision elsewhere.
+        A pending subworkflow needs whatever feeds it, data edge or not: its
+        body re-emits those edges onto real consumers when it expands.
         """
-        return {
+        pending = state.pending
+        needed = {
             (str(src.task_id), src.artifact.id)
-            for (consumer, _input), src in source_map.items()
+            for (consumer, _input), src in self._source_map().items()
             if consumer in pending
             and consumer not in self._inputs_done
             and src.target is not None
@@ -357,14 +395,48 @@ class LeaseManager:
             and src.task_id is not None
             and src.target.lease_key == lease.key
         }
+        relocated = self.workflow._relocations  # noqa: SLF001
+        for edge in self.workflow.edges:
+            consumer = state.tasks.get(edge.target)
+            producer = state.tasks.get(edge.source)
+            if (
+                consumer is not None
+                and producer is not None
+                and edge.source_output is not None
+                and edge.target in pending
+                and getattr(consumer, "body", None) is not None
+                and producer.target.lease_key == lease.key
+                and (edge.source, edge.source_output) not in relocated
+            ):
+                needed.add((edge.source, edge.source_output))
+        return needed
+
+    def _pulling_from(self, lease: Lease) -> bool:
+        """
+        Whether a task is still pulling inputs produced on *lease*'s machine
+        (it may have resolved its source before a relocation).
+        """
+        tasks = {task.id: task for task in self.workflow.tasks}
+        return any(
+            edge.target in self._pulling
+            and edge.source in tasks
+            and tasks[edge.source].target.lease_key == lease.key
+            for edge in self.workflow.edges
+        )
 
     async def _hold(self, lease: Lease) -> None:
         """Release *lease* if it is still idle when the hold expires."""
         await asyncio.sleep(lease.target.hold_timeout_s or 0)
         lease.timer = None
-        if lease.running or lease.work is not None or self._state is None:
+        state = self._state
+        if (
+            lease.running
+            or lease.work is not None
+            or state is None
+            or self._members(lease, state) & set(state.in_flight)
+        ):
             return
-        needed = self._needed(lease, self._state.pending, self._source_map())
+        needed = self._needed(lease, state)
         lease.work = asyncio.create_task(
             self._release(lease, needed, "idle_cap")
         )
@@ -383,6 +455,15 @@ class LeaseManager:
                     lease.target.emit_node_phase("drain_failed")
                     lease.pinned = True
                     return
+            # A transfer that started before the relocation still reads
+            # from this machine: let it finish.
+            while self._pulling_from(lease):
+                self._pulled.clear()
+                await self._pulled.wait()
+            if lease.running:
+                # A member started meanwhile: what it needs is relocated
+                # already, and it is using the machine. Keep it.
+                return
             lease.phase = Phase.RELEASING
             await lease.target.release(reason)
         except Exception as exc:
@@ -437,7 +518,14 @@ class LeaseManager:
                     Phase.RELEASING,
                     Phase.COLD,
                 ):
-                    await lease.target.keepalive()
+                    try:
+                        await lease.target.keepalive()
+                    except Exception as exc:
+                        # One failed ping must not stop the others.
+                        horus_logger.log.warning(
+                            _("Keepalive of machine '%(key)s' failed: %(e)s")
+                            % {"key": lease.key, "e": exc}
+                        )
 
     # Run end
 
@@ -485,6 +573,7 @@ class LeaseManager:
         # A workflow instance can run again: nothing carries over.
         self._leases.clear()
         self._inputs_done.clear()
+        self._pulling.clear()
         self._produced.clear()
         self._state = None
         self.workflow.clear_relocations()
