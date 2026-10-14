@@ -24,7 +24,7 @@ import asyncio
 import shutil
 from pathlib import Path
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -33,6 +33,8 @@ from pydantic import ValidationError
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.artifact.json import JSONArtifact
+from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.executor.python_fn import PythonFunctionExecutor
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python import PythonFunctionRuntime
@@ -57,6 +59,12 @@ _BODY = "cp $batch $scored/result.txt"
 def _reads_everything(batch: Path, batches: Path) -> None:
     """A function body: artifacts arrive by parameter name, no ``$``."""
     del batch, batches
+
+
+def _fails_long(batch: FileArtifact) -> None:
+    """A function body failing with a long error for a "bad" item."""
+    if batch.path.read_text() == "bad":
+        raise ValueError("x" * 1000)
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
@@ -1046,6 +1054,17 @@ def _dropping_map(**kwargs: object) -> MapTask:
     return map_task
 
 
+def _drop_messages(emit: MagicMock) -> list[str]:
+    """The messages of the drop events among *emit*'s calls."""
+    return [
+        c.args[0].message
+        for c in emit.call_args_list
+        if isinstance(c.args[0], HorusTaskEvent)
+        and c.args[0].message
+        and "dropped" in c.args[0].message
+    ]
+
+
 def _report_map() -> MapTask:
     """A second map iterating the first map's (``score``) slots."""
     return MapTask(
@@ -1093,13 +1112,15 @@ class TestDropFailedItems:
         cancelled, the failed slot is removed and recorded, the clone stays
         FAILED, and the map and the run complete.
         """
-        del horus_context
         split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
         (tmp_path / "batches" / "b.txt").write_text("bad")
         map_task = _dropping_map(command=_FLAKY)
         wf = _wire(tmp_path, split=split, map_task=map_task)
 
-        await wf.run(trigger_id="split")
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
         assert map_task.status == TaskStatus.COMPLETED
@@ -1114,14 +1135,39 @@ class TestDropFailedItems:
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "2"]
 
-        dumped = map_task.model_dump(mode="json")["dropped_items"]
-        assert [(d["slot"], d["item"]) for d in dumped] == [("1", "b.txt")]
-        assert dumped[0]["error"]
-        report = next(
-            a for a in map_task.side_artifacts if a.id == "score_dropped"
+        # Derived, not published: nothing about the drop is dumped.
+        assert map_task._dropped_slots == ["1"]
+        assert "_dropped_slots" not in map_task.model_dump()
+        (message,) = _drop_messages(emit)
+        assert "1 of 3" in message
+        assert "1 (b.txt): " in message
+
+    async def test_the_drop_event_is_capped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A large drop lists 20 items, then "+N more", each error cut."""
+        names = [f"{i:02d}.txt" for i in range(25)]
+        split = _split_task(tmp_path, names)
+        map_task = _dropping_map()
+        map_task.runtime = PythonFunctionRuntime(func=_fails_long)
+        map_task.executor = PythonFunctionExecutor()
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        for name in names[1:]:
+            (tmp_path / "batches" / name).write_text("bad")
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.COMPLETED
+        (message,) = _drop_messages(emit)
+        lines = message.splitlines()
+        assert len(lines) == 1 + 20 + 1
+        assert lines[-1] == "+4 more"
+        assert (
+            lines[1] == "01 (01.txt): " + ("ValueError: " + "x" * 1000)[:500]
         )
-        assert isinstance(report, JSONArtifact)
-        assert report.read() == dumped
 
     async def test_every_item_failing_fails_the_map(
         self, tmp_path: Path, horus_context: HorusContext
@@ -1173,7 +1219,7 @@ class TestDropFailedItems:
             assert tasks[f"score[{slot}]"].runs == 0
         score = tasks["score"]
         assert isinstance(score, MapTask)
-        assert score.dropped_items == []
+        assert score._dropped_slots == []
         assert manifest.exists()
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
@@ -1195,7 +1241,76 @@ class TestDropFailedItems:
 
         assert wf.status.value == "canceled"
         assert map_task.status != TaskStatus.COMPLETED
-        assert map_task.dropped_items == []
+        assert map_task._dropped_slots == []
+
+    async def test_a_partial_run_removes_a_full_runs_manifest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A manifest left by an earlier full run cannot survive a partial
+        one, or the next run would skip the map with an item missing.
+        """
+        del horus_context
+        manifest = tmp_path / ".horus" / "score.json"
+        await _wire(
+            tmp_path,
+            split=_split_task(tmp_path, ["a.txt", "b.txt"]),
+            map_task=_dropping_map(command=_FLAKY),
+        ).run(trigger_id="split")
+        assert manifest.exists()
+
+        wf = _wire(
+            tmp_path,
+            split=_split_task(tmp_path, ["a.txt", "b.txt"]),
+            map_task=_dropping_map(command=_FLAKY),
+        )
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert not manifest.exists()
+
+    async def test_rerunning_the_same_workflow_resets_the_drops(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Drops belong to one execution: once the item is fixed, a second
+        run of the same workflow object records none and writes the
+        manifest.
+        """
+        del horus_context
+        manifest = tmp_path / ".horus" / "score.json"
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _dropping_map(command=_FLAKY)
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        await wf.run(trigger_id="split")
+        assert map_task._dropped_slots == ["1"]
+
+        (tmp_path / "batches" / "b.txt").write_text("b.txt")
+        await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.COMPLETED
+        assert map_task._dropped_slots == []
+        assert manifest.exists()
+
+    async def test_continue_and_drop_complete(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Under the continue policy a dropped item still completes the
+        map and the run.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _dropping_map(command=_FLAKY)
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.failure_policy = "continue"
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert map_task.status == TaskStatus.COMPLETED
+        statuses = {t.id: t.status for t in wf.tasks}
+        assert statuses["score[1]"] == TaskStatus.FAILED
 
 
 @pytest.mark.unit

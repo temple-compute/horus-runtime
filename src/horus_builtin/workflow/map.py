@@ -25,14 +25,12 @@ output.
 
 import asyncio
 import json
-import tempfile
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from horus_builtin.artifact.folder import FolderArtifact
-from horus_builtin.artifact.json import JSONArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.substitution import placeholder_roots
@@ -48,6 +46,11 @@ from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+
+# The drop event lists this many dropped items, each error cut to
+# _ERROR_CHARS: a large map dropping many items must not flood the log.
+_DROPS_LISTED = 20
+_ERROR_CHARS = 500
 
 
 class MapConfigurationError(WorkflowError):
@@ -70,21 +73,6 @@ class MapOver(BaseModel):
     artifact, so the collection itself stays addressable under
     :attr:`input_id` in the body.
     """
-
-
-class DroppedItem(BaseModel):
-    """
-    One item a :class:`MapTask` dropped because its clone failed.
-    """
-
-    slot: str
-    """Name of the slot (and of the clone, ``<map>[<slot>]``)."""
-
-    item: str
-    """Entry name of the item the clone received."""
-
-    error: str | None
-    """The failed clone's error summary."""
 
 
 class MapTask(HorusTask):
@@ -117,13 +105,14 @@ class MapTask(HorusTask):
     on_item_failure: Literal["fail", "drop"] = "fail"
     """
     What a failed clone means for the map. ``"fail"`` (the default) fails
-    the map. ``"drop"`` removes the clone's slot from the output folder,
-    records it in :attr:`dropped_items` and completes the map, unless every
-    clone failed. Only meant for maps whose items are independent.
+    the map. ``"drop"`` removes the clone's slot from the output folder
+    and completes the map, unless every clone failed; the clone stays
+    FAILED, which is how a dropped item shows in the run. Only meant for
+    maps whose items are independent.
     """
 
-    dropped_items: list[DroppedItem] = Field(default_factory=list)
-    """Items dropped by the last execution (``on_item_failure="drop"``)."""
+    _dropped_slots: list[str] = PrivateAttr(default_factory=list)
+    """Slots dropped by the current execution (``on_item_failure="drop"``)."""
 
     @property
     def _over_artifact(self) -> IterableArtifact:
@@ -205,11 +194,7 @@ class MapTask(HorusTask):
                 % {"id": self.id}
             )
 
-        dropped_id = f"{self.id}_dropped"
-        self.dropped_items = []
-        self.side_artifacts = [
-            a for a in self.side_artifacts if a.id != dropped_id
-        ]
+        self._dropped_slots = []
 
         items = await self._over_artifact.items(self.target)
         root = Path(self.target.path_on_target(self.outputs[0]))
@@ -222,7 +207,7 @@ class MapTask(HorusTask):
         width = max(1, len(str(len(items) - 1)))
         inherit = self._over_is_map_output(wf)
         slots: dict[str, BaseArtifact] = {
-            (_item_name(item) if inherit else f"{index:0{width}d}"): item
+            (Path(item.path).name if inherit else f"{index:0{width}d}"): item
             for index, item in enumerate(items)
         }
         clones: list[BaseTask] = []
@@ -284,34 +269,8 @@ class MapTask(HorusTask):
         ]
         if wf.failure_policy == "continue" or self.on_item_failure == "drop":
             # Clones are independent: one failing must not cancel the rest.
-            # The map still fails once they have all finished, unless it
-            # drops failed items and at least one succeeded.
             results = await asyncio.gather(*runs, return_exceptions=True)
-            errors = [r for r in results if isinstance(r, BaseException)]
-            # A cancelled clone is a cancel, not a failure: never group it.
-            for error in errors:
-                if isinstance(error, asyncio.CancelledError):
-                    raise error
-            if errors and (
-                self.on_item_failure == "fail" or len(errors) == len(clones)
-            ):
-                raise BaseExceptionGroup(
-                    _("%(n)d of %(total)d map clone(s) failed.")
-                    % {"n": len(errors), "total": len(clones)},
-                    errors,
-                )
-            if errors:
-                await self._drop(
-                    root,
-                    [
-                        (slot, item, clone)
-                        for (slot, item), clone, result in zip(
-                            slots.items(), clones, results, strict=True
-                        )
-                        if isinstance(result, BaseException)
-                    ],
-                    len(clones),
-                )
+            await self._settle(root, slots, clones, results)
         else:
             async with asyncio.TaskGroup() as tg:
                 for run in runs:
@@ -335,57 +294,65 @@ class MapTask(HorusTask):
         Whether the collection this map iterates is another map's output,
         judged from the workflow edge feeding :attr:`over`.
         """
-        source = next(
-            (
-                e.source
-                for e in wf.edges
-                if e.target == self.id and e.target_input == self.over.input_id
-            ),
-            None,
+        source = wf.cached_source_map(None)[1].get(
+            (self.id, self.over.input_id)
         )
-        return any(isinstance(t, MapTask) and t.id == source for t in wf.tasks)
+        return source is not None and any(
+            isinstance(t, MapTask) and t.id == source.task_id for t in wf.tasks
+        )
 
-    async def _drop(
+    async def _settle(
         self,
         root: Path,
-        failed: list[tuple[str, BaseArtifact, BaseTask]],
-        total: int,
+        slots: dict[str, BaseArtifact],
+        clones: list[BaseTask],
+        results: list[BaseException | None],
     ) -> None:
         """
-        Remove each failed clone's slot, so nothing downstream sees it, and
-        record it in :attr:`dropped_items` and a ``<id>_dropped`` side
-        artifact.
+        Turn the finished clones' *results* into the map's outcome: raise
+        if any clone failed, unless the map drops failed items and at least
+        one succeeded. Then remove each failed clone's slot, so nothing
+        downstream sees it, and report the drop.
         """
-        for slot, item, clone in failed:
-            await self.target.remove(str(root / slot))
-            self.dropped_items.append(
-                DroppedItem(
-                    slot=slot, item=_item_name(item), error=clone.error
-                )
+        errors = [r for r in results if isinstance(r, BaseException)]
+        # A cancelled clone is a cancel, not a failure: never group it.
+        for error in errors:
+            if isinstance(error, asyncio.CancelledError):
+                raise error
+        if not errors:
+            return
+        if self.on_item_failure == "fail" or len(errors) == len(clones):
+            raise BaseExceptionGroup(
+                _("%(n)d of %(total)d map clone(s) failed.")
+                % {"n": len(errors), "total": len(clones)},
+                errors,
             )
 
-        report = JSONArtifact(
-            id=f"{self.id}_dropped",
-            path=Path(tempfile.mkdtemp(prefix="horus-map-"))
-            / f"{self.id}_dropped.json",
-        )
-        report.write([d.model_dump(mode="json") for d in self.dropped_items])
-        self.side_artifacts.append(report)
+        failed = [
+            (slot, item, clone)
+            for (slot, item), clone, result in zip(
+                slots.items(), clones, results, strict=True
+            )
+            if isinstance(result, BaseException)
+        ]
+        lines: list[str] = []
+        for slot, item, clone in failed:
+            await self.target.remove(str(root / slot))
+            self._dropped_slots.append(slot)
+            if len(lines) < _DROPS_LISTED:
+                summary = (clone.error or "")[:_ERROR_CHARS]
+                lines.append(f"{slot} ({Path(item.path).name}): {summary}")
+        if len(failed) > _DROPS_LISTED:
+            lines.append(_("+%(n)d more") % {"n": len(failed) - _DROPS_LISTED})
 
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=self.id,
                 task_name=self.name,
-                message=_(
-                    "Map %(name)s dropped %(n)d of %(total)d item(s): "
-                    "%(slots)s"
-                )
-                % {
-                    "name": self.name,
-                    "n": len(failed),
-                    "total": total,
-                    "slots": ", ".join(d.slot for d in self.dropped_items),
-                },
+                message=_("Map %(name)s dropped %(n)d of %(total)d item(s):")
+                % {"name": self.name, "n": len(failed), "total": len(clones)}
+                + "\n"
+                + "\n".join(lines),
             )
         )
 
@@ -395,12 +362,10 @@ class MapTask(HorusTask):
         earlier manifest instead, so the next run re-enters the map and
         retries the dropped items (the others skip on their own manifests).
         """
-        if not self.dropped_items:
+        if self._dropped_slots:
+            await self._remove_manifest()
+        else:
             await super()._write_manifest(fingerprint)
-            return
-        path = self._manifest_path()
-        if path is not None:
-            await self.target.remove(path)
 
     def _body_may_read(self, artifact_id: str) -> bool:
         """
@@ -450,20 +415,18 @@ class MapTask(HorusTask):
         output.path = slot_root
         output.declared_path = slot_root
 
-        # Excluded from the dump: what the clone sets for itself, the
-        # map-only fields (keeping `kind: horus_map` would make a stored
-        # clone reload as a MapTask with no `over`), and this run's state.
-        exclude_fields = {
+        # Excluded from the dump: the map-only fields, what the clone sets
+        # for itself (keeping `kind: horus_map` would make a stored clone
+        # reload as a MapTask with no `over`), and this run's state.
+        exclude_fields = (
+            MapTask.model_fields.keys() - HorusTask.model_fields.keys()
+        ) | {
             "id",
             "name",
             "inputs",
             "outputs",
             "target",
             "kind",
-            "over",
-            "max_concurrency",
-            "on_item_failure",
-            "dropped_items",
             "side_artifacts",
             "status",
             "skip_reason",
@@ -496,10 +459,3 @@ class MapTask(HorusTask):
         )
 
         return clone
-
-
-def _item_name(item: BaseArtifact) -> str:
-    """
-    The entry name of a collection item (its id after the collection's).
-    """
-    return item.id.rpartition(":")[2]
