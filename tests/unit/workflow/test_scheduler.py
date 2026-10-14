@@ -48,7 +48,7 @@ from horus_runtime.core.placement import (
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskExecutionError
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -709,10 +709,10 @@ class TestFailurePolicy:
         assert c.runs == 1
         assert c.status == TaskStatus.COMPLETED
         assert b.status == TaskStatus.FAILED
-        # b_child is blocked behind b's failure: it never even reaches
-        # RUNNING, let alone executes.
+        # b_child is blocked behind b's failure: it never runs, and says why.
         assert b_child.runs == 0
-        assert b_child.status == TaskStatus.IDLE
+        assert b_child.status == TaskStatus.SKIPPED
+        assert b_child.skip_reason == SkipReason.UPSTREAM_FAILED
         assert wf.status == WorkflowStatus.FAILED
 
     async def test_continue_policy_with_no_failures_completes_normally(

@@ -94,6 +94,34 @@ class TestWorkflowFromYaml:
         assert wf.name == "yaml_workflow"
         assert "step1_id" in [t.id for t in wf.tasks]
 
+    def test_failure_policy_round_trips_through_yaml_and_snapshot(
+        self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
+    ) -> None:
+        """
+        ``failure_policy`` survives YAML load and a JSON snapshot round
+        trip, and a file without it stays fail fast.
+        """
+        workflow_file = make_workflow_file(
+            tmp_path,
+            "name: wf\nkind: concrete_workflow\nfailure_policy: continue\n",
+        )
+        wf = ConcreteWorkflow.from_yaml(workflow_file)
+        assert wf.failure_policy == "continue"
+
+        snapshot = wf.model_dump(mode="json")
+        assert snapshot["failure_policy"] == "continue"
+        assert (
+            ConcreteWorkflow.model_validate(snapshot).failure_policy
+            == "continue"
+        )
+
+        default_file = make_workflow_file(
+            tmp_path, "name: wf\nkind: concrete_workflow\n"
+        )
+        assert ConcreteWorkflow.from_yaml(default_file).failure_policy == (
+            "fail_fast"
+        )
+
     def test_from_yaml_accepts_string_path(
         self, tmp_path: Path, make_workflow_file: MakeWorkflowFileType
     ) -> None:

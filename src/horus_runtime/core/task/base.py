@@ -168,8 +168,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
     skip_reason: SkipReason | None = None
     """
     Why the task was skipped, set only alongside ``TaskStatus.SKIPPED``. Lets a
-    consumer tell a memoized cache hit apart from a branch that was not taken,
-    which are the same status but mean opposite things to a reader.
+    consumer tell a memoized cache hit apart from a branch that was not taken
+    or a task blocked by an upstream failure, which share the status but mean
+    different things to a reader.
     """
 
     error: str | None = None
