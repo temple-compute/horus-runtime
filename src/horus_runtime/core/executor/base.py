@@ -221,7 +221,7 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         Side artifacts live in ``task.side_artifacts_dir`` on the **target**
         host, which is not necessarily the orchestrator's filesystem. They are
         listed and transferred over the target channel (``list_dir`` +
-        ``get_file``) into a local temporary directory, then registered as
+        ``get_file_to``) into a local temporary directory, then registered as
         :class:`FileArtifact` (top-level files) or :class:`FolderArtifact`
         (top-level folders, with their nested contents reconstructed locally).
 
@@ -294,9 +294,7 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
                         )
                         continue
                     local_path = landing / entry.name
-                    local_path.write_bytes(
-                        await task.target.get_file(entry.path)
-                    )
+                    await task.target.get_file_to(entry.path, local_path)
                     if artifact_id not in known:
                         task.side_artifacts.append(
                             FileArtifact(id=artifact_id, path=local_path)
@@ -317,7 +315,7 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     ) -> Path:
         """
         Reconstruct the target directory tree rooted at *remote_root* under
-        *local_root*, using the channel (``list_dir`` + ``get_file``).
+        *local_root*, using the channel (``list_dir`` + ``get_file_to``).
 
         Walks iteratively (no recursion-depth limit). Every directory is
         created locally so empty directories are preserved; files larger than
@@ -346,7 +344,5 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
                         % {"name": child.name, "size": child.size}
                     )
                 else:
-                    local_child.write_bytes(
-                        await task.target.get_file(child.path)
-                    )
+                    await task.target.get_file_to(child.path, local_child)
         return local_root
