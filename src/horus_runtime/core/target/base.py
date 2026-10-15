@@ -600,6 +600,20 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             The file contents as :class:`bytes`.  Callers decode as needed.
         """
 
+    async def get_file_to(self, remote_path: str, local_path: Path) -> None:
+        """
+        Copy *remote_path* from the target into the local file *local_path*.
+
+        The default reads the whole file through :meth:`get_file`; targets
+        that can stream to disk should override it so large files never sit
+        in memory.
+
+        Args:
+            remote_path: Path on the *target* host to read.
+            local_path: Local file to write.
+        """
+        local_path.write_bytes(await self.get_file(remote_path))
+
     @abstractmethod
     async def mkdir(self, path: str) -> None:
         """

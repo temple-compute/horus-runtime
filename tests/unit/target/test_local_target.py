@@ -258,6 +258,37 @@ class TestLocalTargetListDir:
 
 
 @pytest.mark.unit
+class TestLocalTargetFileCopy:
+    """
+    Tests for LocalTarget.put_file and get_file_to with paths.
+    """
+
+    async def test_put_file_from_path(self, tmp_path: Path) -> None:
+        """
+        A Path source is copied to the destination, creating parents.
+        """
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"data")
+        dest = tmp_path / "a" / "b" / "dest.bin"
+
+        await LocalTarget().put_file(src, dest.as_posix())
+
+        assert dest.read_bytes() == b"data"
+
+    async def test_get_file_to_copies_file(self, tmp_path: Path) -> None:
+        """
+        get_file_to copies the remote path into the local file.
+        """
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"data")
+        local = tmp_path / "local.bin"
+
+        await LocalTarget().get_file_to(src.as_posix(), local)
+
+        assert local.read_bytes() == b"data"
+
+
+@pytest.mark.unit
 class TestLocalTargetStream:
     """
     Tests for ChannelProcess.stream() on LocalChannelProcess — live

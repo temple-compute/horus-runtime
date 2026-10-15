@@ -223,3 +223,21 @@ class TestBaseTarget:
         target = ConcreteTestTarget()
         with pytest.raises(WorkingDirectoryNotSetError):
             _ = target.resolved_working_directory
+
+    async def test_get_file_to_writes_get_file_bytes(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The default get_file_to writes whatever get_file returns.
+        """
+
+        class _BytesTarget(ConcreteTestTarget):
+            add_to_registry = False
+
+            async def get_file(self, _remote_path: str) -> bytes:
+                return b"payload"
+
+        local = tmp_path / "out.bin"
+        await _BytesTarget().get_file_to("/remote/f", local)
+
+        assert local.read_bytes() == b"payload"
