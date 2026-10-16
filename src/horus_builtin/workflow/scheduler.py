@@ -186,10 +186,8 @@ async def _execute_on_target(
     declared_target = task.target
     location_id = declared_target.location_id
     # A map waiting on its clones reserves nothing: they need the room.
-    gated = not task.dispatches_children
-    resources = task.resources
-    if gated:
-        await placement.acquire(task.name, location_id, resources)
+    resources = None if task.dispatches_children else task.resources
+    await placement.acquire(task.name, location_id, resources)
     try:
         if pool.full:
             workflow.leases.member_queued(task)
@@ -265,8 +263,7 @@ async def _execute_on_target(
             )
         raise
     finally:
-        if gated:
-            await placement.release(location_id, resources)
+        await placement.release(location_id, resources)
 
 
 async def _execute_ready_task(

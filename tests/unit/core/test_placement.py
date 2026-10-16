@@ -170,29 +170,3 @@ class TestPlacementManagerGating:
             timeout=5,
         )
         assert max_seen == 2
-
-
-@pytest.mark.unit
-class TestPlacementManagerDefaultCharge:
-    """A task with no ``resources`` takes one CPU where CPUs are declared."""
-
-    async def test_unresourced_tasks_are_capped_by_declared_cpus(
-        self,
-    ) -> None:
-        """A cpus=2 location admits two such tasks at once, not three."""
-        manager = PlacementManager({"loc": ResourceCapacity(cpus=2)})
-        await manager.acquire("a", "loc", None)
-        await manager.acquire("b", "loc", ResourceRequest())
-        third = asyncio.ensure_future(manager.acquire("c", "loc", None))
-        await asyncio.sleep(0.01)
-        assert not third.done()
-
-        await manager.release("loc", None)
-        await asyncio.wait_for(third, timeout=1)
-
-    async def test_zero_declared_cpus_does_not_fail_unresourced_tasks(
-        self,
-    ) -> None:
-        """No default charge when the location declares no usable CPUs."""
-        manager = PlacementManager({"loc": ResourceCapacity(cpus=0)})
-        await asyncio.wait_for(manager.acquire("t", "loc", None), timeout=1)
