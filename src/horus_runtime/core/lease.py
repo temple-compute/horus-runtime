@@ -249,8 +249,7 @@ class LeaseManager:
 
     def _open_lease(self, target: BaseTarget) -> Lease | None:
         """The lease on *target*, created on first sight; ``None`` if none."""
-        # `auto_teardown: false` is an explicit request to keep the machine.
-        if not target.releasable or not getattr(target, "auto_teardown", True):
+        if not target.releasable:
             return None
         lease = self._leases.get(target.lease_key)
         if lease is None:
