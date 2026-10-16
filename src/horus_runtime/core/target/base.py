@@ -24,7 +24,7 @@ import functools
 import shlex
 import socket
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self, final
 from uuid import uuid4
@@ -53,6 +53,8 @@ from horus_runtime.middleware.target_command import (
     TargetCommandMiddlewareContext,
 )
 from horus_runtime.registry.auto_registry import AutoRegistry
+
+_MIB = 1024 * 1024
 
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
@@ -613,6 +615,47 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             local_path: Local file to write.
         """
         local_path.write_bytes(await self.get_file(remote_path))
+
+    async def read_range(
+        self, remote_path: str, offset: int, length: int
+    ) -> AsyncIterator[bytes]:
+        """
+        Yield *length* bytes of *remote_path* starting at *offset*, or fewer
+        at end of file.
+
+        The default runs ``dd`` over a shell channel and holds the whole range
+        in memory; targets that can seek natively should override it and
+        yield bounded chunks.
+
+        Args:
+            remote_path: Path on the *target* host to read.
+            offset: Start offset in bytes; must be a whole number of MiB.
+            length: Number of bytes to read.
+
+        Raises:
+            ValueError: If *offset* is not MiB-aligned or *length* is negative.
+            TaskExecutionError: If ``dd`` exits non-zero.
+        """
+        if offset < 0 or offset % _MIB or length < 0:
+            raise ValueError(
+                _("offset must be a non-negative multiple of 1 MiB")
+            )
+        if length == 0:
+            return
+        cmd = (
+            f"dd if={shlex.quote(remote_path)} bs={_MIB} "
+            f"skip={offset // _MIB} count={-(-length // _MIB)} 2>/dev/null"
+        )
+        proc = await self.run_command_sync(cmd)
+        out, _stderr = await proc.communicate()
+        rc = await proc.wait()
+        if rc != 0:
+            raise TaskExecutionError(
+                _("Failed to read '%(path)s' on target (exit code %(rc)s)")
+                % {"path": remote_path, "rc": rc}
+            )
+        if out:
+            yield out[:length]
 
     @abstractmethod
     async def mkdir(self, path: str) -> None:
