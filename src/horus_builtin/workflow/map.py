@@ -95,12 +95,12 @@ class MapTask(HorusTask):
     the id each item is bound to on the clone that receives it.
     """
 
-    max_concurrency: int | None = None
+    max_concurrency: int | None = Field(default=None, ge=0)
     """
     Upper bound on clones dispatched at once. ``None`` (the default) applies
     a conservative built-in cap (see
     ``horus_builtin.workflow.scheduler.DEFAULT_MAX_CONCURRENCY``) instead of
-    dispatching every clone at once.
+    dispatching every clone at once; ``0`` dispatches every clone at once.
     """
 
     on_item_failure: Literal["fail", "drop"] = "fail"

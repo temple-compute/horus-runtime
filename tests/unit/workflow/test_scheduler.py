@@ -38,7 +38,10 @@ from horus_builtin.workflow.dag import (
     descendants,
 )
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_builtin.workflow.scheduler import DEFAULT_MAX_CONCURRENCY
+from horus_builtin.workflow.scheduler import (
+    DEFAULT_MAX_CONCURRENCY,
+    TargetPool,
+)
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.placement import (
@@ -1099,3 +1102,22 @@ class TestSkipBeforeTransfer:
         ]
         assert (phases[0], phases[-1]) == ("started", "finished")
         assert (tmp_path / "dst" / "result.txt").read_text() == "changed\n"
+
+
+async def test_zero_max_concurrency_never_waits() -> None:
+    """``max_concurrency=0`` hands out a slot per dispatch, with no cap."""
+    target = LocalTarget()
+    pool = TargetPool(0)
+    held = [
+        await asyncio.wait_for(pool.acquire(target), timeout=1)
+        for _ in range(DEFAULT_MAX_CONCURRENCY * 4)
+    ]
+    assert not pool.full
+    for slot in held:
+        pool.release(target, slot)
+
+
+def test_negative_max_concurrency_is_rejected() -> None:
+    """Only ``0`` and up are valid; ``0`` is the no-limit value."""
+    with pytest.raises(ValueError):
+        HorusWorkflow(name="w", tasks=[], max_concurrency=-1)

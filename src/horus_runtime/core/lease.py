@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 KEEPALIVE_INTERVAL_S = 300.0
 """Seconds between ``keepalive()`` calls on every busy or holding machine."""
 
+KEEPALIVE_TIMEOUT_S = 30.0
+"""Cap on one ``keepalive()`` call."""
+
 EVACUATION_TIMEOUT_S = 6 * 3600.0
 """Cap on one drain; past it the drain fails and the machine is kept."""
 
@@ -249,8 +252,7 @@ class LeaseManager:
 
     def _open_lease(self, target: BaseTarget) -> Lease | None:
         """The lease on *target*, created on first sight; ``None`` if none."""
-        # `auto_teardown: false` is an explicit request to keep the machine.
-        if not target.releasable or not getattr(target, "auto_teardown", True):
+        if not target.releasable:
             return None
         lease = self._leases.get(target.lease_key)
         if lease is None:
@@ -366,7 +368,8 @@ class LeaseManager:
                 self._cancel_timer(lease)
                 continue
             if members:
-                if lease.timer is None and not lease.no_cap:
+                # After a failed drain too: the expiry retries the drain.
+                if lease.timer is None:
                     if lease.phase is not Phase.HOLDING:
                         lease.phase = Phase.HOLDING
                         lease.target.emit_node_phase("holding")
@@ -679,22 +682,31 @@ class LeaseManager:
         """
         Ping every live machine that a member is running on, or that is in
         its hold, so its idle watchdog and life cap do not fire. A machine
-        stuck draining, kept after a failed drain or destroy, is not pinged.
+        stuck draining, or kept after a failed drain or destroy, is not
+        pinged outside a hold.
         """
         while True:
             await asyncio.sleep(self.keepalive_interval_s)
-            for lease in list(self._leases.values()):
-                if lease.target.is_live and (
-                    lease.running or lease.timer is not None
-                ):
-                    try:
-                        await lease.target.keepalive()
-                    except Exception as exc:
-                        # One failed ping must not stop the others.
-                        horus_logger.log.warning(
-                            _("Keepalive of machine '%(key)s' failed: %(e)s")
-                            % {"key": lease.key, "e": exc}
-                        )
+            await asyncio.gather(
+                *(
+                    self._ping(lease)
+                    for lease in list(self._leases.values())
+                    if lease.target.is_live
+                    and (lease.running or lease.timer is not None)
+                )
+            )
+
+    async def _ping(self, lease: Lease) -> None:
+        """One keepalive; a failed or hung ping must not stop the others."""
+        try:
+            await asyncio.wait_for(
+                lease.target.keepalive(), KEEPALIVE_TIMEOUT_S
+            )
+        except Exception as exc:
+            horus_logger.log.warning(
+                _("Keepalive of machine '%(key)s' failed: %(e)s")
+                % {"key": lease.key, "e": exc or type(exc).__name__}
+            )
 
     # Run end
 

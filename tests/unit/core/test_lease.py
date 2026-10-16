@@ -605,6 +605,49 @@ class TestRelease:
         assert node._node["keepalives"] > 0
         assert node.released == ["done"]
 
+    async def test_keepalive_pings_machines_at_once_with_a_timeout(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hung ping times out and does not delay the other machines."""
+        del horus_context
+        monkeypatch.setattr(lease_module, "KEEPALIVE_TIMEOUT_S", 0.05)
+        pinged: list[str] = []
+
+        class _Hangs(FakeNode):
+            add_to_registry: ClassVar[bool] = False
+
+            async def keepalive(self) -> None:
+                await asyncio.sleep(3600)
+
+        class _Counts(FakeNode):
+            add_to_registry: ClassVar[bool] = False
+
+            async def keepalive(self) -> None:
+                pinged.append(self.lease_key)
+
+        manager = lease_module.LeaseManager(_workflow(tmp_path, [], []))
+        for node in (
+            _Hangs(working_directory=(tmp_path / "h").as_posix()),
+            _Counts(working_directory=(tmp_path / "c").as_posix()),
+        ):
+            node._node["live"] = True
+            lease = manager._open_lease(node)
+            assert lease is not None
+            lease.running.add("t")
+        assert manager._keeper is not None
+        manager._keeper.cancel()
+        monkeypatch.setattr(manager, "keepalive_interval_s", 0.0)
+        keeper = asyncio.create_task(manager._keep_alive())
+
+        await asyncio.sleep(0.2)
+        keeper.cancel()
+
+        # Pinged on each round, not stuck behind the hung machine.
+        assert len(pinged) >= 2
+
     async def test_condition_sentinel_outlives_its_machine(
         self,
         tmp_path: Path,
@@ -703,6 +746,55 @@ class TestRelease:
         assert node._node["keepalives"] == node._node["pinged_at_drain_failed"]
         assert node.released == ["done"]
         assert c.runs == 1
+
+    async def test_failed_drain_with_pending_members_still_holds(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A machine kept after a failed drain still holds while its members
+        wait elsewhere: the hold expiry retries the drain and releases it.
+        """
+        del horus_context
+        evacuator.fail = True
+
+        class _Recovers(_Step):
+            async def _run(self) -> None:
+                await super()._run()
+                evacuator.fail = False
+
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0.05)
+        a = _step("a", node, tmp_path)
+        g1 = _Recovers(
+            id="g1",
+            name="g1",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FileArtifact(id="out", path=tmp_path / "g1.out")],
+            delay=0.15,
+        )
+        g2 = _step("g2", LocalTarget(), tmp_path, delay=0.5)
+        b = _step("b", node, tmp_path, inputs=["x", "y", "z"])
+        wf = _workflow(
+            tmp_path,
+            [a, g1, g2, b],
+            [
+                _edge("a", "b", "x"),
+                _edge("g2", "b", "y"),
+                _edge("g1", "b", "z"),
+            ],
+        )
+
+        await wf.run(trigger_id="a")
+
+        assert "drain_failed" in node.phases
+        assert node.released == ["idle_cap", "done"]
+        assert evacuator.calls == [("a", "out")]
+        assert node.generation == 2
+        assert b.runs == 1
 
     async def test_failed_destroy_is_retried_with_backoff(
         self,
