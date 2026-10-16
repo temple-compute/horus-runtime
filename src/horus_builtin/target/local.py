@@ -26,7 +26,7 @@ import shlex
 import shutil
 import signal
 import socket
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import ClassVar
 
@@ -40,6 +40,10 @@ from horus_runtime.core.target.channel import (
     build_detach_command,
     merge_line_streams,
 )
+from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.i18n import tr as _
+
+_READ_CHUNK = 8 * 1024 * 1024
 
 
 class LocalChannelProcess(ChannelProcess):
@@ -311,6 +315,43 @@ class LocalTarget(BaseTarget):
             local_path: Destination file.
         """
         shutil.copyfile(Path(remote_path), local_path)
+
+    async def read_range(
+        self, remote_path: str, offset: int, length: int
+    ) -> AsyncIterator[bytes]:
+        """
+        Yield exactly *length* bytes of *remote_path* from *offset* in chunks
+        of at most 8 MiB. Reads run in a thread, off the event loop.
+
+        Args:
+            remote_path: Source path (mapped to a local ``Path``).
+            offset: Start offset in bytes; must be a whole number of MiB.
+            length: Number of bytes to read.
+
+        Raises:
+            TaskExecutionError: If the file ends before *length* bytes.
+        """
+        if offset < 0 or offset % (1024 * 1024) or length < 0:
+            raise ValueError(
+                _("offset must be a non-negative multiple of 1 MiB")
+            )
+        fh = await asyncio.to_thread(Path(remote_path).open, "rb")
+        try:
+            await asyncio.to_thread(fh.seek, offset)
+            left = length
+            while left > 0:
+                chunk = await asyncio.to_thread(
+                    fh.read, min(_READ_CHUNK, left)
+                )
+                if not chunk:
+                    raise TaskExecutionError(
+                        _("'%(path)s' ended before the requested range")
+                        % {"path": remote_path}
+                    )
+                left -= len(chunk)
+                yield chunk
+        finally:
+            fh.close()
 
     async def mkdir(self, path: str) -> None:
         """

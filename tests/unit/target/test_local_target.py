@@ -20,6 +20,7 @@ Unit tests for the LocalTarget builtin target.
 """
 
 import asyncio
+import os
 import socket
 import tempfile
 from contextlib import aclosing
@@ -33,6 +34,7 @@ from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.function import FunctionTask
 from horus_runtime.context import HorusContext
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from tests.conftest import MakeTaskType
@@ -433,3 +435,81 @@ class TestLocalTargetStream:
 
         assert count == 5000
         assert await proc.wait() == 0
+
+
+_MIB = 1024 * 1024
+
+
+async def _read(
+    target: LocalTarget, path: Path, offset: int, length: int, *, base: bool
+) -> list[bytes]:
+    """Collect read_range chunks from the LocalTarget or the dd default."""
+    if base:
+        it = BaseTarget.read_range(target, path.as_posix(), offset, length)
+    else:
+        it = target.read_range(path.as_posix(), offset, length)
+    return [chunk async for chunk in it]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("base", [True, False], ids=["dd", "local"])
+class TestReadRange:
+    """
+    Tests for the dd default of BaseTarget.read_range and the LocalTarget
+    override.
+    """
+
+    async def test_ranges(self, tmp_path: Path, base: bool) -> None:
+        """First, middle and last ranges match the file slices."""
+        data = os.urandom(3 * _MIB + 123)
+        src = tmp_path / "f.bin"
+        src.write_bytes(data)
+        target = LocalTarget()
+
+        for offset, length in [(0, _MIB), (_MIB, _MIB + 5), (3 * _MIB, 123)]:
+            got = b"".join(await _read(target, src, offset, length, base=base))
+            assert got == data[offset : offset + length]
+
+    async def test_short_file_raises(self, tmp_path: Path, base: bool) -> None:
+        """A file that ends before the range raises."""
+        src = tmp_path / "f.bin"
+        src.write_bytes(b"x" * (_MIB + 10))
+
+        for offset in (0, 2 * _MIB):
+            with pytest.raises(TaskExecutionError):
+                await _read(LocalTarget(), src, offset, _MIB + 11, base=base)
+
+    async def test_unaligned_offset(self, tmp_path: Path, base: bool) -> None:
+        """An offset that is not a whole MiB is rejected."""
+        src = tmp_path / "f.bin"
+        src.write_bytes(b"x")
+
+        with pytest.raises(ValueError):
+            await _read(LocalTarget(), src, 1, 1, base=base)
+
+
+@pytest.mark.unit
+class TestReadRangeDefault:
+    """Tests specific to the dd default of BaseTarget.read_range."""
+
+    async def test_dd_failure_raises(self, tmp_path: Path) -> None:
+        """A non-zero dd exit raises TaskExecutionError."""
+        with pytest.raises(TaskExecutionError):
+            await _read(LocalTarget(), tmp_path / "missing", 0, 1, base=True)
+
+
+@pytest.mark.unit
+class TestLocalReadRangeChunks:
+    """Tests specific to LocalTarget.read_range."""
+
+    async def test_chunks_at_most_8_mib(self, tmp_path: Path) -> None:
+        """A large range is yielded in chunks of at most 8 MiB."""
+        data = os.urandom(20 * _MIB)
+        src = tmp_path / "f.bin"
+        src.write_bytes(data)
+
+        chunks = await _read(LocalTarget(), src, _MIB, 18 * _MIB, base=False)
+
+        assert len(chunks) == 3
+        assert max(len(c) for c in chunks) <= 8 * _MIB
+        assert b"".join(chunks) == data[_MIB : 19 * _MIB]
