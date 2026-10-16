@@ -45,6 +45,7 @@ from horus_builtin.workflow.map import MapOver, MapTask
 from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow
@@ -174,6 +175,24 @@ class TestFolderFanOut:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_map_does_not_take_a_cpu_from_its_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """On a one-CPU location the map parent leaves the CPU to clones."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.capacity = {map_task.target.location_id: ResourceCapacity(cpus=1)}
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
 
     async def test_clone_hand_offs_emit_no_transfer_events(
         self, tmp_path: Path, horus_context: HorusContext

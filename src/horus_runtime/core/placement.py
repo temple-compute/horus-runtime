@@ -23,11 +23,12 @@ A workflow may declare how much compute is physically available at each
 :class:`PlacementManager` gates dispatch of any *ready* task that also
 declares :attr:`~horus_runtime.core.task.base.BaseTask.resources`, so a wide
 fan-out cannot oversubscribe a shared machine (e.g. only 2 GPUs available means
-at most 2 GPU-requesting tasks run at once there).
+at most 2 GPU-requesting tasks run at once there). A task with no
+``resources`` counts as one CPU at a location that declares CPUs.
 
 Nothing here changes behavior for workflows that don't declare capacity:
-:meth:`PlacementManager.acquire` is a no-op whenever the task has no
-``resources``, or its target's location has no declared capacity, leaving
+:meth:`PlacementManager.acquire` is a no-op whenever the task's target's
+location has no declared capacity, leaving
 concurrency governed exactly as before by :class:`TargetPool` and
 ``workflow.max_concurrency``.
 """
@@ -164,6 +165,19 @@ class PlacementManager:
             if getattr(capacity, dim) is not None
         }
 
+    @staticmethod
+    def _charge(
+        total: ResourceCapacity, resources: ResourceRequest | None
+    ) -> dict[str, int]:
+        """
+        What a task reserves at a location of size *total*: its request, or
+        one CPU when it requests nothing and the location declares CPUs.
+        """
+        requested = _requested_amounts(resources) if resources else {}
+        if not requested and total.cpus:
+            return {"cpus": 1}
+        return requested
+
     def _fits(self, location_id: str, requested: dict[str, int]) -> bool:
         remaining = self._remaining[location_id]
         return all(
@@ -181,21 +195,20 @@ class PlacementManager:
         """
         Wait until *location_id* has room for *resources*, then reserve it.
 
-        A no-op whenever *resources* is ``None`` or *location_id* has no
-        declared capacity: such tasks are never gated, so behavior stays
-        identical to a workflow with no placement configured at all.
+        A no-op whenever *location_id* has no declared capacity, so behavior
+        stays identical to a workflow with no placement configured at all.
+        A task with no ``resources`` there takes one CPU when the location
+        declares CPUs, so a wide fan-out cannot oversubscribe it.
 
         Raises:
             InsufficientCapacityError: If some requested dimension exceeds
                 the location's total declared capacity, so the request could
                 never be satisfied even with nothing else running there.
         """
-        if resources is None:
-            return
         total = self._total.get(location_id)
         if total is None:
             return
-        requested = _requested_amounts(resources)
+        requested = self._charge(total, resources)
         if not requested:
             return
 
@@ -224,11 +237,10 @@ class PlacementManager:
         resources: ResourceRequest | None,
     ) -> None:
         """Return capacity reserved by a prior, matching :meth:`acquire`."""
-        if resources is None:
+        total = self._total.get(location_id)
+        if total is None:
             return
-        if location_id not in self._total:
-            return
-        requested = _requested_amounts(resources)
+        requested = self._charge(total, resources)
         if not requested:
             return
 
