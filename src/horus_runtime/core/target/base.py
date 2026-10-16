@@ -620,8 +620,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         self, remote_path: str, offset: int, length: int
     ) -> AsyncIterator[bytes]:
         """
-        Yield *length* bytes of *remote_path* starting at *offset*, or fewer
-        at end of file.
+        Yield exactly *length* bytes of *remote_path* starting at *offset*.
 
         The default runs ``dd`` over a shell channel and holds the whole range
         in memory; targets that can seek natively should override it and
@@ -634,7 +633,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
         Raises:
             ValueError: If *offset* is not MiB-aligned or *length* is negative.
-            TaskExecutionError: If ``dd`` exits non-zero.
+            TaskExecutionError: If the file ends before *length* bytes.
         """
         if offset < 0 or offset % _MIB or length < 0:
             raise ValueError(
@@ -642,20 +641,20 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             )
         if length == 0:
             return
+        # head -c, not dd count=: dd counts a short read as a whole block.
         cmd = (
             f"dd if={shlex.quote(remote_path)} bs={_MIB} "
-            f"skip={offset // _MIB} count={-(-length // _MIB)} 2>/dev/null"
+            f"skip={offset // _MIB} 2>/dev/null | head -c {length}"
         )
         proc = await self.run_command_sync(cmd)
         out, _stderr = await proc.communicate()
         rc = await proc.wait()
-        if rc != 0:
+        if rc != 0 or len(out) != length:
             raise TaskExecutionError(
                 _("Failed to read '%(path)s' on target (exit code %(rc)s)")
                 % {"path": remote_path, "rc": rc}
             )
-        if out:
-            yield out[:length]
+        yield out
 
     @abstractmethod
     async def mkdir(self, path: str) -> None:
