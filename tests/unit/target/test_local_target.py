@@ -460,22 +460,24 @@ class TestReadRange:
     """
 
     async def test_ranges(self, tmp_path: Path, base: bool) -> None:
-        """First, middle and short last ranges match the file slices."""
+        """First, middle and last ranges match the file slices."""
         data = os.urandom(3 * _MIB + 123)
         src = tmp_path / "f.bin"
         src.write_bytes(data)
         target = LocalTarget()
 
-        for offset, length in [(0, _MIB), (_MIB, _MIB + 5), (3 * _MIB, _MIB)]:
+        for offset, length in [(0, _MIB), (_MIB, _MIB + 5), (3 * _MIB, 123)]:
             got = b"".join(await _read(target, src, offset, length, base=base))
             assert got == data[offset : offset + length]
 
-    async def test_offset_past_eof(self, tmp_path: Path, base: bool) -> None:
-        """An offset past the end of the file yields nothing."""
+    async def test_short_file_raises(self, tmp_path: Path, base: bool) -> None:
+        """A file that ends before the range raises."""
         src = tmp_path / "f.bin"
-        src.write_bytes(b"x" * 10)
+        src.write_bytes(b"x" * (_MIB + 10))
 
-        assert await _read(LocalTarget(), src, 2 * _MIB, _MIB, base=base) == []
+        for offset in (0, 2 * _MIB):
+            with pytest.raises(TaskExecutionError):
+                await _read(LocalTarget(), src, offset, _MIB + 11, base=base)
 
     async def test_unaligned_offset(self, tmp_path: Path, base: bool) -> None:
         """An offset that is not a whole MiB is rejected."""
