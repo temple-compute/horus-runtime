@@ -365,7 +365,8 @@ class LeaseManager:
                 self._cancel_timer(lease)
                 continue
             if members:
-                if lease.timer is None and not lease.no_cap:
+                # After a failed drain too: the expiry retries the drain.
+                if lease.timer is None:
                     if lease.phase is not Phase.HOLDING:
                         lease.phase = Phase.HOLDING
                         lease.target.emit_node_phase("holding")

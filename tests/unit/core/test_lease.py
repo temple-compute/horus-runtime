@@ -704,6 +704,55 @@ class TestRelease:
         assert node.released == ["done"]
         assert c.runs == 1
 
+    async def test_failed_drain_with_pending_members_still_holds(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A machine kept after a failed drain still holds while its members
+        wait elsewhere: the hold expiry retries the drain and releases it.
+        """
+        del horus_context
+        evacuator.fail = True
+
+        class _Recovers(_Step):
+            async def _run(self) -> None:
+                await super()._run()
+                evacuator.fail = False
+
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0.05)
+        a = _step("a", node, tmp_path)
+        g1 = _Recovers(
+            id="g1",
+            name="g1",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FileArtifact(id="out", path=tmp_path / "g1.out")],
+            delay=0.15,
+        )
+        g2 = _step("g2", LocalTarget(), tmp_path, delay=0.5)
+        b = _step("b", node, tmp_path, inputs=["x", "y", "z"])
+        wf = _workflow(
+            tmp_path,
+            [a, g1, g2, b],
+            [
+                _edge("a", "b", "x"),
+                _edge("g2", "b", "y"),
+                _edge("g1", "b", "z"),
+            ],
+        )
+
+        await wf.run(trigger_id="a")
+
+        assert "drain_failed" in node.phases
+        assert node.released == ["idle_cap", "done"]
+        assert evacuator.calls == [("a", "out")]
+        assert node.generation == 2
+        assert b.runs == 1
+
     async def test_failed_destroy_is_retried_with_backoff(
         self,
         tmp_path: Path,
