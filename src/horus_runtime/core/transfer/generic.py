@@ -20,11 +20,13 @@ Target-agnostic transfer strategy.
 
 Moves an artifact between any two targets using only the shared filesystem
 primitives every target implements: the source packages the artifact where it
-lives, the bytes flow through the orchestrator via ``get_file`` / ``put_file``,
-and the destination unpackages it in place. It is used as the fallback when no
-location-specific strategy is registered for a ``(source, destination)`` pair.
+lives, the package flows through the orchestrator's local disk via
+``get_file_to`` / ``put_file``, and the destination unpackages it in place. It
+is used as the fallback when no location-specific strategy is registered for a
+``(source, destination)`` pair.
 """
 
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -75,12 +77,14 @@ class GenericTransfer(BaseTransferStrategy):
         pkg_src = await src_store.package(artifact)
 
         report_transfer_progress(stage="transferring")
-        data = await source.get_file(pkg_src)
-
         name = PurePosixPath(pkg_src).name
         wd = PurePosixPath(destination.resolved_working_directory)
         pkg_dst = str(wd / name)
-        await destination.put_file(data, pkg_dst)
+        # Stage on local disk so the package never sits in memory.
+        with tempfile.TemporaryDirectory() as tmp:
+            local_pkg = Path(tmp) / name
+            await source.get_file_to(pkg_src, local_pkg)
+            await destination.put_file(local_pkg, pkg_dst)
 
         # Derive dest_path from destination.resolved_working_directory so it
         # is consistent with how executors locate files (task.working_dir =

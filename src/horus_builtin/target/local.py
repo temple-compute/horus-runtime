@@ -288,7 +288,7 @@ class LocalTarget(BaseTarget):
         if isinstance(content, (bytes, bytearray)):
             dest.write_bytes(content)
         else:
-            dest.write_bytes(content.read_bytes())
+            shutil.copyfile(content, dest)
 
     async def get_file(self, remote_path: str) -> bytes:
         """
@@ -301,6 +301,16 @@ class LocalTarget(BaseTarget):
             File contents as :class:`bytes`.
         """
         return Path(remote_path).read_bytes()
+
+    async def get_file_to(self, remote_path: str, local_path: Path) -> None:
+        """
+        Copy *remote_path* on the local filesystem to *local_path*.
+
+        Args:
+            remote_path: Source path (mapped to a local ``Path``).
+            local_path: Destination file.
+        """
+        shutil.copyfile(Path(remote_path), local_path)
 
     async def mkdir(self, path: str) -> None:
         """

@@ -229,9 +229,12 @@ class _InMemoryRemoteTarget(BaseTarget):
     ) -> None: ...
 
     async def get_file(self, remote_path: str) -> bytes:
+        raise AssertionError(f"get_file({remote_path}) read a whole file")
+
+    async def get_file_to(self, remote_path: str, local_path: Path) -> None:
         data = self._tree[remote_path]
         assert data is not None
-        return data
+        local_path.write_bytes(data)
 
     async def mkdir(self, path: str) -> None:
         self._tree.setdefault(path, None)

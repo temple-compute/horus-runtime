@@ -42,8 +42,8 @@ class _FarLocalTarget(LocalTarget):
     It reuses the real local filesystem primitives but reports a unique
     ``location_id`` (so transfers do not short-circuit) and SSH-like
     ``path_on_target`` semantics (``working_directory/<name>``), letting tests
-    exercise the full package -> get_file -> put_file -> unpackage path against
-    the local filesystem.
+    exercise the full package -> get_file_to -> put_file -> unpackage path
+    against the local filesystem.
     """
 
     add_to_registry = False
@@ -322,6 +322,36 @@ class TestGenericTransfer:
             await GenericTransfer().transfer(artifact, source, destination)
 
             assert Path(dst_dir, "f.txt").read_text() == "payload"
+
+    async def test_transfer_does_not_load_package_into_memory(
+        self, horus_context: HorusContext
+    ) -> None:
+        """
+        The package moves via get_file_to; get_file is never called.
+        """
+        del horus_context
+
+        class _NoGetFileTarget(_FarLocalTarget):
+            add_to_registry = False
+
+            async def get_file(self, remote_path: str) -> bytes:
+                raise AssertionError(f"get_file({remote_path}) was called")
+
+        with (
+            tempfile.TemporaryDirectory() as src_dir,
+            tempfile.TemporaryDirectory() as dst_dir,
+        ):
+            src_data = Path(src_dir) / "data"
+            src_data.mkdir()
+            (src_data / "a.txt").write_text("A")
+
+            source = _NoGetFileTarget(working_directory=src_dir)
+            destination = _FarLocalTarget(working_directory=dst_dir)
+            artifact = FolderArtifact(id="data", path=src_data)
+
+            await GenericTransfer().transfer(artifact, source, destination)
+
+            assert (Path(dst_dir) / "data" / "a.txt").read_text() == "A"
 
 
 @pytest.mark.unit
