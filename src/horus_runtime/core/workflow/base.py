@@ -225,14 +225,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     ``run()``; do not set manually.
     """
 
-    max_concurrency: int | None = None
+    max_concurrency: int | None = Field(default=None, ge=0)
     """
     Upper bound on the number of tasks the scheduler dispatches at once.
     ``None`` (the default) applies a conservative built-in cap (see
     ``horus_builtin.workflow.scheduler.DEFAULT_MAX_CONCURRENCY``) rather than
-    dispatching every ready task at once. Set this explicitly to raise or
-    lower that cap (e.g. a shared machine with limited CPUs, or a DAG known
-    to be safe running fully in parallel).
+    dispatching every ready task at once; ``0`` means no limit. Set this
+    explicitly to raise or lower that cap (e.g. a shared machine with
+    limited CPUs, or a DAG known to be safe running fully in parallel).
     """
 
     capacity: dict[str, ResourceCapacity] | None = None

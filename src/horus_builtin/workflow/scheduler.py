@@ -63,7 +63,8 @@ Fan-out cap applied when a workflow or ``horus_map`` task leaves
 ``max_concurrency`` unset. A DAG (or map input) with no cap of its own
 dispatches every ready task/clone as its own subprocess at once, which can
 over-subscribe a modest host; this keeps that failure mode opt-in-only
-(explicitly pass a larger ``max_concurrency`` to raise it).
+(explicitly pass a larger ``max_concurrency`` to raise it, or ``0`` for no
+limit).
 """
 
 
@@ -93,10 +94,15 @@ class TargetPool:
         # id(declared_target). Lazily seeded with the declared target itself
         # on first acquisition (see `acquire`).
         self._idle: dict[int, list[BaseTarget]] = {}
-        self._semaphore = asyncio.Semaphore(
-            max_concurrency
-            if max_concurrency is not None
-            else DEFAULT_MAX_CONCURRENCY
+        # ``0`` means no limit: no semaphore at all.
+        self._semaphore = (
+            None
+            if max_concurrency == 0
+            else asyncio.Semaphore(
+                max_concurrency
+                if max_concurrency is not None
+                else DEFAULT_MAX_CONCURRENCY
+            )
         )
 
     async def acquire(self, declared_target: BaseTarget) -> BaseTarget:
@@ -107,7 +113,8 @@ class TargetPool:
         target, so the cap applies to genuinely concurrent dispatches rather
         than just to distinct target instances.
         """
-        await self._semaphore.acquire()
+        if self._semaphore is not None:
+            await self._semaphore.acquire()
 
         idle = self._idle.setdefault(id(declared_target), [declared_target])
         if idle:
@@ -120,7 +127,7 @@ class TargetPool:
     @property
     def full(self) -> bool:
         """Whether :meth:`acquire` would wait for a concurrency slot."""
-        return self._semaphore.locked()
+        return self._semaphore is not None and self._semaphore.locked()
 
     def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
         """
@@ -128,7 +135,8 @@ class TargetPool:
         *declared_target*) to the idle pool.
         """
         self._idle[id(declared_target)].append(target)
-        self._semaphore.release()
+        if self._semaphore is not None:
+            self._semaphore.release()
 
 
 async def execute_task(
