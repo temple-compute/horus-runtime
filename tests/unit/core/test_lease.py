@@ -605,6 +605,49 @@ class TestRelease:
         assert node._node["keepalives"] > 0
         assert node.released == ["done"]
 
+    async def test_keepalive_pings_machines_at_once_with_a_timeout(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hung ping times out and does not delay the other machines."""
+        del horus_context
+        monkeypatch.setattr(lease_module, "KEEPALIVE_TIMEOUT_S", 0.05)
+        pinged: list[str] = []
+
+        class _Hangs(FakeNode):
+            add_to_registry: ClassVar[bool] = False
+
+            async def keepalive(self) -> None:
+                await asyncio.sleep(3600)
+
+        class _Counts(FakeNode):
+            add_to_registry: ClassVar[bool] = False
+
+            async def keepalive(self) -> None:
+                pinged.append(self.lease_key)
+
+        manager = lease_module.LeaseManager(_workflow(tmp_path, [], []))
+        for node in (
+            _Hangs(working_directory=(tmp_path / "h").as_posix()),
+            _Counts(working_directory=(tmp_path / "c").as_posix()),
+        ):
+            node._node["live"] = True
+            lease = manager._open_lease(node)
+            assert lease is not None
+            lease.running.add("t")
+        assert manager._keeper is not None
+        manager._keeper.cancel()
+        monkeypatch.setattr(manager, "keepalive_interval_s", 0.0)
+        keeper = asyncio.create_task(manager._keep_alive())
+
+        await asyncio.sleep(0.2)
+        keeper.cancel()
+
+        # Pinged on each round, not stuck behind the hung machine.
+        assert len(pinged) >= 2
+
     async def test_condition_sentinel_outlives_its_machine(
         self,
         tmp_path: Path,

@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 KEEPALIVE_INTERVAL_S = 300.0
 """Seconds between ``keepalive()`` calls on every busy or holding machine."""
 
+KEEPALIVE_TIMEOUT_S = 30.0
+"""Cap on one ``keepalive()`` call."""
+
 EVACUATION_TIMEOUT_S = 6 * 3600.0
 """Cap on one drain; past it the drain fails and the machine is kept."""
 
@@ -679,22 +682,31 @@ class LeaseManager:
         """
         Ping every live machine that a member is running on, or that is in
         its hold, so its idle watchdog and life cap do not fire. A machine
-        stuck draining, kept after a failed drain or destroy, is not pinged.
+        stuck draining, or kept after a failed drain or destroy, is not
+        pinged outside a hold.
         """
         while True:
             await asyncio.sleep(self.keepalive_interval_s)
-            for lease in list(self._leases.values()):
-                if lease.target.is_live and (
-                    lease.running or lease.timer is not None
-                ):
-                    try:
-                        await lease.target.keepalive()
-                    except Exception as exc:
-                        # One failed ping must not stop the others.
-                        horus_logger.log.warning(
-                            _("Keepalive of machine '%(key)s' failed: %(e)s")
-                            % {"key": lease.key, "e": exc}
-                        )
+            await asyncio.gather(
+                *(
+                    self._ping(lease)
+                    for lease in list(self._leases.values())
+                    if lease.target.is_live
+                    and (lease.running or lease.timer is not None)
+                )
+            )
+
+    async def _ping(self, lease: Lease) -> None:
+        """One keepalive; a failed or hung ping must not stop the others."""
+        try:
+            await asyncio.wait_for(
+                lease.target.keepalive(), KEEPALIVE_TIMEOUT_S
+            )
+        except Exception as exc:
+            horus_logger.log.warning(
+                _("Keepalive of machine '%(key)s' failed: %(e)s")
+                % {"key": lease.key, "e": exc or type(exc).__name__}
+            )
 
     # Run end
 
