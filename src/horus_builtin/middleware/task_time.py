@@ -26,6 +26,7 @@ from typing import TypeVar
 
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
@@ -57,6 +58,14 @@ class TaskTimeMiddleware(TaskMiddleware):
             message = _(
                 "Task %(task_name)s was canceled after %(elapsed).2f seconds."
             )
+            raise
+        except TargetLostError:
+            # The scheduler retries it on a new machine.
+            if middleware_context.task._retry_on_target_loss:  # noqa: SLF001
+                message = _(
+                    "Task %(task_name)s lost its machine after "
+                    "%(elapsed).2f seconds."
+                )
             raise
         finally:
             elapsed = time.perf_counter() - start

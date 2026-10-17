@@ -228,7 +228,9 @@ class ArtifactLostError(WorkflowError):
     been released (or lost) and was not evacuated first.
     """
 
-    def __init__(self, output_id: str, task_id: str, ref: str, gen: int):
+    def __init__(
+        self, output_id: str, task_id: str, ref: str, gen: int | None
+    ):
         super().__init__(
             _(
                 "Output '%(out)s' of '%(task)s' was on machine '%(ref)s' "

@@ -48,7 +48,10 @@ from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.ref import target_or_ref_schema
-from horus_runtime.core.task.exceptions import summarize_exception
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    summarize_exception,
+)
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -60,6 +63,9 @@ if TYPE_CHECKING:
 
 InputDigests = Callable[[], Awaitable[dict[str, str | None]]]
 """Returns each input's digest by id, ``None`` where it cannot be hashed."""
+
+MAX_TARGET_LOSS_RETRIES = 1
+"""How many times a task is re-run after a :class:`TargetLostError`."""
 
 
 class BaseTask(AutoRegistry, entry_point="task"):
@@ -261,6 +267,16 @@ class BaseTask(AutoRegistry, entry_point="task"):
     current run every time, never round-tripped through a stored snapshot.
     """
 
+    _target_loss_retries: int = PrivateAttr(default=0)
+    """Re-runs spent on :class:`TargetLostError`, up to the max."""
+
+    _retry_on_target_loss: bool = PrivateAttr(default=False)
+    """
+    Set by the scheduler before dispatch: a :class:`TargetLostError` from
+    this run will be retried, so :meth:`run` leaves the task ``PENDING``
+    instead of ``FAILED``.
+    """
+
     @property
     def fingerprinted_inputs(self) -> list[BaseArtifact]:
         """
@@ -353,6 +369,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``COMPLETED``   — set on clean exit
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
+        - ``PENDING``   — instead of ``FAILED`` for a
+                          :class:`TargetLostError` the scheduler will retry
 
         Terminal statuses are set as soon as ``_run()`` returns or raises,
         still inside the ``TaskMiddleware`` chain, so middleware sees them on
@@ -409,7 +427,7 @@ class BaseTask(AutoRegistry, entry_point="task"):
                         self._finish(TaskStatus.CANCELED)
                         raise
                     except Exception as exc:
-                        self._finish(TaskStatus.FAILED, exc)
+                        self._fail_or_wait_retry(exc)
                         raise
                     self._finish(TaskStatus.COMPLETED)
 
@@ -421,10 +439,21 @@ class BaseTask(AutoRegistry, entry_point="task"):
                 self._finish(TaskStatus.CANCELED)
                 raise
             except Exception as exc:
-                self._finish(TaskStatus.FAILED, exc)
+                self._fail_or_wait_retry(exc)
                 raise
             else:
                 self._finish(TaskStatus.COMPLETED)
+
+    def _fail_or_wait_retry(self, exc: Exception) -> None:
+        """
+        Record ``FAILED``, or ``PENDING`` when the scheduler will retry
+        *exc* on a new machine, so no status push shows a failure first.
+        """
+        if isinstance(exc, TargetLostError) and self._retry_on_target_loss:
+            self.status = TaskStatus.PENDING
+            self.error = None
+        else:
+            self._finish(TaskStatus.FAILED, exc)
 
     def _finish(
         self, status: TaskStatus, exc: Exception | None = None
@@ -528,6 +557,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         self.error = None
         self.started_at = None
         self.finished_at = None
+        self._target_loss_retries = 0
+        self._retry_on_target_loss = False
         horus_logger.log.debug(
             _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
         )

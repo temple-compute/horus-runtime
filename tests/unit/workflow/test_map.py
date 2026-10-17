@@ -21,14 +21,16 @@ fan-out behaviour as an ordinary DAG node.
 """
 
 import asyncio
+import contextvars
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import PrivateAttr, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
@@ -44,11 +46,17 @@ from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.map import MapOver, MapTask
 from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
+from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.lease import BaseEvacuator
+from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.task.exceptions import TargetLostError
+from horus_runtime.core.task.status import TERMINAL_STATUSES, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
-from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.exceptions import ArtifactLostError
 
 # The body sees the item under `over.as` (`batch`), the collection it came
 # from still under its own id (`batches`), and the folder output id (`scored`)
@@ -275,6 +283,24 @@ class TestFolderFanOut:
         assert {
             (e.source, e.target) for e in wf.edges if e.target in clone_ids
         } == {("score", "score[0]"), ("score", "score[1]")}
+
+    def test_clones_start_without_the_maps_run_state(
+        self, tmp_path: Path
+    ) -> None:
+        """A clone does not inherit the map's times or error."""
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=tmp_path)
+        )
+        map_task.started_at = map_task.finished_at = datetime.now(UTC)
+        map_task.error = "RuntimeError: boom"
+
+        clone = map_task._clone(
+            "0", FileArtifact(id="batches", path=tmp_path / "a"), tmp_path
+        )
+
+        assert clone.started_at is None
+        assert clone.finished_at is None
+        assert clone.error is None
 
 
 @pytest.mark.unit
@@ -1375,3 +1401,504 @@ class TestSlotNames:
 
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+
+# Set while the ready callbacks run, like terraform's provisioning context.
+_READY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_READY", default=False
+)
+
+
+class _Node(LocalTarget):
+    """
+    A releasable machine at its own location (inputs are copied onto it),
+    lost just before the clone ``lose_before`` starts, or while the clone
+    ``lose_during`` runs (which then raises ``TargetLostError``): its
+    directory is wiped, its generation bumped and its ready callbacks run.
+    Like terraform, a leaf task's attempt is pinned to the generation it
+    first used, keyed to ``(task.id, _target_loss_retries)``; a map is not.
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_node"
+    releasable: ClassVar[bool] = True
+    lose_before: str | None = None
+    lose_during: str | None = None
+
+    _node: dict[str, Any] = PrivateAttr(
+        default_factory=lambda: {
+            "gen": 1,
+            "live": True,
+            "callbacks": [],
+            "errors": [],
+            "lost_for": set(),
+            "restaging": False,
+            "commands": [],
+        }
+    )
+    _pin: tuple[str, int, int] | None = PrivateAttr(default=None)
+
+    @property
+    def location_id(self) -> str:
+        """Not the orchestrator's filesystem."""
+        return "fake://node"
+
+    @property
+    def hold_timeout_s(self) -> float:
+        """Seconds the machine holds."""
+        return 30.0
+
+    @property
+    def is_live(self) -> bool:
+        """Whether the machine is up; any use of it while down provisions."""
+        return bool(self._node["live"])
+
+    @property
+    def generation(self) -> int:
+        """Provision count."""
+        return int(self._node["gen"])
+
+    def on_ready(self, callback: Any) -> None:
+        """Keep *callback* for the next generation."""
+        self._node["callbacks"].append(callback)
+
+    async def lose(self) -> None:
+        """Replace the machine with an empty one."""
+        directory = Path(self.resolved_working_directory)
+        shutil.rmtree(directory)
+        directory.mkdir()
+        self._node["gen"] += 1
+        self._node["restaging"] = True
+        token = _READY.set(True)
+        for callback in self._node["callbacks"]:
+            try:
+                await callback()
+            except Exception as exc:  # logged, not raised, like terraform
+                self._node["errors"].append(exc)
+        _READY.reset(token)
+        self._node["restaging"] = False
+
+    def _check_pin(self) -> None:
+        """Raise when the bound attempt's generation was replaced."""
+        task = self._task
+        if task is None or task.dispatches_children or self._node["restaging"]:
+            return
+        if task.status in TERMINAL_STATUSES:
+            self._pin = None
+            return
+        key = (task.id, task._target_loss_retries)
+        if self._pin is None or self._pin[:2] != key:
+            self._pin = (*key, self.generation)
+        elif self._pin[2] != self.generation:
+            raise TargetLostError("The machine was replaced.")
+
+    async def _up(self) -> None:
+        """Provision a new, empty generation if the machine is down."""
+        if not self._node["live"]:
+            self._node["live"] = True
+            await self.lose()
+
+    async def get_file(self, remote_path: str) -> bytes:
+        """Provision first, like a terraform target."""
+        await self._up()
+        self._check_pin()
+        return await super().get_file(remote_path)
+
+    async def _lose_for(self, task_id: str | None) -> bool:
+        """Lose the machine once, if the bound task is *task_id*."""
+        task = self._task
+        if task is None or task.id != task_id:
+            return False
+        if task.id in self._node["lost_for"]:
+            return False
+        self._node["lost_for"].add(task.id)
+        await self.lose()
+        return True
+
+    async def mkdir(self, path: str) -> None:
+        """Lose the machine before the chosen clone first touches it."""
+        await self._up()
+        await self._lose_for(self.lose_before)
+        self._check_pin()
+        await super().mkdir(path)
+
+    async def run_command(self, cmd: str, **kwargs: Any) -> ChannelProcess:
+        """Lose the machine under the chosen clone."""
+        await self._up()
+        if await self._lose_for(self.lose_during):
+            raise TargetLostError("node lost")
+        self._check_pin()
+        task = self._task
+        self._node["commands"].append((task and task.id, _READY.get()))
+        return await super().run_command(cmd, **kwargs)
+
+    async def put_file(self, content: bytes | Path, remote_path: str) -> None:
+        """Lose the machine under the chosen task's write."""
+        await self._up()
+        if await self._lose_for(self.lose_during):
+            raise TargetLostError("node lost")
+        self._check_pin()
+        await super().put_file(content, remote_path)
+
+
+class _S3Evacuator(BaseEvacuator):
+    """Recovers every output from ``stored``, without the machine."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_s3"
+    stored: ClassVar[Path | None] = None
+
+    async def evacuate(
+        self, task: Any, output: BaseArtifact, source: Any
+    ) -> EdgeSource:
+        raise NotImplementedError
+
+    async def recover(
+        self, task: Any, output: BaseArtifact
+    ) -> EdgeSource | None:
+        if self.stored is None:
+            return None
+        return EdgeSource(
+            LocalTarget(),
+            output.model_copy(update={"path": self.stored}),
+            task.id,
+        )
+
+
+def _task_messages(emit: Any, task_id: str) -> list[str]:
+    """Messages of the task events *emit* was called with for *task_id*."""
+    return [
+        c.args[0].message or ""
+        for c in emit.call_args_list
+        if isinstance(c.args[0], HorusTaskEvent)
+        and c.args[0].task_id == task_id
+    ]
+
+
+def _on_node(
+    tmp_path: Path,
+    names: list[str],
+    *,
+    produced_on_node: bool,
+    lose_before: str | None = "score[1]",
+    lose_during: str | None = None,
+) -> tuple[HorusWorkflow, _Node]:
+    """
+    ``split -> score`` with the map on a node lost before its second clone
+    (by default). The split runs on the same node too when
+    *produced_on_node*.
+    """
+    node_dir = tmp_path / "node"
+    node_dir.mkdir()
+    node = _Node(
+        working_directory=node_dir.as_posix(),
+        lose_before=lose_before,
+        lose_during=lose_during,
+    )
+    split = _split_task(node_dir if produced_on_node else tmp_path, names)
+    if produced_on_node:
+        split.target = node
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in")),
+        output_path=(node_dir / "scored_out").as_posix(),
+        max_concurrency=1,
+    )
+    map_task.target = node
+    return _wire(tmp_path, split=split, map_task=map_task), node
+
+
+@pytest.mark.unit
+class TestRestage:
+    """The map's machine is replaced while its clones run."""
+
+    async def test_pending_clones_find_their_inputs(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The inputs come back from the orchestrator, slot dirs too, and the
+        clone that finished on the lost machine runs again, with an event.
+        """
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert node._node["errors"] == []
+        assert (
+            "Output of score[0] lost with its machine; running it again."
+            in _task_messages(emit, "score[0]")
+        )
+        # Started by the restage, not after the first wave.
+        assert list(cast(MapTask, wf.tasks[1])._early_reruns) == [0]
+        scored = tmp_path / "node" / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_early_reruns_do_not_inherit_the_ready_context(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A re-run started from a ready callback runs in the map's context,
+        so a target's provisioning state set there does not leak into it.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert list(cast(MapTask, wf.tasks[1])._early_reruns) == [0]
+        commands = node._node["commands"]
+        assert ("score[0]", False) in commands
+        assert not any(ready for _, ready in commands)
+
+    async def test_the_map_completes_under_the_pin(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The clone that first read the lost generation fails its attempt on
+        the pin and retries; the map, not pinned, writes its manifest on
+        the new generation and completes.
+        """
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert any(
+            "Node lost; retrying score[1]" in m
+            for m in _task_messages(emit, "score[1]")
+        )
+        assert wf.tasks[1]._target_loss_retries == 0
+        assert (tmp_path / "node" / ".horus" / "score.json").exists()
+
+    async def test_a_clone_lost_mid_run_is_retried(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The clone running when the machine goes runs again on the new one;
+        the folder has every slot.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+            lose_during="score[1]",
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_machine_down_after_the_fan_out_reruns_every_slot(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The machine dies after the last clone, before any re-provision:
+        every slot is lost and runs again on the next generation.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+        )
+        rerun_lost = MapTask._rerun_lost
+
+        async def die_first(self: MapTask, *args: Any) -> None:
+            node._node["live"] = False
+            await rerun_lost(self, *args)
+
+        monkeypatch.setattr(MapTask, "_rerun_lost", die_first)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_loss_after_the_fan_out_retries_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The machine goes while the map writes its manifest: the map runs
+        again on the next generation and its folder has every slot.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+            lose_during="score",
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_pinned_inputs_are_not_restaged_silently(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A map whose inputs a loop pinned in place says it cannot restage."""
+        wf, node = _on_node(
+            tmp_path, ["a.txt"], produced_on_node=False, lose_before=None
+        )
+        map_task = cast(MapTask, wf.tasks[1])
+        map_task.inputs[0].pinned = True
+        map_task.status = TaskStatus.RUNNING
+        node._node["gen"] = 2
+        horus_context.workflow = wf
+
+        with (
+            patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit,
+            pytest.raises(RuntimeError, match="pinned"),
+        ):
+            await map_task._restage()
+
+        assert any(
+            "could not restage" in m for m in _task_messages(emit, "score")
+        )
+
+    async def test_a_second_loss_without_budget_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A clone already retried once, whose slot is lost again, fails the
+        map instead of leaving its slot missing.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_during="score[0]",
+        )
+
+        with pytest.raises(ExceptionGroup) as excinfo:
+            await wf.run(trigger_id="split")
+        assert excinfo.group_contains(TargetLostError)
+
+        assert node.generation == 3
+        assert wf.status.value == "failed"
+
+    async def test_a_second_loss_without_budget_drops_the_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """With ``drop``, that clone's slot is dropped and reported."""
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_during="score[0]",
+        )
+        cast(MapTask, wf.tasks[1]).on_item_failure = "drop"
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert node.generation == 3
+        assert wf.status.value == "completed"
+        scored = tmp_path / "node" / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["1", "2"]
+        [message] = _drop_messages(emit)
+        assert "lost with its machine" in message
+        clone = next(t for t in wf.tasks if t.id == "score[0]")
+        assert clone.status == TaskStatus.FAILED
+        assert _task_messages(emit, "score[0]")[-1] == (
+            "The output of score[0] was lost with its machine."
+        )
+
+    async def test_producer_on_the_lost_node_is_recovered(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Run e8454042: the map's input was produced on the same node, so it
+        comes back from the evacuator's copy.
+        """
+        del horus_context
+        copy = tmp_path / "s3" / "batches"
+        copy.mkdir(parents=True)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (copy / name).write_text(name)
+        monkeypatch.setattr(_S3Evacuator, "stored", copy)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=True
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node._node["errors"] == []
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in ((1, "b.txt"), (2, "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_nothing_to_restage_from_fails_loudly(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No copy of the lost input: an event says why the clones fail."""
+        monkeypatch.setattr(_S3Evacuator, "stored", None)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=True
+        )
+
+        with (
+            patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit,
+            pytest.raises(ExceptionGroup) as excinfo,
+        ):
+            await wf.run(trigger_id="split")
+        assert excinfo.group_contains(ArtifactDoesNotExistError)
+
+        assert wf.status.value == "failed"
+        assert [type(e) for e in node._node["errors"]] == [ArtifactLostError]
+        assert any(
+            isinstance(c.args[0], HorusTaskEvent)
+            and "could not restage" in (c.args[0].message or "")
+            for c in emit.call_args_list
+        )

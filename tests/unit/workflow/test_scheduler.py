@@ -50,13 +50,17 @@ from horus_runtime.core.placement import (
 )
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    TaskExecutionError,
+)
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.core.workflow.status import WorkflowStatus
+from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
 
 def _task(
@@ -1121,3 +1125,261 @@ def test_negative_max_concurrency_is_rejected() -> None:
     """Only ``0`` and up are valid; ``0`` is the no-limit value."""
     with pytest.raises(ValueError):
         HorusWorkflow(name="w", tasks=[], max_concurrency=-1)
+
+
+class _LosingTask(HorusTask):
+    """Loses its machine on each of its first ``losses`` runs."""
+
+    add_to_registry: ClassVar[bool] = False
+    losses: int = 0
+
+    async def _run(self) -> None:
+        self.runs += 1
+        if self.runs <= self.losses:
+            raise TargetLostError("node gone")
+
+
+class _LosingMapTask(_LosingTask):
+    """Stands in for a map: it dispatches children."""
+
+    dispatches_children: ClassVar[bool] = True
+
+
+class _Node(LocalTarget):
+    """A releasable machine that runs one member at a time."""
+
+    add_to_registry = False
+    releasable: ClassVar[bool] = True
+
+    @property
+    def member_cap(self) -> int | None:
+        return 1
+
+    @property
+    def is_live(self) -> bool:
+        return True
+
+    @property
+    def hold_timeout_s(self) -> float:
+        return 30.0
+
+
+@pytest.mark.unit
+class TestRetryOnTargetLoss:
+    """
+    A ``TargetLostError`` re-runs the task once on a new machine. Any other
+    failure, or a second loss, fails it as before.
+    """
+
+    async def _run_one(
+        self,
+        tmp_path: Path,
+        *,
+        losses: int,
+        task_cls: type[_LosingTask] = _LosingTask,
+    ) -> _LosingTask:
+        task = _task("t", tmp_path=tmp_path, task_cls=task_cls)
+        assert isinstance(task, _LosingTask)
+        task.losses = losses
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+        return task
+
+    async def test_lost_once_runs_twice_and_completes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The retry runs on the new machine and the task completes."""
+        events: list[object] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            task = await self._run_one(tmp_path, losses=1)
+
+        assert task.runs == 2
+        assert task.status == TaskStatus.COMPLETED
+        assert task.error is None
+        assert any(
+            "Node lost; retrying t" in getattr(event, "message", "")
+            for event in events
+        )
+
+    async def test_lost_twice_fails(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The task ran twice, once per allowed attempt, and ends FAILED."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 2
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        with pytest.raises(TargetLostError):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 2
+        assert task.status == TaskStatus.FAILED
+        assert task.error == "TargetLostError: node gone"
+
+        await task.reset()
+        assert task._target_loss_retries == 0
+        assert not task._retry_on_target_loss
+
+    async def test_the_retry_pulls_its_inputs_again(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The lease manager sees the retry pulling, so no machine holding one
+        of its inputs is released under it.
+        """
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 1
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        leases = wf.leases
+        pulling: list[bool] = []
+        transferred = leases.inputs_transferred
+
+        def record(task: HorusTask) -> None:
+            pulling.append(
+                "t" in leases._pulling and "t" not in leases._inputs_done
+            )
+            transferred(task)
+
+        with patch.object(leases, "inputs_transferred", side_effect=record):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 2
+        assert pulling == [True, True]
+
+    async def test_each_run_has_its_own_budget(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A workflow run again gets a fresh retry, and the retry flag does
+        not outlive the attempt.
+        """
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 1
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+        assert not task._retry_on_target_loss
+
+        task.losses = 3
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 4
+        assert task.status == TaskStatus.COMPLETED
+
+    async def test_plain_failure_runs_once(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A real task failure is not node loss and is never retried."""
+        del horus_context
+
+        class FailingTask(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                self.runs += 1
+                raise TaskExecutionError("exit code 1")
+
+        task = _task("t", tmp_path=tmp_path, task_cls=FailingTask)
+        wf = HorusWorkflow(name="plain", tasks=[task])
+        with pytest.raises(TaskExecutionError, match="exit code 1"):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 1
+        assert task.status == TaskStatus.FAILED
+
+    async def test_map_is_retried_on_its_own_loss(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A loss of the map's own, after its fan-out, is retried once."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingMapTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 1
+        wf = HorusWorkflow(name="map", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 2
+        assert task.status == TaskStatus.COMPLETED
+
+    async def test_no_failed_status_before_the_retry(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A middleware reporting status on its way out sees ``PENDING`` for
+        the lost run, never ``FAILED``.
+        """
+        del horus_context
+        seen: list[TaskStatus] = []
+        original_registry = list(TaskMiddleware.registry)
+
+        class RecordingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, context: TaskMiddlewareContext) -> None:
+                seen.append(context.task.status)
+
+        TaskMiddleware.registry = [*original_registry, RecordingMiddleware]
+        try:
+            task = await self._run_one(tmp_path, losses=1)
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert seen == [TaskStatus.PENDING, TaskStatus.COMPLETED]
+        assert task.status == TaskStatus.COMPLETED
+
+    async def test_member_cap_one_keeps_slots_balanced(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Two members of a one-slot machine, each lost once, retry inside
+        their slot and placement reservation: no deadlock, and both are
+        back once the run ends.
+        """
+        del horus_context
+        node = _Node(working_directory=tmp_path.as_posix())
+        location_id = node.location_id
+        tasks = [
+            _task(
+                task_id,
+                tmp_path=tmp_path,
+                task_cls=_LosingTask,
+                target=node,
+                resources=ResourceRequest(gpus=1),
+            )
+            for task_id in ("a", "b")
+        ]
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        for task in tasks:
+            assert isinstance(task, _LosingTask)
+            task.losses = 1
+        wf = HorusWorkflow(
+            name="capped",
+            tasks=[root, *tasks],
+            edges=[
+                WorkflowEdge(source="root", target=task.id) for task in tasks
+            ],
+            capacity={location_id: ResourceCapacity(gpus=1)},
+        )
+        slots: list[asyncio.Semaphore] = []
+        member_slot = wf.leases.member_slot
+
+        async def record_slot(task: HorusTask) -> None:
+            await member_slot(task)
+            lease = wf.leases._lease_for(task.target)
+            if lease is not None and lease.slots is not None:
+                slots.append(lease.slots)
+
+        with patch.object(wf.leases, "member_slot", side_effect=record_slot):
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert [task.runs for task in tasks] == [2, 2]
+        assert all(task.status == TaskStatus.COMPLETED for task in tasks)
+        assert slots
+        assert all(slot._value == 1 for slot in slots)
+        assert wf.placement._remaining[location_id] == {"gpus": 1}

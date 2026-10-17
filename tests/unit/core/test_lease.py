@@ -228,6 +228,7 @@ class _RecordingEvacuator(BaseEvacuator):
     calls: ClassVar[list[tuple[str, str]]] = []
     fail: ClassVar[bool] = False
     delay: ClassVar[float] = 0.0
+    recovered: ClassVar[Path | None] = None
 
     async def evacuate(
         self, task: Any, output: BaseArtifact, source: BaseTarget
@@ -239,6 +240,19 @@ class _RecordingEvacuator(BaseEvacuator):
         self.calls.append((task.id, output.id))
         return EdgeSource(LocalTarget(), output, task.id)
 
+    async def recover(
+        self, task: Any, output: BaseArtifact
+    ) -> EdgeSource | None:
+        await asyncio.sleep(self.delay)
+        self.calls.append((task.id, output.id))
+        if self.recovered is None:
+            return None
+        return EdgeSource(
+            LocalTarget(),
+            output.model_copy(update={"path": self.recovered}),
+            task.id,
+        )
+
 
 @pytest.fixture
 def evacuator(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingEvacuator]:
@@ -246,6 +260,7 @@ def evacuator(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingEvacuator]:
     _RecordingEvacuator.calls = []
     _RecordingEvacuator.fail = False
     _RecordingEvacuator.delay = 0.0
+    _RecordingEvacuator.recovered = None
     monkeypatch.setattr(lease_module, "_pick_evacuator", _RecordingEvacuator)
     return _RecordingEvacuator
 
@@ -890,6 +905,33 @@ class TestRelease:
         assert calls == []
         await leases.aclose(abort=True)
 
+    async def test_run_end_releases_a_cold_machine(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A machine down at run end is released too, so a destroy of a lost
+        generation still in flight is awaited.
+        """
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        wf = _workflow(tmp_path, [_step("a", node, tmp_path)], [])
+        assert wf.leases._open_lease(node) is not None
+        reasons: list[str] = []
+
+        async def release(self: FakeNode, reason: str) -> None:
+            del self
+            reasons.append(reason)
+
+        monkeypatch.setattr(FakeNode, "release", release)
+
+        await wf.leases.aclose(abort=False)
+
+        assert not node.is_live
+        assert reasons == ["run_end"]
+
     async def test_non_releasable_targets_get_no_lease(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -1024,6 +1066,95 @@ class TestLostArtifacts:
 
         with pytest.raises(ArtifactLostError, match="gen 1"):
             await wf.transfer_artifacts(b)
+
+    async def test_lost_output_is_recovered(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """The evacuator finds the output elsewhere: read it from there."""
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(tmp_path, [a, b], [_edge("a", "b", "x")])
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=True, gen=2)
+        evacuator.recovered = tmp_path / "recovered.out"
+        evacuator.recovered.write_text("payload")
+
+        await wf.transfer_artifacts(b)
+
+        assert Path(b.inputs[0].path) == evacuator.recovered
+        relocated = wf._relocations[("a", "out")]
+        assert relocated.artifact is not None
+        assert Path(relocated.artifact.path) == evacuator.recovered
+
+    async def test_nothing_recovered_raises(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """The evacuator finds nothing: the output is lost, as before."""
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(tmp_path, [a, b], [_edge("a", "b", "x")])
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=False, gen=1)
+
+        with pytest.raises(ArtifactLostError, match="gen 1"):
+            await wf.transfer_artifacts(b)
+        assert not wf._relocations
+
+    async def test_concurrent_consumers_recover_once(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """Two consumers of one lost output: one recovery, both read it."""
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        c = _step("c", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(
+            tmp_path, [a, b, c], [_edge("a", "b", "x"), _edge("a", "c", "x")]
+        )
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=True, gen=2)
+        evacuator.delay = 0.05
+        evacuator.recovered = tmp_path / "recovered.out"
+        evacuator.recovered.write_text("payload")
+
+        await asyncio.gather(
+            wf.transfer_artifacts(b), wf.transfer_artifacts(c)
+        )
+
+        assert evacuator.calls == [("a", "out")]
+        assert Path(b.inputs[0].path) == evacuator.recovered
+        assert Path(c.inputs[0].path) == evacuator.recovered
+
+    async def test_a_producer_not_in_the_workflow_is_not_recovered(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """No task to recover for: nothing found, no crash."""
+        del horus_context
+        evacuator.recovered = tmp_path / "recovered.out"
+        wf = _workflow(tmp_path, [], [])
+        source = EdgeSource(
+            LocalTarget(), FileArtifact(id="out", path=Path("x")), "gone"
+        )
+
+        assert await wf.leases.recover(source) is None
+        assert evacuator.calls == []
 
     async def test_stale_source_map_follows_a_relocation(
         self, tmp_path: Path, horus_context: HorusContext

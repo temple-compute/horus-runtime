@@ -141,6 +141,16 @@ class BaseEvacuator(AutoRegistry, entry_point="evacuator"):
     ) -> "EdgeSource":
         """Copy *output* of *task* off *source*; return its new source."""
 
+    async def recover(
+        self, task: "BaseTask", output: "BaseArtifact"
+    ) -> "EdgeSource | None":
+        """
+        Where *output* of *task* can be read now that its machine is gone,
+        without touching the machine; ``None`` if nowhere.
+        """
+        del task, output
+        return None
+
 
 class OrchestratorEvacuator(BaseEvacuator):
     """
@@ -233,6 +243,7 @@ class LeaseManager:
         self._reading: dict[str, int] = {}
         self._snapshots: dict[tuple[str, str], bytes | None] = {}
         self._produced: dict[tuple[str, str], int] = {}
+        self._recovering: dict[tuple[str, str], asyncio.Lock] = {}
         self._state: LeaseState | None = None
         self._keeper: asyncio.Task[None] | None = None
         self._source_map_cache: (
@@ -284,6 +295,45 @@ class LeaseManager:
         """Machine generation *task_id* produced *output_id* on, if known."""
         return self._produced.get((task_id, output_id))
 
+    def output_lost(
+        self, task_id: str, output_id: str, target: BaseTarget
+    ) -> bool:
+        """
+        Whether *output_id* of *task_id* went away with its machine: the
+        machine is down, or not the generation that produced it.
+        """
+        produced = self._produced.get((task_id, output_id))
+        return produced is not None and (
+            not target.is_live or produced != target.generation
+        )
+
+    def forget(self, task: "BaseTask") -> None:
+        """Drop the generations recorded for *task*'s outputs."""
+        for output in task.outputs:
+            self._produced.pop((task.id, output.id), None)
+
+    async def recover(self, source: "EdgeSource") -> "EdgeSource | None":
+        """
+        Where the lost output of *source* can be read now, recorded as a
+        relocation; ``None`` if nowhere. One recovery per output at a time.
+        """
+        assert source.task_id is not None and source.artifact is not None
+        key = (str(source.task_id), source.artifact.id)
+        async with self._recovering.setdefault(key, asyncio.Lock()):
+            # Another consumer may have recovered it while this one waited.
+            relocated = self.workflow._relocated(source)  # noqa: SLF001
+            if relocated is not source:
+                return relocated
+            task = next(
+                (t for t in self.workflow.tasks if t.id == key[0]), None
+            )
+            if task is None:
+                return None
+            recovered = await _pick_evacuator().recover(task, source.artifact)
+            if recovered is not None:
+                self.workflow.relocate_output(*key, recovered)
+            return recovered
+
     # Per-task hooks (``execute_task``)
 
     async def member_slot(self, task: "BaseTask") -> None:
@@ -320,6 +370,11 @@ class LeaseManager:
         """*task* no longer needs any other machine's outputs."""
         self._inputs_done.add(task.id)
         self._done_pulling(task)
+
+    def repull(self, task: "BaseTask") -> None:
+        """*task* pulls its inputs again (a retry, or a map's restage)."""
+        self._inputs_done.discard(task.id)
+        self._pulling.add(task.id)
 
     def _done_pulling(self, task: "BaseTask") -> None:
         self._pulling.discard(task.id)
@@ -717,7 +772,8 @@ class LeaseManager:
     async def aclose(self, *, abort: bool) -> None:
         """
         End of run: stop timers, finish (or, on *abort*, cancel) in-flight
-        drains, then release every machine still live, without evacuation.
+        drains, then release every machine, without evacuation. A cold one
+        may still be destroying a lost generation in the background.
         """
         background: list[asyncio.Task[None]] = []
         if self._keeper is not None:
@@ -745,9 +801,7 @@ class LeaseManager:
 
         reason = "abort" if abort else "run_end"
         releases: list[Coroutine[Any, Any, None]] = [
-            lease.target.release(reason)
-            for lease in self._leases.values()
-            if lease.target.is_live
+            lease.target.release(reason) for lease in self._leases.values()
         ]
         for result in await asyncio.gather(*releases, return_exceptions=True):
             if isinstance(result, BaseException):

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-07-20 13:50+0200\n"
+"POT-Creation-Date: 2026-10-17 15:27+0200\n"
 "PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
@@ -20,25 +20,48 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: src/horus_runtime/cli.py:106
+#: src/horus_runtime/cli.py:115
 msgid "Workflow has no tasks to run."
 msgstr "El flujo de trabajo no tiene tareas que ejecutar."
 
-#: src/horus_runtime/cli.py:115
+#: src/horus_runtime/cli.py:124
 #, python-format
 msgid "Unknown task id(s) for --no-skip: %(unknown)s. Valid task ids: %(valid)s"
 msgstr ""
 "ID(s) de tarea desconocido(s) para --no-skip: %(unknown)s. IDs de tarea "
 "válidos: %(valid)s"
 
-#: src/horus_runtime/cli.py:178
+#: src/horus_runtime/cli.py:188
 msgid "(not found; assumed generated)"
 msgstr "(no encontrado; se asume generado)"
 
-#: src/horus_runtime/cli.py:180
+#: src/horus_runtime/cli.py:190
 #, python-format
 msgid "Wrote %(archive)s (%(count)d file(s))"
 msgstr "Se escribió %(archive)s (%(count)d archivo(s))"
+
+#: src/horus_runtime/cli.py:202
+#, python-format
+msgid "%(count)d undeclared root input(s); run 'horus sanitize' to promote them"
+msgstr ""
+
+#: src/horus_runtime/cli.py:253
+#, python-format
+msgid "produced by %(producer)s; missing edge"
+msgstr ""
+
+#: src/horus_runtime/cli.py:258
+msgid "No root inputs to promote."
+msgstr ""
+
+#: src/horus_runtime/cli.py:270
+msgid "Nothing promoted."
+msgstr ""
+
+#: src/horus_runtime/cli.py:285
+#, python-format
+msgid "Wrote %(path)s (%(count)d root input(s))"
+msgstr ""
 
 #: src/horus_runtime/context.py:130
 msgid "HorusContext is not set. Did you forget to call HorusContext.boot()?"
@@ -56,7 +79,7 @@ msgstr "¡El entorno de ejecución de Horus está listo!"
 msgid "Horus Runtime is shutting down..."
 msgstr "El entorno de ejecución de Horus se está deteniendo..."
 
-#: src/horus_runtime/packaging.py:139
+#: src/horus_runtime/packaging.py:161
 #, python-format
 msgid ""
 "Workflow references %(count)d missing file(s):\n"
@@ -64,6 +87,31 @@ msgid ""
 msgstr ""
 "El flujo de trabajo referencia %(count)d archivo(s) inexistente(s):\n"
 "%(files)s"
+
+#: src/horus_runtime/core/lease.py:180
+#, python-format
+msgid "Cannot evacuate '%(out)s': no orchestrator target is set."
+msgstr ""
+
+#: src/horus_runtime/core/lease.py:658
+#, python-format
+msgid "Releasing machine '%(key)s' failed: %(error)s"
+msgstr ""
+
+#: src/horus_runtime/core/lease.py:701 src/horus_runtime/core/lease.py:735
+#, python-format
+msgid "Evacuating from machine '%(key)s' failed: %(error)s"
+msgstr ""
+
+#: src/horus_runtime/core/lease.py:766
+#, python-format
+msgid "Keepalive of machine '%(key)s' failed: %(e)s"
+msgstr ""
+
+#: src/horus_runtime/core/lease.py:809
+#, python-format
+msgid "Releasing a machine at run end failed: %(error)s"
+msgstr ""
 
 #: src/horus_runtime/core/placement.py:92
 #, python-format
@@ -76,50 +124,49 @@ msgstr ""
 "ubicación '%(location_id)s', que como máximo dispone de %(total)s. Esta "
 "solicitud nunca podrá satisfacerse."
 
-#: src/horus_runtime/core/artifact/base.py:194
+#: src/horus_runtime/core/artifact/base.py:225
 #, python-format
 msgid "Artifact at %(path)s. %(event)s"
 msgstr "Artefacto en %(path)s. %(event)s"
 
-#: src/horus_runtime/core/artifact/store.py:131
+#: src/horus_runtime/core/artifact/store.py:182
 #, python-format
 msgid "Failed to %(op)s artifact '%(id)s' on target (exit code %(rc)s)"
 msgstr ""
 "No se pudo %(op)s el artefacto '%(id)s' en el destino (código de salida "
 "%(rc)s)"
 
-#: src/horus_runtime/core/executor/base.py:84
+#: src/horus_runtime/core/executor/base.py:89
 msgid "Horus base executor"
 msgstr "Ejecutor base de Horus"
 
-#: src/horus_runtime/core/executor/base.py:138
+#: src/horus_runtime/core/executor/base.py:196
 #, python-format
 msgid "Failed to collect side artifacts for task %(task_id)s: %(err)s"
 msgstr ""
 "No se pudieron recopilar los artefactos secundarios de la tarea "
 "%(task_id)s: %(err)s"
 
-#: src/horus_runtime/core/executor/base.py:181
+#: src/horus_runtime/core/executor/base.py:244
 #, python-format
 msgid "Failed to list side artifacts for task %(task_id)s: %(err)s"
 msgstr ""
-"No se pudieron listar los artefactos secundarios de la tarea %(task_id)s: "
-"%(err)s"
+"No se pudieron listar los artefactos secundarios de la tarea %(task_id)s:"
+" %(err)s"
 
-#: src/horus_runtime/core/executor/base.py:201
-#: src/horus_runtime/core/executor/base.py:261
+#: src/horus_runtime/core/executor/base.py:272
+#: src/horus_runtime/core/executor/base.py:331
 #, python-format
 msgid "Skipping side artifact with unsafe name %(name)s"
 msgstr "Se omite el artefacto secundario con nombre no seguro %(name)s"
 
-#: src/horus_runtime/core/executor/base.py:218
-#: src/horus_runtime/core/executor/base.py:271
+#: src/horus_runtime/core/executor/base.py:290
+#: src/horus_runtime/core/executor/base.py:341
 #, python-format
 msgid "Skipping large side artifact %(name)s (%(size)d bytes)"
-msgstr ""
-"Se omite el artefacto secundario de gran tamaño %(name)s (%(size)d bytes)"
+msgstr "Se omite el artefacto secundario de gran tamaño %(name)s (%(size)d bytes)"
 
-#: src/horus_runtime/core/executor/base.py:235
+#: src/horus_runtime/core/executor/base.py:305
 #, python-format
 msgid "Failed to collect side artifact %(name)s: %(err)s"
 msgstr "No se pudo recopilar el artefacto secundario %(name)s: %(err)s"
@@ -128,8 +175,7 @@ msgstr "No se pudo recopilar el artefacto secundario %(name)s: %(err)s"
 #: src/horus_runtime/core/interaction/transport.py:217
 #, python-format
 msgid "No renderer registered for %(transport)s:%(interaction)s"
-msgstr ""
-"No hay ningún renderizador registrado para %(transport)s:%(interaction)s"
+msgstr "No hay ningún renderizador registrado para %(transport)s:%(interaction)s"
 
 #: src/horus_runtime/core/interaction/exceptions.py:56
 msgid "No interaction transport configured for this task."
@@ -138,8 +184,7 @@ msgstr "No hay ningún transporte de interacción configurado para esta tarea."
 #: src/horus_runtime/core/interaction/exceptions.py:71
 #, python-format
 msgid "Failed to parse interaction '%(kind)s' after %(retries)d retries."
-msgstr ""
-"No se pudo analizar la interacción '%(kind)s' tras %(retries)d reintentos."
+msgstr "No se pudo analizar la interacción '%(kind)s' tras %(retries)d reintentos."
 
 #: src/horus_runtime/core/interaction/exceptions.py:88
 #, python-format
@@ -202,35 +247,47 @@ msgstr "Se agotaron los %(retries)d reintentos."
 msgid "Horus base runtime"
 msgstr "Entorno de ejecución base de Horus"
 
-#: src/horus_runtime/core/target/base.py:133
+#: src/horus_runtime/core/target/base.py:115
+msgid "A target with 'kind' cannot also have 'ref'."
+msgstr ""
+
+#: src/horus_runtime/core/target/base.py:330
 msgid "No task is currently running on this target."
 msgstr "No hay ninguna tarea en ejecución en este destino."
 
-#: src/horus_runtime/core/target/base.py:146
+#: src/horus_runtime/core/target/base.py:359
 #, python-format
 msgid "Task '%(task_name)s' is already running on this target."
 msgstr "La tarea '%(task_name)s' ya se está ejecutando en este destino."
 
-#: src/horus_runtime/core/target/base.py:182
+#: src/horus_runtime/core/target/base.py:395
 #, python-format
 msgid "Dispatched task '%(task_name)s' to %(kind)s target"
 msgstr "Se despachó la tarea '%(task_name)s' al destino %(kind)s"
 
-#: src/horus_runtime/core/target/base.py:194
-#: src/horus_runtime/core/target/base.py:246
+#: src/horus_runtime/core/target/base.py:407
+#: src/horus_runtime/core/target/base.py:459
 msgid "Task has not been dispatched yet."
 msgstr "La tarea aún no se ha despachado."
 
-#: src/horus_runtime/core/target/base.py:198
+#: src/horus_runtime/core/target/base.py:411
 #, python-format
 msgid "Waiting for task '%(task_name)s' to complete on %(kind)s target"
-msgstr ""
-"Esperando a que la tarea '%(task_name)s' finalice en el destino %(kind)s"
+msgstr "Esperando a que la tarea '%(task_name)s' finalice en el destino %(kind)s"
 
-#: src/horus_runtime/core/target/base.py:221
+#: src/horus_runtime/core/target/base.py:434
 #, python-format
 msgid "Cancelling task '%(task_name)s' on %(kind)s target"
 msgstr "Cancelando la tarea '%(task_name)s' en el destino %(kind)s"
+
+#: src/horus_runtime/core/target/base.py:646
+msgid "offset must be a non-negative multiple of 1 MiB"
+msgstr ""
+
+#: src/horus_runtime/core/target/base.py:660
+#, python-format
+msgid "Failed to read '%(path)s' on target (exit code %(rc)s)"
+msgstr ""
 
 #: src/horus_runtime/core/target/exceptions.py:44
 #, python-format
@@ -238,14 +295,14 @@ msgid ""
 "Target '%(kind)s' has no working_directory set. Provide one explicitly or"
 " use a target that derives it automatically."
 msgstr ""
-"El destino '%(kind)s' no tiene working_directory definido. Proporcione uno"
-" explícitamente o use un destino que lo derive automáticamente."
+"El destino '%(kind)s' no tiene working_directory definido. Proporcione "
+"uno explícitamente o use un destino que lo derive automáticamente."
 
-#: src/horus_runtime/core/task/base.py:71
+#: src/horus_runtime/core/task/base.py:92
 msgid "Horus base task"
 msgstr "Tarea base de Horus"
 
-#: src/horus_runtime/core/task/base.py:213
+#: src/horus_runtime/core/task/base.py:345
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
@@ -254,42 +311,42 @@ msgstr ""
 "El entorno de ejecución '%(runtime)s' no es compatible con el ejecutor "
 "'%(executor)s'. Se esperaba uno de: %(expected)s"
 
-#: src/horus_runtime/core/task/base.py:248
+#: src/horus_runtime/core/task/base.py:398
 #, python-format
-msgid "Skipping task %(task_name)s. Already complete."
-msgstr "Se omite la tarea %(task_name)s. Ya está completada."
+msgid "Task %(task_name)s status → CONFIGURING"
+msgstr ""
 
-#: src/horus_runtime/core/task/base.py:257
-#, python-format
-msgid "Task %(task_name)s status → SKIPPED"
-msgstr "Estado de la tarea %(task_name)s → SKIPPED"
-
-#: src/horus_runtime/core/task/base.py:263
-#, python-format
-msgid "Task %(task_name)s status → RUNNING"
-msgstr "Estado de la tarea %(task_name)s → RUNNING"
-
-#: src/horus_runtime/core/task/base.py:274
-#, python-format
-msgid "Task %(task_name)s status → CANCELED"
-msgstr "Estado de la tarea %(task_name)s → CANCELED"
-
-#: src/horus_runtime/core/task/base.py:281
-#, python-format
-msgid "Task %(task_name)s status → FAILED"
-msgstr "Estado de la tarea %(task_name)s → FAILED"
-
-#: src/horus_runtime/core/task/base.py
+#: src/horus_runtime/core/task/base.py:477
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr "La tarea %(task_name)s falló"
 
-#: src/horus_runtime/core/task/base.py:288
+#: src/horus_runtime/core/task/base.py:480
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr "Estado de la tarea %(task_name)s → COMPLETED"
 
-#: src/horus_runtime/core/task/base.py:330
+#: src/horus_runtime/core/task/base.py:481
+#, python-format
+msgid "Task %(task_name)s status → FAILED"
+msgstr "Estado de la tarea %(task_name)s → FAILED"
+
+#: src/horus_runtime/core/task/base.py:482
+#, python-format
+msgid "Task %(task_name)s status → CANCELED"
+msgstr "Estado de la tarea %(task_name)s → CANCELED"
+
+#: src/horus_runtime/core/task/base.py:535
+#, python-format
+msgid "Skipping task %(task_name)s. Already complete."
+msgstr "Se omite la tarea %(task_name)s. Ya está completada."
+
+#: src/horus_runtime/core/task/base.py:544
+#, python-format
+msgid "Task %(task_name)s status → SKIPPED"
+msgstr "Estado de la tarea %(task_name)s → SKIPPED"
+
+#: src/horus_runtime/core/task/base.py:563
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr "Reinicio de la tarea %(task_name)s → IDLE"
@@ -303,8 +360,8 @@ msgid ""
 msgstr ""
 "No hay ninguna estrategia de transferencia registrada para "
 "'%(source_kind)s' → '%(destination_kind)s'. Registre una subclase de "
-"BaseTransferStrategy que declare handles_source y handles_destination para"
-" estos tipos de destino."
+"BaseTransferStrategy que declare handles_source y handles_destination "
+"para estos tipos de destino."
 
 #: src/horus_runtime/core/transfer/exceptions.py:65
 #, python-format
@@ -319,11 +376,11 @@ msgstr ""
 "el flujo de trabajo. Defina workflow.orchestrator_target como el destino "
 "que contiene los artefactos raíz proporcionados por el usuario."
 
-#: src/horus_runtime/core/workflow/base.py:114
+#: src/horus_runtime/core/workflow/base.py:140
 msgid "Horus base workflow"
 msgstr "Flujo de trabajo base de Horus"
 
-#: src/horus_runtime/core/workflow/base.py:690
+#: src/horus_runtime/core/workflow/base.py:910
 #, python-format
 msgid ""
 "Adding edge from '%(source)s.%(source_output)s' to "
@@ -332,7 +389,7 @@ msgstr ""
 "Añadir una arista de '%(source)s.%(source_output)s' a "
 "'%(target)s.%(target_input)s' crearía un ciclo."
 
-#: src/horus_runtime/core/workflow/base.py:976
+#: src/horus_runtime/core/workflow/base.py:1261
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
@@ -341,41 +398,55 @@ msgstr ""
 "Transfiriendo el artefacto '%(id)s' de '%(src)s' a '%(dst)s' mediante "
 "%(strategy)s."
 
-#: src/horus_runtime/core/workflow/base.py:1184
+#: src/horus_runtime/core/workflow/base.py:1692
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → RUNNING"
 
-#: src/horus_runtime/core/workflow/base.py:1204
+#: src/horus_runtime/core/workflow/base.py:1712
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → CANCELED"
 
-#: src/horus_runtime/core/workflow/base.py:1211
+#: src/horus_runtime/core/workflow/base.py:1719
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → FAILED"
 
-#: src/horus_runtime/core/workflow/base.py:1218
+#: src/horus_runtime/core/workflow/base.py:1726
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → COMPLETED"
 
-#: src/horus_runtime/core/workflow/base.py:1240
+#: src/horus_runtime/core/workflow/base.py:1748
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr "Reiniciando el flujo de trabajo %(workflow_name)s."
 
-#: src/horus_runtime/core/workflow/exceptions.py:43
+#: src/horus_runtime/core/workflow/condition.py:158
+#, python-format
+msgid ""
+"Condition operator '%(op)s' needs a collection to test membership "
+"against, got %(value)r."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/condition.py:228
+msgid ""
+"A Python condition needs either a callable or a 'module:qualname' "
+"reference."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:50
 #, python-format
 msgid ""
 "Another workflow with ID %(id)s is already running in this context. Only "
 "one workflow can run at a time per context."
 msgstr ""
 "Ya se está ejecutando otro flujo de trabajo con el ID %(id)s en este "
-"contexto. Solo puede ejecutarse un flujo de trabajo a la vez por contexto."
+"contexto. Solo puede ejecutarse un flujo de trabajo a la vez por "
+"contexto."
 
-#: src/horus_runtime/core/workflow/exceptions.py:59
+#: src/horus_runtime/core/workflow/exceptions.py:66
 #, python-format
 msgid ""
 "Multiple tasks share the same ID '%(id)s'. Task IDs must be unique within"
@@ -384,7 +455,7 @@ msgstr ""
 "Varias tareas comparten el mismo ID '%(id)s'. Los IDs de tarea deben ser "
 "únicos dentro de un flujo de trabajo."
 
-#: src/horus_runtime/core/workflow/exceptions.py:75
+#: src/horus_runtime/core/workflow/exceptions.py:82
 #, python-format
 msgid ""
 "Multiple tasks declare the same output artifact ID '%(id)s'. Output "
@@ -394,73 +465,106 @@ msgstr ""
 "IDs de artefacto de salida deben ser únicos entre todas las tareas de un "
 "flujo de trabajo."
 
-#: src/horus_runtime/core/workflow/exceptions.py:93
+#: src/horus_runtime/core/workflow/exceptions.py:100
 #, python-format
 msgid "Workflow edge references unknown %(endpoint)s '%(value)s'."
 msgstr ""
 "Una arista del flujo de trabajo referencia un %(endpoint)s desconocido: "
 "'%(value)s'."
 
-#: src/horus_runtime/core/workflow/exceptions.py:109
+#: src/horus_runtime/core/workflow/exceptions.py:116
 #, python-format
 msgid ""
 "Edge '%(source)s' -> '%(target)s' names only one of 'source_output' and "
 "'target_input'. Name both to connect two artifacts, or neither to only "
 "order the two tasks."
 msgstr ""
-"La arista '%(source)s' -> '%(target)s' indica solo uno de 'source_output' "
-"y 'target_input'. Indique ambos para conectar dos artefactos, o ninguno "
+"La arista '%(source)s' -> '%(target)s' indica solo uno de 'source_output'"
+" y 'target_input'. Indique ambos para conectar dos artefactos, o ninguno "
 "para únicamente ordenar las dos tareas."
 
-#: src/horus_runtime/core/workflow/exceptions.py:127
+#: src/horus_runtime/core/workflow/exceptions.py:134
 #, python-format
 msgid ""
 "Multiple edges feed input '%(input)s' of task '%(target)s'. Each consumer"
 " input may be fed by at most one edge."
 msgstr ""
-"Varias aristas alimentan la entrada '%(input)s' de la tarea '%(target)s'. "
-"Cada entrada consumidora puede ser alimentada por una arista como máximo."
+"Varias aristas alimentan la entrada '%(input)s' de la tarea '%(target)s'."
+" Cada entrada consumidora puede ser alimentada por una arista como "
+"máximo."
 
-#: src/horus_runtime/core/workflow/exceptions.py:150
+#: src/horus_runtime/core/workflow/exceptions.py:157
 #, python-format
 msgid "Workflow finished with failed task(s): %(tasks)s."
 msgstr "El flujo de trabajo finalizó con tarea(s) fallida(s): %(tasks)s."
 
-#: src/horus_runtime/event/bus.py:79
+#: src/horus_runtime/core/workflow/exceptions.py:170
+#, python-format
+msgid "Task '%(task)s' refers to unknown target '%(ref)s'."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:181
+#, python-format
+msgid "Target name '%(name)s' must be lower-case letters, digits, '-' or '_'."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:193
+#, python-format
+msgid "Target '%(name)s' cannot itself be a reference."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:207
+msgid ""
+"Shared targets are not supported inside loop bodies yet; use an inline "
+"target."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:236
+#, python-format
+msgid ""
+"Output '%(out)s' of '%(task)s' was on machine '%(ref)s' (gen %(g)s), "
+"which has been released."
+msgstr ""
+
+#: src/horus_runtime/event/bus.py:86
 #, python-format
 msgid "Subscribing handler %(subscriber)s to event type %(event_type)s"
-msgstr ""
-"Suscribiendo el manejador %(subscriber)s al tipo de evento %(event_type)s"
+msgstr "Suscribiendo el manejador %(subscriber)s al tipo de evento %(event_type)s"
 
-#: src/horus_runtime/event/bus.py:103
+#: src/horus_runtime/event/bus.py:120
 #, python-format
 msgid "Error publishing event %(event)s: %(error)s"
 msgstr "Error al publicar el evento %(event)s: %(error)s"
 
-#: src/horus_runtime/event/bus.py:124
+#: src/horus_runtime/event/bus.py:143
+#, python-format
+msgid "Gave up flushing %(n)d unpublished event(s)."
+msgstr ""
+
+#: src/horus_runtime/event/bus.py:164
 msgid "Event bus is already started."
 msgstr "El bus de eventos ya está iniciado."
 
-#: src/horus_runtime/event/bus.py:128
+#: src/horus_runtime/event/bus.py:168
 msgid "Initializing transport and subscribers from the registry."
 msgstr "Inicializando el transporte y los suscriptores desde el registro."
 
-#: src/horus_runtime/event/bus.py:138
+#: src/horus_runtime/event/bus.py:178
 #, python-format
 msgid "Starting transport: %(transport_type)s"
 msgstr "Iniciando el transporte: %(transport_type)s"
 
-#: src/horus_runtime/event/bus.py:154
+#: src/horus_runtime/event/bus.py:194
 #, python-format
 msgid "Subscribing handler: %(subscriber_cls)s"
 msgstr "Suscribiendo el manejador: %(subscriber_cls)s"
 
-#: src/horus_runtime/event/bus.py:171
+#: src/horus_runtime/event/bus.py:214
 #, python-format
 msgid "Stopping transport: %(transport_type)s"
 msgstr "Deteniendo el transporte: %(transport_type)s"
 
-#: src/horus_runtime/event/bus.py:180
+#: src/horus_runtime/event/bus.py:223
 #, python-format
 msgid "Error stopping transport %(transport_type)s: %(error)s"
 msgstr "Error al detener el transporte %(transport_type)s: %(error)s"
@@ -480,8 +584,8 @@ msgid ""
 "%(cls_name)s inherits from AutoMiddleware but no domain root "
 "(entry_point=...) was found in its MRO."
 msgstr ""
-"%(cls_name)s hereda de AutoMiddleware pero no se encontró ninguna raíz de "
-"dominio (entry_point=...) en su MRO."
+"%(cls_name)s hereda de AutoMiddleware pero no se encontró ninguna raíz de"
+" dominio (entry_point=...) en su MRO."
 
 #: src/horus_runtime/middleware/auto_middleware.py:107
 #, python-format
@@ -494,8 +598,8 @@ msgid ""
 "%(entry_point)s already exists in the registry. Entry points must be "
 "unique."
 msgstr ""
-"%(entry_point)s ya existe en el registro. Los puntos de entrada deben ser "
-"únicos."
+"%(entry_point)s ya existe en el registro. Los puntos de entrada deben ser"
+" únicos."
 
 #: src/horus_runtime/registry/auto_registry.py:176
 #, python-format
@@ -503,8 +607,8 @@ msgid ""
 "%(cls)s tried to register without specifying a 'entry_point'. Make sure "
 "all base classes that inherit from AutoRegistry define an entry_point."
 msgstr ""
-"%(cls)s intentó registrarse sin especificar un 'entry_point'. Asegúrese de"
-" que todas las clases base que heredan de AutoRegistry definan un "
+"%(cls)s intentó registrarse sin especificar un 'entry_point'. Asegúrese "
+"de que todas las clases base que heredan de AutoRegistry definan un "
 "entry_point."
 
 #: src/horus_runtime/registry/auto_registry.py:190
@@ -546,12 +650,19 @@ msgstr "Clave de registro duplicada '%(key_value)s' para %(cls)s y %(cls_key)s"
 msgid "Expected dict or %(origin)s, got %(type)s"
 msgstr "Se esperaba un dict o %(origin)s, pero se obtuvo %(type)s"
 
-#: src/horus_runtime/registry/auto_registry.py:275
+#: src/horus_runtime/registry/auto_registry.py:282
+#, python-format
+msgid ""
+"Target reference '%(ref)s' can only be resolved inside a workflow that "
+"declares targets:"
+msgstr ""
+
+#: src/horus_runtime/registry/auto_registry.py:289
 #, python-format
 msgid "Missing '%(registry_key)s' discriminator in data"
 msgstr "Falta el discriminador '%(registry_key)s' en los datos"
 
-#: src/horus_runtime/registry/auto_registry.py:282
+#: src/horus_runtime/registry/auto_registry.py:296
 #, python-format
 msgid ""
 "Unknown %(registry_key)s='%(discriminator)s' for %(origin)s. Registered: "
@@ -560,17 +671,17 @@ msgstr ""
 "%(registry_key)s='%(discriminator)s' desconocido para %(origin)s. "
 "Registrados: %(registered)s"
 
-#: src/horus_runtime/registry/auto_registry.py:422
+#: src/horus_runtime/registry/auto_registry.py:440
 #, python-format
 msgid "Initializing %(group)s registry."
 msgstr "Inicializando el registro %(group)s."
 
-#: src/horus_runtime/registry/auto_registry.py:427
+#: src/horus_runtime/registry/auto_registry.py:445
 #, python-format
 msgid "- %(entry_point)s"
 msgstr "- %(entry_point)s"
 
-#: src/horus_runtime/registry/auto_registry.py:438
+#: src/horus_runtime/registry/auto_registry.py:456
 #, python-format
 msgid "Failed to load plugin %(entry_point)s: %(error)s"
 msgstr "No se pudo cargar el complemento %(entry_point)s: %(error)s"
@@ -580,8 +691,7 @@ msgstr "No se pudo cargar el complemento %(entry_point)s: %(error)s"
 msgid ""
 "%(cls_name)s uses AutoRegistryProduct but does not inherit from "
 "AutoRegistry."
-msgstr ""
-"%(cls_name)s usa AutoRegistryProduct pero no hereda de AutoRegistry."
+msgstr "%(cls_name)s usa AutoRegistryProduct pero no hereda de AutoRegistry."
 
 #: src/horus_runtime/registry/auto_registry_product.py:103
 #, python-format
@@ -590,9 +700,9 @@ msgid ""
 "template was found. Make sure a base class defines registry_key in "
 "'field_name:attr1.attr2' format."
 msgstr ""
-"%(cls_name)s usa AutoRegistryProduct pero no se encontró ninguna plantilla"
-" compuesta de registry_key. Asegúrese de que una clase base defina "
-"registry_key con el formato 'field_name:attr1.attr2'."
+"%(cls_name)s usa AutoRegistryProduct pero no se encontró ninguna "
+"plantilla compuesta de registry_key. Asegúrese de que una clase base "
+"defina registry_key con el formato 'field_name:attr1.attr2'."
 
 #: src/horus_runtime/registry/auto_registry_product.py:121
 #, python-format
@@ -600,8 +710,8 @@ msgid ""
 "%(cls_name)s registry_key references attribute '%(attr)s' which does not "
 "exist."
 msgstr ""
-"El registry_key de %(cls_name)s referencia el atributo '%(attr)s', que no "
-"existe."
+"El registry_key de %(cls_name)s referencia el atributo '%(attr)s', que no"
+" existe."
 
 #: src/horus_runtime/registry/auto_registry_product.py:134
 #, python-format
@@ -624,3 +734,7 @@ msgstr ""
 #~ "%(cls)s. Asegúrese de que existan "
 #~ "subclases de esta clase base con "
 #~ "add_to_registry=True."
+
+#~ msgid "Task %(task_name)s status → RUNNING"
+#~ msgstr "Estado de la tarea %(task_name)s → RUNNING"
+
