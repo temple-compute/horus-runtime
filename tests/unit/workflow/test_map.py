@@ -1477,6 +1477,13 @@ class _Node(LocalTarget):
             raise TargetLostError("node lost")
         return await super().run_command(cmd, **kwargs)
 
+    async def put_file(self, content: bytes | Path, remote_path: str) -> None:
+        """Lose the machine under the chosen task's write."""
+        await self._up()
+        if await self._lose_for(self.lose_during):
+            raise TargetLostError("node lost")
+        await super().put_file(content, remote_path)
+
 
 class _S3Evacuator(BaseEvacuator):
     """Recovers every output from ``stored``, without the machine."""
@@ -1608,6 +1615,30 @@ class TestRestage:
             await rerun_lost(self, *args)
 
         monkeypatch.setattr(MapTask, "_rerun_lost", die_first)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_loss_after_the_fan_out_retries_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The machine goes while the map writes its manifest: the map runs
+        again on the next generation and its folder has every slot.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+            lose_during="score",
+        )
 
         await wf.run(trigger_id="split")
 

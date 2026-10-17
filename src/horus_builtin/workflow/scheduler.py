@@ -230,12 +230,10 @@ async def _execute_on_target(
 
             # A lost machine re-runs transfer, dispatch and wait on a new one,
             # keeping this placement, pool slot and lease membership. A map
-            # is never retried itself; its clones retry on their own.
+            # gets one only for a loss of its own (after the fan-out): its
+            # clones' losses reach it grouped, and they retry on their own.
             while True:
-                retry = (
-                    not task.dispatches_children
-                    and task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
-                )
+                retry = task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
                 task._retry_on_target_loss = retry  # noqa: SLF001
                 try:
                     await _transfer_and_run(workflow, task, target, source_map)

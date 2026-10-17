@@ -1140,7 +1140,7 @@ class _LosingTask(HorusTask):
 
 
 class _LosingMapTask(_LosingTask):
-    """Stands in for a map: it dispatches children, so it is not retried."""
+    """Stands in for a map: it dispatches children."""
 
     dispatches_children: ClassVar[bool] = True
 
@@ -1293,20 +1293,19 @@ class TestRetryOnTargetLoss:
         assert task.runs == 1
         assert task.status == TaskStatus.FAILED
 
-    async def test_map_is_not_retried_itself(
+    async def test_map_is_retried_on_its_own_loss(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """A task dispatching children leaves retries to its children."""
+        """A loss of the map's own, after its fan-out, is retried once."""
         del horus_context
         task = _task("t", tmp_path=tmp_path, task_cls=_LosingMapTask)
         assert isinstance(task, _LosingTask)
         task.losses = 1
         wf = HorusWorkflow(name="map", tasks=[task])
-        with pytest.raises(TargetLostError):
-            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
 
-        assert task.runs == 1
-        assert task.status == TaskStatus.FAILED
+        assert task.runs == 2
+        assert task.status == TaskStatus.COMPLETED
 
     async def test_no_failed_status_before_the_retry(
         self, tmp_path: Path, horus_context: HorusContext
