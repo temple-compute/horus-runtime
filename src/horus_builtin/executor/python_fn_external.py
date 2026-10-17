@@ -51,7 +51,10 @@ import cloudpickle
 from horus_builtin.executor.python_fn import parse_result_artifacts
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    TaskExecutionError,
+)
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.settings import runtime_settings
@@ -193,6 +196,10 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         try:
             raw = await task.target.get_file(result_path)
             outcome: dict[str, Any] = cloudpickle.loads(raw)
+        except TargetLostError:
+            # The machine is gone, not the outcome: keep the type so the
+            # scheduler can retry.
+            raise
         except Exception as exc:
             # No outcome file at all: the interpreter never got far enough to
             # write one (missing python, missing cloudpickle, killed job). The
