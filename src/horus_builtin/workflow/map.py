@@ -330,6 +330,9 @@ class MapTask(HorusTask):
             self._fan_out = None
             for rerun in self._early_reruns.values():
                 rerun.cancel()
+            await asyncio.gather(
+                *self._early_reruns.values(), return_exceptions=True
+            )
         for index, result in zip(self._early_reruns, early, strict=True):
             results[index] = result
         await self._rerun_lost(clones, results, run_clone)
