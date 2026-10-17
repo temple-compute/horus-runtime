@@ -47,6 +47,8 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.lease import BaseEvacuator
+from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
@@ -1383,17 +1385,24 @@ class TestSlotNames:
 class _Node(LocalTarget):
     """
     A releasable machine at its own location (inputs are copied onto it),
-    lost just before the clone ``lose_before`` starts: its directory
-    is wiped, its generation bumped and its ready callbacks run.
+    lost just before the clone ``lose_before`` starts, or while the clone
+    ``lose_during`` runs (which then raises ``TargetLostError``): its
+    directory is wiped, its generation bumped and its ready callbacks run.
     """
 
     add_to_registry: ClassVar[bool] = False
     kind: str = "test_map_node"
     releasable: ClassVar[bool] = True
     lose_before: str | None = None
+    lose_during: str | None = None
 
     _node: dict[str, Any] = PrivateAttr(
-        default_factory=lambda: {"gen": 1, "callbacks": [], "errors": []}
+        default_factory=lambda: {
+            "gen": 1,
+            "callbacks": [],
+            "errors": [],
+            "lost_for": set(),
+        }
     )
 
     @property
@@ -1432,13 +1441,27 @@ class _Node(LocalTarget):
             except Exception as exc:  # logged, not raised, like terraform
                 self._node["errors"].append(exc)
 
+    async def _lose_for(self, task_id: str | None) -> bool:
+        """Lose the machine once, if the bound task is *task_id*."""
+        task = self._task
+        if task is None or task.id != task_id:
+            return False
+        if task.id in self._node["lost_for"]:
+            return False
+        self._node["lost_for"].add(task.id)
+        await self.lose()
+        return True
+
     async def mkdir(self, path: str) -> None:
         """Lose the machine before the chosen clone first touches it."""
-        task = self._task
-        if task is not None and task.id == self.lose_before:
-            if self._node["gen"] == 1:
-                await self.lose()
+        await self._lose_for(self.lose_before)
         await super().mkdir(path)
+
+    async def run_command(self, cmd: str, **kwargs: Any) -> ChannelProcess:
+        """Lose the machine under the chosen clone."""
+        if await self._lose_for(self.lose_during):
+            raise TargetLostError("node lost")
+        return await super().run_command(cmd, **kwargs)
 
 
 class _S3Evacuator(BaseEvacuator):
@@ -1466,15 +1489,25 @@ class _S3Evacuator(BaseEvacuator):
 
 
 def _on_node(
-    tmp_path: Path, names: list[str], *, produced_on_node: bool
+    tmp_path: Path,
+    names: list[str],
+    *,
+    produced_on_node: bool,
+    lose_before: str | None = "score[1]",
+    lose_during: str | None = None,
 ) -> tuple[HorusWorkflow, _Node]:
     """
-    ``split -> score`` with the map on a node lost before its second clone.
-    The split runs on the same node too when *produced_on_node*.
+    ``split -> score`` with the map on a node lost before its second clone
+    (by default). The split runs on the same node too when
+    *produced_on_node*.
     """
     node_dir = tmp_path / "node"
     node_dir.mkdir()
-    node = _Node(working_directory=node_dir.as_posix(), lose_before="score[1]")
+    node = _Node(
+        working_directory=node_dir.as_posix(),
+        lose_before=lose_before,
+        lose_during=lose_during,
+    )
     split = _split_task(node_dir if produced_on_node else tmp_path, names)
     if produced_on_node:
         split.target = node
@@ -1494,7 +1527,10 @@ class TestRestage:
     async def test_pending_clones_find_their_inputs(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
-        """The inputs come back from the orchestrator, slot dirs too."""
+        """
+        The inputs come back from the orchestrator, slot dirs too, and the
+        clone that finished on the lost machine runs again.
+        """
         del horus_context
         wf, node = _on_node(
             tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
@@ -1507,8 +1543,77 @@ class TestRestage:
         assert node._node["errors"] == []
         scored = tmp_path / "node" / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
-        for slot, name in ((1, "b.txt"), (2, "c.txt")):
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_clone_lost_mid_run_is_retried(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The clone running when the machine goes runs again on the new one;
+        the folder has every slot.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+            lose_during="score[1]",
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_second_loss_without_budget_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A clone already retried once, whose slot is lost again, fails the
+        map instead of leaving its slot missing.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_during="score[0]",
+        )
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        assert node.generation == 3
+        assert wf.status.value == "failed"
+
+    async def test_a_second_loss_without_budget_drops_the_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """With ``drop``, that clone's slot is dropped and reported."""
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_during="score[0]",
+        )
+        cast(MapTask, wf.tasks[1]).on_item_failure = "drop"
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert node.generation == 3
+        assert wf.status.value == "completed"
+        scored = tmp_path / "node" / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["1", "2"]
+        [message] = _drop_messages(emit)
+        assert "lost with its machine" in message
 
     async def test_producer_on_the_lost_node_is_recovered(
         self,

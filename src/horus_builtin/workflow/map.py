@@ -25,6 +25,8 @@ output.
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
+from functools import partial
 from pathlib import Path
 from typing import ClassVar, Literal
 
@@ -39,7 +41,8 @@ from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import MAX_TARGET_LOSS_RETRIES, BaseTask
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -269,25 +272,26 @@ class MapTask(HorusTask):
         # pending clones run on it.
         self.target.on_ready(self._restage)
 
-        pool = TargetPool(self.max_concurrency)
-        runs = [
-            execute_task(
-                wf,
-                clone,
-                source_map=source_map,
-                pool=pool,
-                placement=wf.placement,
-            )
-            for clone in clones
-        ]
+        run_clone = partial(
+            execute_task,
+            wf,
+            source_map=source_map,
+            pool=TargetPool(self.max_concurrency),
+            placement=wf.placement,
+        )
+        results: list[BaseException | None]
         if wf.failure_policy == "continue" or self.on_item_failure == "drop":
             # Clones are independent: one failing must not cancel the rest.
-            results = await asyncio.gather(*runs, return_exceptions=True)
-            await self._settle(root, slots, clones, results)
+            results = await asyncio.gather(
+                *map(run_clone, clones), return_exceptions=True
+            )
         else:
             async with asyncio.TaskGroup() as tg:
-                for run in runs:
-                    tg.create_task(run)
+                for clone in clones:
+                    tg.create_task(run_clone(clone))
+            results = [None] * len(clones)
+        await self._rerun_lost(clones, results, run_clone)
+        await self._settle(root, slots, clones, results)
 
         # Deliberately NOT merging the clones' side artifacts into this
         # task's own list: each clone's upload middleware registers them
@@ -340,6 +344,53 @@ class MapTask(HorusTask):
                 )
             )
             raise
+
+    async def _rerun_lost(
+        self,
+        clones: list[BaseTask],
+        results: list[BaseException | None],
+        run_clone: Callable[[BaseTask], Awaitable[None]],
+    ) -> None:
+        """
+        Run again the succeeded clones whose slot was lost with an earlier
+        generation of the machine, once each; past that budget, record them
+        in *results* as failed with :class:`TargetLostError`.
+        """
+        wf = self.workflow
+        target = self.target
+        if wf is None or not target.releasable or target.keeps_data_on_release:
+            return
+        while True:
+            lost = [
+                index
+                for index, clone in enumerate(clones)
+                if results[index] is None
+                and wf.leases.produced_generation(
+                    clone.id, clone.outputs[0].id
+                )
+                != target.generation
+            ]
+            rerun: list[int] = []
+            for index in lost:
+                clone = clones[index]
+                if clone._target_loss_retries < MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
+                    clone._target_loss_retries += 1  # noqa: SLF001
+                    rerun.append(index)
+                    continue
+                error = TargetLostError(
+                    _("The output of %(task_name)s was lost with its machine.")
+                    % {"task_name": clone.name}
+                )
+                clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
+                results[index] = error
+            if not rerun:
+                return
+            rerun_results = await asyncio.gather(
+                *(run_clone(clones[index]) for index in rerun),
+                return_exceptions=True,
+            )
+            for index, result in zip(rerun, rerun_results, strict=True):
+                results[index] = result
 
     def _over_is_map_output(self, wf: BaseWorkflow) -> bool:
         """
