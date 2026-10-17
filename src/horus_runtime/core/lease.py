@@ -331,6 +331,11 @@ class LeaseManager:
         self._inputs_done.add(task.id)
         self._done_pulling(task)
 
+    def repull(self, task: "BaseTask") -> None:
+        """*task* pulls its inputs again (a retry, or a map's restage)."""
+        self._inputs_done.discard(task.id)
+        self._pulling.add(task.id)
+
     def _done_pulling(self, task: "BaseTask") -> None:
         self._pulling.discard(task.id)
         self._pulled.set()

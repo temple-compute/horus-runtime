@@ -256,6 +256,7 @@ async def _execute_on_target(
                         )
                     )
                     target.bind(task)
+                    workflow.leases.repull(task)
         finally:
             task.target = declared_target
             pool.release(declared_target, target)

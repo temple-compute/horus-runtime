@@ -1223,6 +1223,34 @@ class TestRetryOnTargetLoss:
         assert task._target_loss_retries == 0
         assert not task._retry_on_target_loss
 
+    async def test_the_retry_pulls_its_inputs_again(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The lease manager sees the retry pulling, so no machine holding one
+        of its inputs is released under it.
+        """
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 1
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        leases = wf.leases
+        pulling: list[bool] = []
+        transferred = leases.inputs_transferred
+
+        def record(task: HorusTask) -> None:
+            pulling.append(
+                "t" in leases._pulling and "t" not in leases._inputs_done
+            )
+            transferred(task)
+
+        with patch.object(leases, "inputs_transferred", side_effect=record):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 2
+        assert pulling == [True, True]
+
     async def test_plain_failure_runs_once(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

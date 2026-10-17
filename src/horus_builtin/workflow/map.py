@@ -321,9 +321,13 @@ class MapTask(HorusTask):
             return
         # Set first: a callback registered by an earlier execution also runs.
         self._staged_generation = generation
+        wf.leases.repull(self)
         try:
             paths = [artifact.path for artifact in self.inputs]
-            await wf.transfer_artifacts(self)
+            try:
+                await wf.transfer_artifacts(self)
+            finally:
+                wf.leases.inputs_transferred(self)
             if [artifact.path for artifact in self.inputs] != paths:
                 raise RuntimeError(
                     _("The inputs of map task '%(id)s' moved.")
