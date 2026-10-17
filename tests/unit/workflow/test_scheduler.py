@@ -1251,6 +1251,27 @@ class TestRetryOnTargetLoss:
         assert task.runs == 2
         assert pulling == [True, True]
 
+    async def test_each_run_has_its_own_budget(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A workflow run again gets a fresh retry, and the retry flag does
+        not outlive the attempt.
+        """
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_LosingTask)
+        assert isinstance(task, _LosingTask)
+        task.losses = 1
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+        assert not task._retry_on_target_loss
+
+        task.losses = 3
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 4
+        assert task.status == TaskStatus.COMPLETED
+
     async def test_plain_failure_runs_once(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

@@ -258,6 +258,7 @@ async def _execute_on_target(
                     target.bind(task)
                     workflow.leases.repull(task)
         finally:
+            task._retry_on_target_loss = False  # noqa: SLF001
             task.target = declared_target
             pool.release(declared_target, target)
     except Exception as exc:
@@ -585,6 +586,10 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
             _("Trigger task '%(trigger_id)s' not found.")
             % {"trigger_id": trigger_id}
         )
+
+    # Each run gets its own node-loss budget.
+    for task in workflow.tasks:
+        task._target_loss_retries = 0  # noqa: SLF001
 
     # Ids present before this call began. A composite task that registers
     # its children in the DAG for visibility (e.g. a ``horus_map`` task's
