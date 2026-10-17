@@ -369,10 +369,9 @@ class MapTask(HorusTask):
                 index
                 for index, clone in enumerate(clones)
                 if results[index] is None
-                and wf.leases.produced_generation(
-                    clone.id, clone.outputs[0].id
+                and wf.leases.output_lost(
+                    clone.id, clone.outputs[0].id, target
                 )
-                != target.generation
             ]
             rerun: list[int] = []
             for index in lost:

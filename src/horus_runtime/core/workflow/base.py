@@ -64,7 +64,6 @@ from horus_builtin.workflow.loop import (
 )
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
-from horus_runtime.core import lease
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import LeaseManager
@@ -1331,27 +1330,22 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             not source_target.releasable
             or source_target.keeps_data_on_release
             or source.artifact is None
+            or not self.leases.output_lost(
+                str(source.task_id), source.artifact.id, source_target
+            )
         ):
             return source
-        produced = self.leases.produced_generation(
-            str(source.task_id), source.artifact.id
+        recovered = await self.leases.recover(source)
+        if recovered is not None:
+            return recovered
+        raise ArtifactLostError(
+            source.artifact.id,
+            str(source.task_id),
+            source_target._ref or source_target.lease_key,  # noqa: SLF001
+            self.leases.produced_generation(
+                str(source.task_id), source.artifact.id
+            ),
         )
-        if produced is None:
-            return source
-        if not source_target.is_live or produced != source_target.generation:
-            task = next(t for t in self.tasks if t.id == source.task_id)
-            evacuator = lease._pick_evacuator()  # noqa: SLF001
-            recovered = await evacuator.recover(task, source.artifact)
-            if recovered is not None:
-                self.relocate_output(task.id, source.artifact.id, recovered)
-                return recovered
-            raise ArtifactLostError(
-                source.artifact.id,
-                str(source.task_id),
-                source_target._ref or source_target.lease_key,  # noqa: SLF001
-                produced,
-            )
-        return source
 
     def _resolve_source(
         self,

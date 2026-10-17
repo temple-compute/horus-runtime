@@ -243,6 +243,8 @@ class _RecordingEvacuator(BaseEvacuator):
     async def recover(
         self, task: Any, output: BaseArtifact
     ) -> EdgeSource | None:
+        await asyncio.sleep(self.delay)
+        self.calls.append((task.id, output.id))
         if self.recovered is None:
             return None
         return EdgeSource(
@@ -1080,6 +1082,52 @@ class TestLostArtifacts:
         with pytest.raises(ArtifactLostError, match="gen 1"):
             await wf.transfer_artifacts(b)
         assert not wf._relocations
+
+    async def test_concurrent_consumers_recover_once(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """Two consumers of one lost output: one recovery, both read it."""
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        c = _step("c", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(
+            tmp_path, [a, b, c], [_edge("a", "b", "x"), _edge("a", "c", "x")]
+        )
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=True, gen=2)
+        evacuator.delay = 0.05
+        evacuator.recovered = tmp_path / "recovered.out"
+        evacuator.recovered.write_text("payload")
+
+        await asyncio.gather(
+            wf.transfer_artifacts(b), wf.transfer_artifacts(c)
+        )
+
+        assert evacuator.calls == [("a", "out")]
+        assert Path(b.inputs[0].path) == evacuator.recovered
+        assert Path(c.inputs[0].path) == evacuator.recovered
+
+    async def test_a_producer_not_in_the_workflow_is_not_recovered(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """No task to recover for: nothing found, no crash."""
+        del horus_context
+        evacuator.recovered = tmp_path / "recovered.out"
+        wf = _workflow(tmp_path, [], [])
+        source = EdgeSource(
+            LocalTarget(), FileArtifact(id="out", path=Path("x")), "gone"
+        )
+
+        assert await wf.leases.recover(source) is None
+        assert evacuator.calls == []
 
     async def test_stale_source_map_follows_a_relocation(
         self, tmp_path: Path, horus_context: HorusContext

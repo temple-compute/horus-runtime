@@ -1399,6 +1399,7 @@ class _Node(LocalTarget):
     _node: dict[str, Any] = PrivateAttr(
         default_factory=lambda: {
             "gen": 1,
+            "live": True,
             "callbacks": [],
             "errors": [],
             "lost_for": set(),
@@ -1417,8 +1418,8 @@ class _Node(LocalTarget):
 
     @property
     def is_live(self) -> bool:
-        """Always back up by the time anything looks."""
-        return True
+        """Whether the machine is up; any use of it while down provisions."""
+        return bool(self._node["live"])
 
     @property
     def generation(self) -> int:
@@ -1441,6 +1442,17 @@ class _Node(LocalTarget):
             except Exception as exc:  # logged, not raised, like terraform
                 self._node["errors"].append(exc)
 
+    async def _up(self) -> None:
+        """Provision a new, empty generation if the machine is down."""
+        if not self._node["live"]:
+            self._node["live"] = True
+            await self.lose()
+
+    async def get_file(self, remote_path: str) -> bytes:
+        """Provision first, like a terraform target."""
+        await self._up()
+        return await super().get_file(remote_path)
+
     async def _lose_for(self, task_id: str | None) -> bool:
         """Lose the machine once, if the bound task is *task_id*."""
         task = self._task
@@ -1454,11 +1466,13 @@ class _Node(LocalTarget):
 
     async def mkdir(self, path: str) -> None:
         """Lose the machine before the chosen clone first touches it."""
+        await self._up()
         await self._lose_for(self.lose_before)
         await super().mkdir(path)
 
     async def run_command(self, cmd: str, **kwargs: Any) -> ChannelProcess:
         """Lose the machine under the chosen clone."""
+        await self._up()
         if await self._lose_for(self.lose_during):
             raise TargetLostError("node lost")
         return await super().run_command(cmd, **kwargs)
@@ -1561,6 +1575,39 @@ class TestRestage:
             lose_before=None,
             lose_during="score[1]",
         )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_a_machine_down_after_the_fan_out_reruns_every_slot(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The machine dies after the last clone, before any re-provision:
+        every slot is lost and runs again on the next generation.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            produced_on_node=False,
+            lose_before=None,
+        )
+        rerun_lost = MapTask._rerun_lost
+
+        async def die_first(self: MapTask, *args: Any) -> None:
+            node._node["live"] = False
+            await rerun_lost(self, *args)
+
+        monkeypatch.setattr(MapTask, "_rerun_lost", die_first)
 
         await wf.run(trigger_id="split")
 
