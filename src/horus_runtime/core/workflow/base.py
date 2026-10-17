@@ -64,6 +64,7 @@ from horus_builtin.workflow.loop import (
 )
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
+from horus_runtime.core import lease
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import LeaseManager
@@ -1228,7 +1229,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 task, artifact, source
             )
             if source is not None and source.task_id is not None:
-                self._check_not_lost(source, source_target)
+                recovered = await self._recover_if_lost(source, source_target)
+                if recovered is not source:
+                    source = recovered
+                    source_target, src_artifact = self._resolve_source(
+                        task, artifact, source
+                    )
 
             # Transfer a copy of the *producing* artifact: it carries the id
             # the data is stored under (so the lookup hits) and source path.
@@ -1308,35 +1314,44 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         )
         return relocated
 
-    def _check_not_lost(
+    async def _recover_if_lost(
         self, source: EdgeSource, source_target: BaseTarget
-    ) -> None:
+    ) -> EdgeSource:
         """
-        Refuse to read an output from a released machine: its producer ran on
-        a generation that no longer exists, and it was not evacuated.
+        *source*, unless its producer ran on a machine generation that no
+        longer exists and it was not evacuated: then where the evacuator
+        recovers the output from, recorded as a relocation.
 
         Raises:
             ArtifactLostError: When the recorded production generation is
-                not the machine's live one.
+                not the machine's live one and the evacuator recovers
+                nothing.
         """
         if (
             not source_target.releasable
             or source_target.keeps_data_on_release
             or source.artifact is None
         ):
-            return
+            return source
         produced = self.leases.produced_generation(
             str(source.task_id), source.artifact.id
         )
         if produced is None:
-            return
+            return source
         if not source_target.is_live or produced != source_target.generation:
+            task = next(t for t in self.tasks if t.id == source.task_id)
+            evacuator = lease._pick_evacuator()  # noqa: SLF001
+            recovered = await evacuator.recover(task, source.artifact)
+            if recovered is not None:
+                self.relocate_output(task.id, source.artifact.id, recovered)
+                return recovered
             raise ArtifactLostError(
                 source.artifact.id,
                 str(source.task_id),
                 source_target._ref or source_target.lease_key,  # noqa: SLF001
                 produced,
             )
+        return source
 
     def _resolve_source(
         self,

@@ -141,6 +141,16 @@ class BaseEvacuator(AutoRegistry, entry_point="evacuator"):
     ) -> "EdgeSource":
         """Copy *output* of *task* off *source*; return its new source."""
 
+    async def recover(
+        self, task: "BaseTask", output: "BaseArtifact"
+    ) -> "EdgeSource | None":
+        """
+        Where *output* of *task* can be read now that its machine is gone,
+        without touching the machine; ``None`` if nowhere.
+        """
+        del task, output
+        return None
+
 
 class OrchestratorEvacuator(BaseEvacuator):
     """
