@@ -113,7 +113,7 @@ def main() -> None:
     try:
         wf = build_command_workflow()
         render_workflow(wf, trigger_id="producer")
-        horus_logger.log.info("workflow finished: %s", wf.status)
+        horus_logger.log.info("workflow finished: {}", wf.status)
     finally:
         ctx.shutdown()
 

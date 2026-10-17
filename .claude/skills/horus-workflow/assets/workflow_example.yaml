@@ -3,8 +3,9 @@
 # Run with:   horus run workflow_example.yaml --trigger producer
 #
 # The producer writes a file; the consumer reads it (routed via the edge) and
-# writes a summary. On a second run both tasks are skipped because their output
-# artifacts already exist (delete them or set skip_if_complete: false to re-run).
+# writes a summary. On a second run both tasks are skipped: their outputs exist
+# and their inputs and commands are unchanged (the manifest in .horus/ matches).
+# Edit a command, delete an output, or pass --no-skip-all to re-run.
 
 name: example_pipeline
 kind: horus_workflow
