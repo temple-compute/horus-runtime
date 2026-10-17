@@ -25,10 +25,10 @@ output.
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from functools import partial
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
@@ -123,6 +123,17 @@ class MapTask(HorusTask):
 
     _staged_generation: int = PrivateAttr(default=0)
     """Machine generation the inputs and dirs were last staged on."""
+
+    _fan_out: (
+        tuple[list[BaseTask], Callable[[BaseTask], Coroutine[Any, Any, None]]]
+        | None
+    ) = PrivateAttr(default=None)
+    """The clones and how to run one, while the first wave runs."""
+
+    _early_reruns: dict[int, asyncio.Task[None]] = PrivateAttr(
+        default_factory=dict
+    )
+    """Re-runs of lost slots :meth:`_restage` started, by clone index."""
 
     @property
     def _over_artifact(self) -> IterableArtifact:
@@ -280,16 +291,33 @@ class MapTask(HorusTask):
             placement=wf.placement,
         )
         results: list[BaseException | None]
-        if wf.failure_policy == "continue" or self.on_item_failure == "drop":
-            # Clones are independent: one failing must not cancel the rest.
-            results = await asyncio.gather(
-                *map(run_clone, clones), return_exceptions=True
+        self._fan_out = (clones, run_clone)
+        self._early_reruns = {}
+        try:
+            if (
+                wf.failure_policy == "continue"
+                or self.on_item_failure == "drop"
+            ):
+                # Clones are independent: one failing must not cancel the
+                # rest.
+                results = await asyncio.gather(
+                    *map(run_clone, clones), return_exceptions=True
+                )
+            else:
+                async with asyncio.TaskGroup() as tg:
+                    for clone in clones:
+                        tg.create_task(run_clone(clone))
+                results = [None] * len(clones)
+            self._fan_out = None
+            early = await asyncio.gather(
+                *self._early_reruns.values(), return_exceptions=True
             )
-        else:
-            async with asyncio.TaskGroup() as tg:
-                for clone in clones:
-                    tg.create_task(run_clone(clone))
-            results = [None] * len(clones)
+        finally:
+            self._fan_out = None
+            for rerun in self._early_reruns.values():
+                rerun.cancel()
+        for index, result in zip(self._early_reruns, early, strict=True):
+            results[index] = result
         await self._rerun_lost(clones, results, run_clone)
         await self._settle(root, slots, clones, results)
 
@@ -342,6 +370,7 @@ class MapTask(HorusTask):
                 )
             for directory in self._staged_dirs:
                 await self.target.mkdir(directory)
+            self._start_lost_reruns(wf)
         except Exception as exc:
             HorusContext.get_context().bus.emit(
                 HorusTaskEvent(
@@ -355,6 +384,51 @@ class MapTask(HorusTask):
                 )
             )
             raise
+
+    def _start_lost_reruns(self, wf: BaseWorkflow) -> None:
+        """
+        Start now, not after the first wave, the re-runs of the finished
+        clones lost with the old generation. :meth:`_rerun_lost` stays the
+        safety net.
+        """
+        if self._fan_out is None or self.target.keeps_data_on_release:
+            return
+        clones, run_clone = self._fan_out
+        for index, clone in enumerate(clones):
+            if (
+                index not in self._early_reruns
+                and clone.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+                and wf.leases.output_lost(
+                    clone.id, clone.outputs[0].id, self.target
+                )
+                and self._take_rerun(clone)
+            ):
+                self._early_reruns[index] = asyncio.create_task(
+                    run_clone(clone)
+                )
+
+    @staticmethod
+    def _take_rerun(clone: BaseTask) -> bool:
+        """
+        Spend *clone*'s one re-run of a lost slot and say so; ``False`` once
+        it is spent. The clone leaves a terminal status, so the event says
+        why.
+        """
+        if clone._target_loss_retries >= MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
+            return False
+        clone._target_loss_retries += 1  # noqa: SLF001
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=clone.id,
+                task_name=clone.name,
+                message=_(
+                    "Output of %(task_name)s lost with its machine; "
+                    "running it again."
+                )
+                % {"task_name": clone.name},
+            )
+        )
+        return True
 
     async def _rerun_lost(
         self,
@@ -383,28 +457,20 @@ class MapTask(HorusTask):
             rerun: list[int] = []
             for index in lost:
                 clone = clones[index]
-                if clone._target_loss_retries < MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
-                    clone._target_loss_retries += 1  # noqa: SLF001
+                if self._take_rerun(clone):
                     rerun.append(index)
-                    message = _(
-                        "Output of %(task_name)s lost with its machine; "
-                        "running it again."
-                    ) % {"task_name": clone.name}
-                else:
-                    error = TargetLostError(
-                        _(
-                            "The output of %(task_name)s was lost with its "
-                            "machine."
-                        )
-                        % {"task_name": clone.name}
-                    )
-                    clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
-                    results[index] = error
-                    message = str(error)
-                # The clone leaves a terminal status: say why.
+                    continue
+                error = TargetLostError(
+                    _("The output of %(task_name)s was lost with its machine.")
+                    % {"task_name": clone.name}
+                )
+                clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
+                results[index] = error
                 HorusContext.get_context().bus.emit(
                     HorusTaskEvent(
-                        task_id=clone.id, task_name=clone.name, message=message
+                        task_id=clone.id,
+                        task_name=clone.name,
+                        message=str(error),
                     )
                 )
             if not rerun:

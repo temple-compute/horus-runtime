@@ -1603,6 +1603,8 @@ class TestRestage:
             "Output of score[0] lost with its machine; running it again."
             in _task_messages(emit, "score[0]")
         )
+        # Started by the restage, not after the first wave.
+        assert list(cast(MapTask, wf.tasks[1])._early_reruns) == [0]
         scored = tmp_path / "node" / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
