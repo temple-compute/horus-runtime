@@ -32,6 +32,13 @@ class TaskExecutionError(BaseTaskError):
     """
 
 
+class TargetLostError(TaskExecutionError):
+    """
+    The machine went away under the task; the task itself did not fail.
+    Raised by targets. The scheduler retries the task once on a new machine.
+    """
+
+
 class TaskMissingIdError(BaseTaskError):
     """
     Exception raised when a task is about to be executed but has no id

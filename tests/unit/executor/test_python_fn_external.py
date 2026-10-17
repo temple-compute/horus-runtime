@@ -27,6 +27,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -40,7 +41,10 @@ from horus_builtin.task.function import FunctionTask
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.resources import ProcessTreeScope
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    TaskExecutionError,
+)
 
 
 def make_task(
@@ -157,6 +161,22 @@ class TestExternalPythonFunctionExecutor:
         assert isinstance(task.executor, ExternalPythonFunctionExecutor)
         task.executor.python = "definitely-not-a-python-interpreter"
         with pytest.raises(TaskExecutionError, match="produced no result"):
+            await task.executor.execute(task)
+
+    async def test_lost_target_keeps_its_type(self, tmp_path: Path) -> None:
+        """
+        A lost machine while reading the outcome stays a ``TargetLostError``,
+        so the scheduler can retry the task.
+        """
+        task = make_task(tmp_path, lambda: None)
+        with (
+            patch.object(
+                LocalTarget,
+                "get_file",
+                new=AsyncMock(side_effect=TargetLostError("node gone")),
+            ),
+            pytest.raises(TargetLostError, match="node gone"),
+        ):
             await task.executor.execute(task)
 
     async def test_resource_scope_is_the_inherited_process_tree(

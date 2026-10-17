@@ -43,6 +43,8 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.lease import LeaseState
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.base import MAX_TARGET_LOSS_RETRIES
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.task.status import (
     TERMINAL_STATUSES,
     SkipReason,
@@ -226,26 +228,34 @@ async def _execute_on_target(
                 task.mark_skipped_complete()
                 return
 
-            # Transfer input artifacts to the task's target as needed.
-            await workflow.transfer_artifacts(task, source_map)
-            workflow.leases.inputs_transferred(task)
-
-            # Execute the task on its target and wait for it to finish.
-            try:
-                await target.dispatch(task)
-                await target.wait()
-            except asyncio.CancelledError:
-                # Cancelling this wrapper also cancels the inner task future
-                # (cancellation propagates through `target.wait()`'s await),
-                # so by now the task has recorded CANCELED and the future is
-                # done; `target.cancel()` would early-return. Call the
-                # executor's kill hook directly so any external process
-                # (container, remote job) that does not die with the
-                # coroutine is terminated. Shielded so a second cancel
-                # cannot abort the kill mid-flight.
-                if task.status is TaskStatus.CANCELED:
-                    await asyncio.shield(task.executor.cancel_execution())
-                raise
+            # A lost machine re-runs transfer, dispatch and wait on a new one,
+            # keeping this placement, pool slot and lease membership. A map
+            # is never retried itself; its clones retry on their own.
+            while True:
+                retry = (
+                    not task.dispatches_children
+                    and task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
+                )
+                task._retry_on_target_loss = retry  # noqa: SLF001
+                try:
+                    await _transfer_and_run(workflow, task, target, source_map)
+                    break
+                except TargetLostError:
+                    if not retry:
+                        raise
+                    task._target_loss_retries += 1  # noqa: SLF001
+                    message = _(
+                        "Node lost; retrying %(task_name)s on a new node."
+                    ) % {"task_name": task.name}
+                    horus_logger.log.warning(message)
+                    HorusContext.get_context().bus.emit(
+                        HorusTaskEvent(
+                            task_id=task.id,
+                            task_name=task.name,
+                            message=message,
+                        )
+                    )
+                    target.bind(task)
         finally:
             task.target = declared_target
             pool.release(declared_target, target)
@@ -272,6 +282,34 @@ async def _execute_on_target(
         raise
     finally:
         await placement.release(location_id, resources)
+
+
+async def _transfer_and_run(
+    workflow: BaseWorkflow,
+    task: "BaseTask",
+    target: BaseTarget,
+    source_map: dict[tuple[str, str], EdgeSource],
+) -> None:
+    """Transfer *task*'s inputs, then dispatch it on *target* and wait."""
+    # Transfer input artifacts to the task's target as needed.
+    await workflow.transfer_artifacts(task, source_map)
+    workflow.leases.inputs_transferred(task)
+
+    # Execute the task on its target and wait for it to finish.
+    try:
+        await target.dispatch(task)
+        await target.wait()
+    except asyncio.CancelledError:
+        # Cancelling this wrapper also cancels the inner task future
+        # (cancellation propagates through `target.wait()`'s await), so by
+        # now the task has recorded CANCELED and the future is done;
+        # `target.cancel()` would early-return. Call the executor's kill
+        # hook directly so any external process (container, remote job)
+        # that does not die with the coroutine is terminated. Shielded so a
+        # second cancel cannot abort the kill mid-flight.
+        if task.status is TaskStatus.CANCELED:
+            await asyncio.shield(task.executor.cancel_execution())
+        raise
 
 
 async def _execute_ready_task(
