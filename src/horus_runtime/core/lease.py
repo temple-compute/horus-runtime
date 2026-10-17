@@ -419,6 +419,8 @@ class LeaseManager:
         condition's sentinel, or a loop body's signal.
         """
         sentinels: set[tuple[str, str]] = set()
+        if lease.target.keeps_data_on_release:
+            return sentinels
         for edge in self.workflow.edges:
             consumer = state.tasks.get(edge.target)
             if consumer is None or edge.target not in pending:
@@ -478,6 +480,8 @@ class LeaseManager:
         A pending subworkflow needs whatever feeds it, data edge or not: its
         body re-emits those edges onto real consumers when it expands.
         """
+        if lease.target.keeps_data_on_release:
+            return set()
         needed = {
             (str(src.task_id), src.artifact.id)
             for (consumer, _input), src in self._source_map().items()

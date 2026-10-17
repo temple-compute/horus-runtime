@@ -166,6 +166,12 @@ class BaseTarget(AutoRegistry, entry_point="target"):
     releasable: ClassVar[bool] = False
     """Whether the lease manager may release this target's machine early."""
 
+    keeps_data_on_release: ClassVar[bool] = False
+    """
+    Whether outputs stay readable after :meth:`release` (e.g. a cluster's
+    shared filesystem), so a release needs no drain and loses nothing.
+    """
+
     @property
     def hold_timeout_s(self) -> float | None:
         """

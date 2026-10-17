@@ -194,6 +194,17 @@ def _edge(source: str, target: str, target_input: str) -> WorkflowEdge:
     )
 
 
+class SharedFsNode(FakeNode):
+    """A releasable machine whose outputs stay readable after release."""
+
+    kind: str = "shared_fs_node"
+    keeps_data_on_release: ClassVar[bool] = True
+
+    async def path_exists(self, path: str) -> bool:
+        """Readable whether or not the machine is live."""
+        return await LocalTarget.path_exists(self, path)
+
+
 def _workflow(
     tmp_path: Path,
     tasks: list[HorusTask],
@@ -285,6 +296,29 @@ class TestRelease:
         assert node.released == ["drained"]
         assert evacuator.calls == [("a", "out")]
         assert "draining" in node.phases
+        assert c.runs == 1
+
+    async def test_kept_data_releases_without_draining(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A machine whose outputs outlive it (a shared filesystem) is released
+        at once, and its outside consumer still reads the output after.
+        """
+        del horus_context
+        node = SharedFsNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        c = _step("c", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(tmp_path, [a, c], [_edge("a", "c", "x")])
+
+        await wf.run(trigger_id="a")
+
+        assert node.released == ["done"]
+        assert evacuator.calls == []
+        assert "draining" not in node.phases
         assert c.runs == 1
 
     async def test_consumer_that_already_pulled_holds_nothing(
