@@ -25,6 +25,7 @@ filesystem primitives.
 """
 
 import hashlib
+import secrets
 import shlex
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -162,11 +163,12 @@ class ArtifactStore:
     def _package_path(self, src: str) -> str:
         """
         Path for a generated package on the target, kept distinct from the
-        artifact's own path so packaging never clobbers the source.
+        artifact's own path so packaging never clobbers the source. Unique per
+        call, so two packages of same-named artifacts never share a file.
         """
         name = PurePosixPath(src).name
         base = PurePosixPath(self.target.resolved_working_directory)
-        return str(base / f"{name}.horuspkg")
+        return str(base / f"{name}.{secrets.token_hex(4)}.horuspkg")
 
     async def _run(self, cmd: str, artifact: "BaseArtifact", op: str) -> None:
         """
