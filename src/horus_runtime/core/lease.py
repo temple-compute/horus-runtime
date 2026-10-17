@@ -307,6 +307,11 @@ class LeaseManager:
             not target.is_live or produced != target.generation
         )
 
+    def forget(self, task: "BaseTask") -> None:
+        """Drop the generations recorded for *task*'s outputs."""
+        for output in task.outputs:
+            self._produced.pop((task.id, output.id), None)
+
     async def recover(self, source: "EdgeSource") -> "EdgeSource | None":
         """
         Where the lost output of *source* can be read now, recorded as a

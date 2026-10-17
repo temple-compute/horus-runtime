@@ -244,6 +244,10 @@ class MapTask(HorusTask):
             slot_root = root / slot
             await self.target.mkdir(str(slot_root))
             clones.append(self._clone(slot, item, slot_root))
+        # Clone ids repeat across a map retry: a stale record must not read
+        # as this run's output.
+        for clone in clones:
+            wf.leases.forget(clone)
         self._staged_dirs = [str(root), *(str(root / slot) for slot in slots)]
         self._staged_generation = self.target.generation
 
