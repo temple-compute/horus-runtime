@@ -46,6 +46,7 @@ from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.exceptions import TargetLostError
@@ -1509,6 +1510,16 @@ class _S3Evacuator(BaseEvacuator):
         )
 
 
+def _task_messages(emit: Any, task_id: str) -> list[str]:
+    """Messages of the task events *emit* was called with for *task_id*."""
+    return [
+        c.args[0].message or ""
+        for c in emit.call_args_list
+        if isinstance(c.args[0], HorusTaskEvent)
+        and c.args[0].task_id == task_id
+    ]
+
+
 def _on_node(
     tmp_path: Path,
     names: list[str],
@@ -1550,18 +1561,24 @@ class TestRestage:
     ) -> None:
         """
         The inputs come back from the orchestrator, slot dirs too, and the
-        clone that finished on the lost machine runs again.
+        clone that finished on the lost machine runs again, with an event.
         """
-        del horus_context
         wf, node = _on_node(
             tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
         )
 
-        await wf.run(trigger_id="split")
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"
         assert node.generation == 2
         assert node._node["errors"] == []
+        assert (
+            "Output of score[0] lost with its machine; running it again."
+            in _task_messages(emit, "score[0]")
+        )
         scored = tmp_path / "node" / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
@@ -1648,6 +1665,31 @@ class TestRestage:
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
 
+    async def test_pinned_inputs_are_not_restaged_silently(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A map whose inputs a loop pinned in place says it cannot restage."""
+        wf, node = _on_node(
+            tmp_path, ["a.txt"], produced_on_node=False, lose_before=None
+        )
+        map_task = cast(MapTask, wf.tasks[1])
+        map_task.inputs[0].pinned = True
+        map_task.status = TaskStatus.RUNNING
+        node._node["gen"] = 2
+        horus_context.workflow = wf
+
+        with (
+            patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit,
+            pytest.raises(RuntimeError, match="pinned"),
+        ):
+            await map_task._restage()
+
+        assert any(
+            "could not restage" in m for m in _task_messages(emit, "score")
+        )
+
     async def test_a_second_loss_without_budget_fails_the_map(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -1663,8 +1705,9 @@ class TestRestage:
             lose_during="score[0]",
         )
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(ExceptionGroup) as excinfo:
             await wf.run(trigger_id="split")
+        assert excinfo.group_contains(TargetLostError)
 
         assert node.generation == 3
         assert wf.status.value == "failed"
@@ -1692,6 +1735,11 @@ class TestRestage:
         assert sorted(p.name for p in scored.iterdir()) == ["1", "2"]
         [message] = _drop_messages(emit)
         assert "lost with its machine" in message
+        clone = next(t for t in wf.tasks if t.id == "score[0]")
+        assert clone.status == TaskStatus.FAILED
+        assert _task_messages(emit, "score[0]")[-1] == (
+            "The output of score[0] was lost with its machine."
+        )
 
     async def test_producer_on_the_lost_node_is_recovered(
         self,
@@ -1739,9 +1787,10 @@ class TestRestage:
             patch.object(
                 horus_context.bus, "emit", wraps=horus_context.bus.emit
             ) as emit,
-            pytest.raises(Exception),  # noqa: B017
+            pytest.raises(ExceptionGroup) as excinfo,
         ):
             await wf.run(trigger_id="split")
+        assert excinfo.group_contains(ArtifactDoesNotExistError)
 
         assert wf.status.value == "failed"
         assert [type(e) for e in node._node["errors"]] == [ArtifactLostError]

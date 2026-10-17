@@ -321,9 +321,16 @@ class MapTask(HorusTask):
             return
         # Set first: a callback registered by an earlier execution also runs.
         self._staged_generation = generation
-        wf.leases.repull(self)
         try:
+            # shortcut: inputs a loop placed in place are not transferred,
+            # so they cannot come back; restage them once loops need it.
+            if any(artifact.pinned for artifact in self.inputs):
+                raise RuntimeError(
+                    _("The inputs of map task '%(id)s' are pinned.")
+                    % {"id": self.id}
+                )
             paths = [artifact.path for artifact in self.inputs]
+            wf.leases.repull(self)
             try:
                 await wf.transfer_artifacts(self)
             finally:
@@ -379,13 +386,27 @@ class MapTask(HorusTask):
                 if clone._target_loss_retries < MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
                     clone._target_loss_retries += 1  # noqa: SLF001
                     rerun.append(index)
-                    continue
-                error = TargetLostError(
-                    _("The output of %(task_name)s was lost with its machine.")
-                    % {"task_name": clone.name}
+                    message = _(
+                        "Output of %(task_name)s lost with its machine; "
+                        "running it again."
+                    ) % {"task_name": clone.name}
+                else:
+                    error = TargetLostError(
+                        _(
+                            "The output of %(task_name)s was lost with its "
+                            "machine."
+                        )
+                        % {"task_name": clone.name}
+                    )
+                    clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
+                    results[index] = error
+                    message = str(error)
+                # The clone leaves a terminal status: say why.
+                HorusContext.get_context().bus.emit(
+                    HorusTaskEvent(
+                        task_id=clone.id, task_name=clone.name, message=message
+                    )
                 )
-                clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
-                results[index] = error
             if not rerun:
                 return
             rerun_results = await asyncio.gather(

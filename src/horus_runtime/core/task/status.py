@@ -81,7 +81,10 @@ TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset(
         TaskStatus.SKIPPED,
     }
 )
-"""Statuses a task never leaves once reached."""
+"""
+Statuses a task never leaves once reached, except a map clone whose output
+was lost with its machine: the map runs it again.
+"""
 
 
 class SkipReason(Enum):
