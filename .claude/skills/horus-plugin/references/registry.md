@@ -27,7 +27,14 @@ class BaseArtifact[T](AutoRegistry, entry_point="artifact"):
 ```
 
 `registry_key` names the field whose value is the registry key — by convention
-`"kind"` everywhere (subscribers use `"subscriber_type"`).
+`"kind"` everywhere except `BaseEventSubscriber` (`"subscriber_type"`),
+`BaseEvent` (`"event_type"`) and `BaseBusTransport` (`"transport_type"`).
+
+Registry roots in `src/`: `artifact`, `runtime`, `executor`, `task`,
+`workflow`, `target`, `transfer`, `evacuator`, `interaction`,
+`interaction_transport`, `interaction_renderer`, `subscriber`, `event`,
+`transport`. `BaseEvent` and `BaseInteractionTransport` set
+`add_to_registry = False` on the root itself.
 
 ### Auto-registration — `__init_subclass__`
 
@@ -64,7 +71,8 @@ your fields and load through the base class, so dispatch runs.
 ### Discovery — `init_registry(bases=None)` (`@final @staticmethod`)
 
 Called at `HorusContext.boot()`. Iterates `entry_points().groups` for groups
-starting with `horus.` (or only the groups for the given `bases`) and `.load()`s
+starting with `horus.` (or only the groups for the given `bases`; the default
+scan also imports `horus.middleware.*` modules) and `.load()`s
 each entry point, importing the module and triggering registration. A plugin that
 raises on import is logged via `horus_logger` and skipped so one broken plugin
 can't take down the rest.
@@ -103,16 +111,34 @@ Separate machinery for middleware. Prefix is
 `HORUS_MIDDLEWARE_ENTRY_POINT_PREFIX = "horus.middleware."`. Unlike `AutoRegistry`
 the registry is a **list**, not a dict — many middlewares can stack on one domain.
 
-Per-domain roots: `TaskMiddleware`, `WorkflowMiddleware`, `ExecutorMiddleware`,
-`RuntimeMiddleware`, `TargetMiddleware`, `TransferMiddleware`,
-`InteractionMiddleware`. Only `horus.middleware.task` and
-`horus.middleware.workflow` are exposed as external entry-point groups.
+Per-domain roots and the group each loads from (`middleware/<file>.py`):
 
-A middleware overrides any of `before(ctx)`, `after(ctx)`, `wrap(ctx, call)`. The
-corresponding layer runs its `_hook` inside
-`<Domain>Middleware.call_with_middleware(<Domain>MiddlewareContext(...), call)`.
-Each domain has its own context dataclass (e.g. `TaskMiddlewareContext(task=...)`).
-`AutoMiddleware.init_registry()` loads them at boot.
+| Root | Group | Context fields | Wraps |
+| --- | --- | --- | --- |
+| `TaskMiddleware` | `horus.middleware.task` | `task` | `BaseTask._run` (and the working-dir mkdir) |
+| `WorkflowMiddleware` | `horus.middleware.workflow` | `workflow` | `BaseWorkflow._run` |
+| `ExecutorMiddleware` | `horus.middleware.executor` | `executor`, `task` | `BaseExecutor._execute` |
+| `RuntimeMiddleware` | `horus.middleware.runtime` | `runtime`, `task` | `BaseRuntime._setup_runtime` |
+| `TargetMiddleware` | `horus.middleware.target` | `target`, `task` | `BaseTarget._dispatch` |
+| `TargetCommandMiddleware` | `horus.middleware.target_command` | `target`, `command` (mutable), `cwd`, `env`, `detach` | `BaseTarget._run_command` |
+| `TransferMiddleware` | `horus.middleware.transfer` | `transfer_strategy`, `artifact`, `source`, `destination` | `BaseTransferStrategy._transfer` |
+| `InteractionMiddleware` | `horus.middleware.interaction` | `transport`, `interaction`, `renderer`, `attempt` | one render attempt in `ask` |
 
-Reference middleware: `horus_builtin/middleware/task_time.py` (times each task and
-emits an event in `before`/`after`).
+`AutoMiddleware.init_registry()` loads every `horus.middleware.*` group at boot,
+so all eight are usable from a plugin.
+
+A middleware overrides any of these, all `async`:
+
+```python
+async def before(self, context: Ctx) -> None: ...
+async def after(self, context: Ctx) -> None: ...
+async def wrap(self, context: Ctx, call_next: Callable[[], Awaitable[R]]) -> R: ...
+```
+
+The default `wrap` awaits `before`, then `call_next()`, then `after` in a
+`finally`. The layer runs its `_hook` inside
+`<Domain>Middleware.call_with_middleware(<Domain>MiddlewareContext(...), call)`;
+each middleware class is instantiated per call, in registry order.
+
+Reference middleware: `horus_builtin/middleware/task_time.py` (overrides `wrap`,
+times the task and emits a `HorusTaskEvent` with how it ended).

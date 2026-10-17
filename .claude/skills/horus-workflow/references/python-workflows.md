@@ -51,7 +51,7 @@ wf = HorusWorkflow(
         )
     ],
 )
-# await wf.run(trigger_id="producer")    # topological: producer then consumer
+# await wf.run(trigger_id="producer")    # producer, then consumer
 ```
 
 The edge — not list order — determines execution order. `HorusTask.target`
@@ -80,12 +80,15 @@ def upcase(src: FileArtifact, dst: FileArtifact) -> None:
 ```
 
 Decorator signature:
-`FunctionTask.task(wf, *, id=None, name=None, inputs=None, outputs=None, target=None)`.
+`FunctionTask.task(wf, *, id=None, name=None, inputs=None, outputs=None, target=None, skip_if_complete=True)`.
 `id`/`name` default to the function name; `target` defaults to `LocalTarget()`.
+The runtime is `python_function` and the default executor `python_function`
+(in-process).
 
 ### Running a function on the target (`python_function_external`)
 
-`python_fn` runs the function **in the orchestrator process** and ignores
+The `python_function` executor runs the function **in the orchestrator
+process** and ignores
 `task.target`, so a function task with a remote target still runs locally. Set
 `executor: {kind: python_function_external}` to ship the function (cloudpickle)
 to the target and run it there as a real subprocess: it honours the target and
@@ -93,7 +96,7 @@ is resource-measurable. Two limits, both deliberate:
 
 - a function that takes `task` is **refused** (the live task cannot cross a
   process boundary), which also means tasks calling `workflow.add_task()` /
-  `add_edge()` on the running DAG must stay on `python_fn`;
+  `add_edge()` on the running DAG must stay on `python_function`;
 - the target's interpreter needs `cloudpickle` and `horus_runtime`. Set
   `python:` on the executor to pick it, e.g. point it at an environment built
   by a `horus-environments` executor
@@ -144,7 +147,45 @@ emit is captured into a per-task `.log` side artifact by the log-file middleware
 
 ```python
 from horus_runtime.logging import horus_logger
-horus_logger.log.info("processing %s", src.path)
+horus_logger.log.info("processing {}", src.path)   # loguru uses {}, not %s
+```
+
+## Composite tasks
+
+Builders on the workflow that append the same tasks the YAML blocks lower to:
+
+```python
+wf.subworkflow(id="clean", body=child_wf_or_dict,  # = YAML `sub:`
+               port_overrides=None, max_depth=None, name=None, target=None)
+wf.loop(id="refine", body=body_task, until="signal",  # = YAML `loop:`
+        max_iterations=<required>, index_input="idx", name=None, target=None)
+wf.branch(id="pick", func=choose, routes=["fast", "slow"],
+          name=None, target=None)
+```
+
+- `wf.branch` adds a router task that calls `func` (returns one route id or a
+  list) and one conditioned ordering edge to each route task. The routes must
+  already be tasks on `wf`. There is no YAML block: write the conditioned
+  edges directly (see `yaml-schema.md`).
+- `body` for `wf.loop` is a full task; its own id/name are ignored.
+- A map has no builder: construct `MapTask(...)` (`horus_builtin.workflow.map`)
+  with the YAML fields and append it.
+
+## Growing the DAG at run time
+
+A function task that takes `task` can mutate the live workflow through
+`task.workflow`: `add_task`, `add_edge`, `add_artifact`, or `expand(tasks=...,
+edges=..., artifacts=..., owner=None)`, which validates the whole batch against
+the combined graph and commits nothing on error. A task in the batch whose id
+already exists replaces it with its edges; `owner="x"` also drops every earlier
+`x[n]` clone. A new task with no incoming task edge is gated behind the task
+that created it. These need the in-process `python_function` executor.
+
+```python
+def plan(task: BaseTask) -> None:
+    wf = task.workflow
+    assert wf is not None
+    wf.expand(tasks=[make_step(i) for i in range(3)])
 ```
 
 ## Full runnable skeleton

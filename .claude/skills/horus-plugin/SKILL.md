@@ -3,15 +3,16 @@ name: horus-plugin
 description: >-
   Build, register, and troubleshoot horus-runtime plugins — custom targets,
   runtimes, executors, artifacts, tasks, workflows, transfer strategies,
-  interactions, event subscribers, and middleware. Use whenever the task
+  evacuators, interactions, event subscribers, and middleware. Use whenever the task
   involves subclassing a Horus base class (BaseTarget, BaseRuntime,
   BaseExecutor, BaseArtifact, BaseTask, BaseWorkflow, BaseTransferStrategy,
-  BaseInteraction, BaseEventSubscriber, AutoMiddleware), adding a new "kind" to
+  BaseEvacuator, BaseInteraction, BaseEventSubscriber, AutoMiddleware), adding a new "kind" to
   the runtime, registering a plugin via a `horus.*` entry point, extending what
   the runtime can execute or where it can run, or understanding how AutoRegistry
   discovery/dispatch works. Triggers: "horus plugin", "custom target/runtime/
   executor/artifact", "register a plugin", "new kind", "entry point",
-  "AutoRegistry", "SSH/remote/Slurm target".
+  "AutoRegistry", "SSH/remote/Slurm/cloud target", "releasable target",
+  "lease".
 ---
 
 # Building horus-runtime plugins
@@ -66,9 +67,10 @@ class. A plugin package depends only on `horus-runtime`; it does **not** need
 
 ## Plugin domains
 
-Thirteen entry-point groups back the plugin system. Each maps to a base class and
-a canonical built-in you can copy. Full signatures live in
-`references/plugin-catalog.md`.
+The runtime ships fourteen `AutoRegistry` groups (plugins may add more, e.g.
+`horus.resource_probe`) plus eight `horus.middleware.*` groups back the
+plugin system. Each maps to a base class and a canonical built-in you can copy.
+Full signatures live in `references/plugin-catalog.md`.
 
 | Entry-point group            | Base class (`src/horus_runtime/...`)        | Copy this built-in                         |
 | ---------------------------- | ------------------------------------------- | ------------------------------------------ |
@@ -79,12 +81,18 @@ a canonical built-in you can copy. Full signatures live in
 | `horus.workflow`             | `core/workflow/base.py` `BaseWorkflow`      | `horus_builtin/workflow/horus_workflow.py` |
 | `horus.target`               | `core/target/base.py` `BaseTarget`          | `horus_builtin/target/local.py`            |
 | `horus.transfer`             | `core/transfer/strategy.py` `BaseTransferStrategy[S,D]` | `horus_builtin/transfer/local_noop.py` |
+| `horus.evacuator`            | `core/lease.py` `BaseEvacuator`             | `OrchestratorEvacuator` in `core/lease.py` |
 | `horus.interaction`          | `core/interaction/base.py` `BaseInteraction[T]` | `horus_builtin/interaction/common/string.py` |
 | `horus.interaction_transport`| `core/interaction/transport.py` `BaseInteractionTransport` | `horus_builtin/interaction/cli.py` |
 | `horus.interaction_renderer` | `core/interaction/renderer.py` `BaseInteractionRenderer[T,I]` | `horus_builtin/interaction/cli.py` |
 | `horus.subscriber`           | `event/subscriber.py` `BaseEventSubscriber[E]` | `horus_builtin/event/log_subscriber.py` |
-| `horus.middleware.task`      | `middleware/task.py` `TaskMiddleware`       | `horus_builtin/middleware/task_time.py`    |
-| `horus.middleware.workflow`  | `middleware/workflow.py` `WorkflowMiddleware` | `horus_builtin/middleware/workflow_time.py` |
+| `horus.event`                | `event/base.py` `BaseEvent` (key `event_type`) | `horus_builtin/event/task_event.py`     |
+| `horus.transport`            | `event/transport.py` `BaseBusTransport` (key `transport_type`) | none built in            |
+| `horus.middleware.<domain>`  | `middleware/<domain>.py` `<Domain>Middleware` | `horus_builtin/middleware/task_time.py`  |
+
+Middleware domains: `task`, `workflow`, `executor`, `runtime`, `target`,
+`target_command`, `transfer`, `interaction`. All eight groups are loaded at
+boot.
 
 ## The runtime layer model (what plugs into what)
 
@@ -97,12 +105,17 @@ A **Workflow** orchestrates **Tasks** over a DAG. Each Task carries four plugins
 - a **Target** — *where* it runs (local, SSH, cloud). The target provides the
   agentless **channel** primitives (`run_command`, `put_file`/`get_file`, detached
   `launch`/`poll`) so the same executor code works local or remote.
-- **Artifacts** — the file-backed **inputs/outputs**. Artifact *existence* (and
-  hash) is the source of truth for task completion and incremental skipping.
+- **Artifacts** — the file-backed **inputs/outputs**. A task is complete when its
+  outputs exist and its recorded input fingerprint still matches; that drives
+  incremental skipping.
 
 Cross-target input movement is a **Transfer strategy**, keyed by the
-`(source_kind, dest_kind)` target pair. See `references/architecture.md` for the
-full boot/run flow, the event bus + live logs, and the detach/channel layer.
+`(source_kind, dest_kind)` target pair; a pair with no registered strategy uses
+the source target's `fallback_transfer()` (`GenericTransfer` by default). A
+target that owns a machine it can destroy early (a cloud node) sets
+`releasable = True` and is driven by the run's `LeaseManager`. See
+`references/architecture.md` for the full boot/run flow, leases, the event bus +
+live logs, and the detach/channel layer.
 
 ## Gotchas (this repo's conventions)
 
@@ -115,10 +128,16 @@ full boot/run flow, the event bus + live logs, and the detach/channel layer.
 - **Load workflows through the base/root class**, never a concrete subclass —
   `BaseWorkflow.from_yaml(...)` dispatches on `kind`; `HorusWorkflow.from_yaml(...)`
   would force one concrete type and defeat the registry.
-- **Do not override the `@final` public methods** (`run`, `execute`,
-  `setup_runtime`, `dispatch`, `transfer`, `reset`). Implement the `_`-prefixed
-  hook instead (`_run`, `_execute`, `_setup_runtime`, `_dispatch`, `_transfer`,
-  `_reset`). The public method drives status/middleware/events around your hook.
+- **Do not override the `@final` public methods**: `BaseTask.run`/`reset`,
+  `BaseWorkflow.reset`, `BaseExecutor.execute`, `BaseRuntime.setup_runtime`,
+  `BaseTarget.dispatch`, `BaseTransferStrategy.transfer`,
+  `BaseInteractionTransport.ask`. `BaseWorkflow.run` is not decorated but
+  follows the same rule. Implement the `_`-prefixed hook instead (`_run`,
+  `_execute`, `_setup_runtime`, `_dispatch`, `_transfer`, `_reset`). The public
+  method drives status/middleware/events around your hook.
+- **Completion and reset are async.** `BaseTask.is_complete`, `BaseTask._reset`
+  and `BaseWorkflow._reset` are `async def`; a sync override breaks the
+  scheduler's `await`. Middleware `before`/`after`/`wrap` are async too.
 - **Abstract/intermediate bases don't register.** Set `add_to_registry = False` on
   a shared abstract base you don't want instantiated (abstract classes are skipped
   automatically anyway).
@@ -134,7 +153,8 @@ full boot/run flow, the event bus + live logs, and the detach/channel layer.
 
 ## References & templates
 
-- `references/architecture.md` — layers, boot/run flow, event bus, channel/detach.
+- `references/architecture.md` — layers, boot/run flow (scheduler), target
+  defaults, releasable targets and leases, event bus, channel/detach.
 - `references/registry.md` — `AutoRegistry`, `AutoRegistryProduct`, `AutoMiddleware`
   internals and the exceptions they raise.
 - `references/plugin-catalog.md` — per-domain base class, abstract signatures, and
