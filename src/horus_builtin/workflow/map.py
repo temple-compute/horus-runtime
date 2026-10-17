@@ -24,6 +24,7 @@ output.
 """
 
 import asyncio
+import contextvars
 import json
 from collections.abc import Awaitable, Callable, Coroutine
 from functools import partial
@@ -125,10 +126,17 @@ class MapTask(HorusTask):
     """Machine generation the inputs and dirs were last staged on."""
 
     _fan_out: (
-        tuple[list[BaseTask], Callable[[BaseTask], Coroutine[Any, Any, None]]]
+        tuple[
+            list[BaseTask],
+            Callable[[BaseTask], Coroutine[Any, Any, None]],
+            contextvars.Context,
+        ]
         | None
     ) = PrivateAttr(default=None)
-    """The clones and how to run one, while the first wave runs."""
+    """
+    The clones, how to run one and the context to run it in, while the first
+    wave runs.
+    """
 
     _early_reruns: dict[int, asyncio.Task[None]] = PrivateAttr(
         default_factory=dict
@@ -291,7 +299,9 @@ class MapTask(HorusTask):
             placement=wf.placement,
         )
         results: list[BaseException | None]
-        self._fan_out = (clones, run_clone)
+        # Re-runs start from a ready callback; they must not inherit the
+        # target's provisioning context.
+        self._fan_out = (clones, run_clone, contextvars.copy_context())
         self._early_reruns = {}
         try:
             if (
@@ -393,7 +403,7 @@ class MapTask(HorusTask):
         """
         if self._fan_out is None or self.target.keeps_data_on_release:
             return
-        clones, run_clone = self._fan_out
+        clones, run_clone, context = self._fan_out
         for index, clone in enumerate(clones):
             if (
                 index not in self._early_reruns
@@ -404,7 +414,7 @@ class MapTask(HorusTask):
                 and self._take_rerun(clone)
             ):
                 self._early_reruns[index] = asyncio.create_task(
-                    run_clone(clone)
+                    run_clone(clone), context=context.copy()
                 )
 
     @staticmethod

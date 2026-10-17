@@ -21,6 +21,7 @@ fan-out behaviour as an ordinary DAG node.
 """
 
 import asyncio
+import contextvars
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1402,6 +1403,12 @@ class TestSlotNames:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
 
 
+# Set while the ready callbacks run, like terraform's provisioning context.
+_READY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_READY", default=False
+)
+
+
 class _Node(LocalTarget):
     """
     A releasable machine at its own location (inputs are copied onto it),
@@ -1426,6 +1433,7 @@ class _Node(LocalTarget):
             "errors": [],
             "lost_for": set(),
             "restaging": False,
+            "commands": [],
         }
     )
     _pin: tuple[str, int, int] | None = PrivateAttr(default=None)
@@ -1461,11 +1469,13 @@ class _Node(LocalTarget):
         directory.mkdir()
         self._node["gen"] += 1
         self._node["restaging"] = True
+        token = _READY.set(True)
         for callback in self._node["callbacks"]:
             try:
                 await callback()
             except Exception as exc:  # logged, not raised, like terraform
                 self._node["errors"].append(exc)
+        _READY.reset(token)
         self._node["restaging"] = False
 
     def _check_pin(self) -> None:
@@ -1518,6 +1528,8 @@ class _Node(LocalTarget):
         if await self._lose_for(self.lose_during):
             raise TargetLostError("node lost")
         self._check_pin()
+        task = self._task
+        self._node["commands"].append((task and task.id, _READY.get()))
         return await super().run_command(cmd, **kwargs)
 
     async def put_file(self, content: bytes | Path, remote_path: str) -> None:
@@ -1628,6 +1640,26 @@ class TestRestage:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_early_reruns_do_not_inherit_the_ready_context(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A re-run started from a ready callback runs in the map's context,
+        so a target's provisioning state set there does not leak into it.
+        """
+        del horus_context
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert list(cast(MapTask, wf.tasks[1])._early_reruns) == [0]
+        commands = node._node["commands"]
+        assert ("score[0]", False) in commands
+        assert not any(ready for _, ready in commands)
 
     async def test_the_map_completes_under_the_pin(
         self, tmp_path: Path, horus_context: HorusContext
