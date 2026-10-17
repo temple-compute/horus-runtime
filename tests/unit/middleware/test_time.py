@@ -25,6 +25,7 @@ import pytest
 from horus_builtin.middleware.task_time import TaskTimeMiddleware
 from horus_builtin.middleware.workflow_time import WorkflowTimeMiddleware
 from horus_runtime.context import HorusContext
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.middleware.task import TaskMiddlewareContext
 from horus_runtime.middleware.workflow import WorkflowMiddlewareContext
 
@@ -56,6 +57,30 @@ async def test_task_time_message_reflects_outcome(
             )
         except RuntimeError:
             pass
+    assert emit.call_args.args[0].message.startswith(expected)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("retry", "expected"),
+    [(True, "Task t lost its machine after"), (False, "Task t failed after")],
+)
+async def test_task_time_message_on_a_lost_machine(
+    retry: bool, expected: str
+) -> None:
+    """A lost machine reads as failed only when no retry follows."""
+    ctx = HorusContext.boot()
+    task = MagicMock(id="t", _retry_on_target_loss=retry)
+    task.name = "t"
+
+    async def lose() -> None:
+        raise TargetLostError("gone")
+
+    with (
+        patch.object(ctx.bus, "emit") as emit,
+        pytest.raises(TargetLostError),
+    ):
+        await TaskTimeMiddleware().wrap(TaskMiddlewareContext(task=task), lose)
     assert emit.call_args.args[0].message.startswith(expected)
 
 
