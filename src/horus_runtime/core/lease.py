@@ -772,7 +772,8 @@ class LeaseManager:
     async def aclose(self, *, abort: bool) -> None:
         """
         End of run: stop timers, finish (or, on *abort*, cancel) in-flight
-        drains, then release every machine still live, without evacuation.
+        drains, then release every machine, without evacuation. A cold one
+        may still be destroying a lost generation in the background.
         """
         background: list[asyncio.Task[None]] = []
         if self._keeper is not None:
@@ -800,9 +801,7 @@ class LeaseManager:
 
         reason = "abort" if abort else "run_end"
         releases: list[Coroutine[Any, Any, None]] = [
-            lease.target.release(reason)
-            for lease in self._leases.values()
-            if lease.target.is_live
+            lease.target.release(reason) for lease in self._leases.values()
         ]
         for result in await asyncio.gather(*releases, return_exceptions=True):
             if isinstance(result, BaseException):

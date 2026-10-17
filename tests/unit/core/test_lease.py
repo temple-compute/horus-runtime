@@ -905,6 +905,33 @@ class TestRelease:
         assert calls == []
         await leases.aclose(abort=True)
 
+    async def test_run_end_releases_a_cold_machine(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A machine down at run end is released too, so a destroy of a lost
+        generation still in flight is awaited.
+        """
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        wf = _workflow(tmp_path, [_step("a", node, tmp_path)], [])
+        assert wf.leases._open_lease(node) is not None
+        reasons: list[str] = []
+
+        async def release(self: FakeNode, reason: str) -> None:
+            del self
+            reasons.append(reason)
+
+        monkeypatch.setattr(FakeNode, "release", release)
+
+        await wf.leases.aclose(abort=False)
+
+        assert not node.is_live
+        assert reasons == ["run_end"]
+
     async def test_non_releasable_targets_get_no_lease(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
