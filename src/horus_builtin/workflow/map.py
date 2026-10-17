@@ -115,6 +115,12 @@ class MapTask(HorusTask):
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
     """Slots dropped by the current execution (``on_item_failure="drop"``)."""
 
+    _staged_dirs: list[str] = PrivateAttr(default_factory=list)
+    """The output root and slot dirs of the current execution."""
+
+    _staged_generation: int = PrivateAttr(default=0)
+    """Machine generation the inputs and dirs were last staged on."""
+
     @property
     def _over_artifact(self) -> IterableArtifact:
         """
@@ -216,6 +222,8 @@ class MapTask(HorusTask):
             slot_root = root / slot
             await self.target.mkdir(str(slot_root))
             clones.append(self._clone(slot, item, slot_root))
+        self._staged_dirs = [str(root), *(str(root / slot) for slot in slots)]
+        self._staged_generation = self.target.generation
 
         # Slots from an earlier, larger expansion (or one padded to another
         # width) would otherwise survive next to this run's. Surviving slots
@@ -257,6 +265,10 @@ class MapTask(HorusTask):
         # this the map reports "configuring" for its whole fan-out.
         self.status = TaskStatus.RUNNING
 
+        # A replaced machine comes back empty: stage it again before the
+        # pending clones run on it.
+        self.target.on_ready(self._restage)
+
         pool = TargetPool(self.max_concurrency)
         runs = [
             execute_task(
@@ -289,6 +301,45 @@ class MapTask(HorusTask):
             _("Map task '%(id)s' ran %(n)d clone(s).")
             % {"id": self.id, "n": len(clones)}
         )
+
+    async def _restage(self) -> None:
+        """
+        Put this task's inputs and slot dirs back on a new generation of its
+        machine. The clones froze the input paths, so they must not move.
+        """
+        wf = self.workflow
+        generation = self.target.generation
+        if (
+            wf is None
+            or self.status != TaskStatus.RUNNING
+            or generation == self._staged_generation
+        ):
+            return
+        # Set first: a callback registered by an earlier execution also runs.
+        self._staged_generation = generation
+        try:
+            paths = [artifact.path for artifact in self.inputs]
+            await wf.transfer_artifacts(self)
+            if [artifact.path for artifact in self.inputs] != paths:
+                raise RuntimeError(
+                    _("The inputs of map task '%(id)s' moved.")
+                    % {"id": self.id}
+                )
+            for directory in self._staged_dirs:
+                await self.target.mkdir(directory)
+        except Exception as exc:
+            HorusContext.get_context().bus.emit(
+                HorusTaskEvent(
+                    task_id=self.id,
+                    task_name=self.name,
+                    message=_(
+                        "Map %(name)s could not restage its inputs on the "
+                        "new machine: %(error)s"
+                    )
+                    % {"name": self.name, "error": exc},
+                )
+            )
+            raise
 
     def _over_is_map_output(self, wf: BaseWorkflow) -> bool:
         """

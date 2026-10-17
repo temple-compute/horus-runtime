@@ -23,12 +23,12 @@ fan-out behaviour as an ordinary DAG node.
 import asyncio
 import shutil
 from pathlib import Path
-from typing import cast
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import PrivateAttr, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
@@ -44,11 +44,14 @@ from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.map import MapOver, MapTask
 from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
+from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
-from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.exceptions import ArtifactLostError
 
 # The body sees the item under `over.as` (`batch`), the collection it came
 # from still under its own id (`batches`), and the folder output id (`scored`)
@@ -1375,3 +1378,192 @@ class TestSlotNames:
 
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+
+class _Node(LocalTarget):
+    """
+    A releasable machine at its own location (inputs are copied onto it),
+    lost just before the clone ``lose_before`` starts: its directory
+    is wiped, its generation bumped and its ready callbacks run.
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_node"
+    releasable: ClassVar[bool] = True
+    lose_before: str | None = None
+
+    _node: dict[str, Any] = PrivateAttr(
+        default_factory=lambda: {"gen": 1, "callbacks": [], "errors": []}
+    )
+
+    @property
+    def location_id(self) -> str:
+        """Not the orchestrator's filesystem."""
+        return "fake://node"
+
+    @property
+    def hold_timeout_s(self) -> float:
+        """Seconds the machine holds."""
+        return 30.0
+
+    @property
+    def is_live(self) -> bool:
+        """Always back up by the time anything looks."""
+        return True
+
+    @property
+    def generation(self) -> int:
+        """Provision count."""
+        return int(self._node["gen"])
+
+    def on_ready(self, callback: Any) -> None:
+        """Keep *callback* for the next generation."""
+        self._node["callbacks"].append(callback)
+
+    async def lose(self) -> None:
+        """Replace the machine with an empty one."""
+        directory = Path(self.resolved_working_directory)
+        shutil.rmtree(directory)
+        directory.mkdir()
+        self._node["gen"] += 1
+        for callback in self._node["callbacks"]:
+            try:
+                await callback()
+            except Exception as exc:  # logged, not raised, like terraform
+                self._node["errors"].append(exc)
+
+    async def mkdir(self, path: str) -> None:
+        """Lose the machine before the chosen clone first touches it."""
+        task = self._task
+        if task is not None and task.id == self.lose_before:
+            if self._node["gen"] == 1:
+                await self.lose()
+        await super().mkdir(path)
+
+
+class _S3Evacuator(BaseEvacuator):
+    """Recovers every output from ``stored``, without the machine."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_s3"
+    stored: ClassVar[Path | None] = None
+
+    async def evacuate(
+        self, task: Any, output: BaseArtifact, source: Any
+    ) -> EdgeSource:
+        raise NotImplementedError
+
+    async def recover(
+        self, task: Any, output: BaseArtifact
+    ) -> EdgeSource | None:
+        if self.stored is None:
+            return None
+        return EdgeSource(
+            LocalTarget(),
+            output.model_copy(update={"path": self.stored}),
+            task.id,
+        )
+
+
+def _on_node(
+    tmp_path: Path, names: list[str], *, produced_on_node: bool
+) -> tuple[HorusWorkflow, _Node]:
+    """
+    ``split -> score`` with the map on a node lost before its second clone.
+    The split runs on the same node too when *produced_on_node*.
+    """
+    node_dir = tmp_path / "node"
+    node_dir.mkdir()
+    node = _Node(working_directory=node_dir.as_posix(), lose_before="score[1]")
+    split = _split_task(node_dir if produced_on_node else tmp_path, names)
+    if produced_on_node:
+        split.target = node
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in")),
+        output_path=(node_dir / "scored_out").as_posix(),
+        max_concurrency=1,
+    )
+    map_task.target = node
+    return _wire(tmp_path, split=split, map_task=map_task), node
+
+
+@pytest.mark.unit
+class TestRestage:
+    """The map's machine is replaced while its clones run."""
+
+    async def test_pending_clones_find_their_inputs(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The inputs come back from the orchestrator, slot dirs too."""
+        del horus_context
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert node._node["errors"] == []
+        scored = tmp_path / "node" / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
+        for slot, name in ((1, "b.txt"), (2, "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_producer_on_the_lost_node_is_recovered(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Run e8454042: the map's input was produced on the same node, so it
+        comes back from the evacuator's copy.
+        """
+        del horus_context
+        copy = tmp_path / "s3" / "batches"
+        copy.mkdir(parents=True)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (copy / name).write_text(name)
+        monkeypatch.setattr(_S3Evacuator, "stored", copy)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=True
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node._node["errors"] == []
+        scored = tmp_path / "node" / "scored_out"
+        for slot, name in ((1, "b.txt"), (2, "c.txt")):
+            assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_nothing_to_restage_from_fails_loudly(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No copy of the lost input: an event says why the clones fail."""
+        monkeypatch.setattr(_S3Evacuator, "stored", None)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=True
+        )
+
+        with (
+            patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit,
+            pytest.raises(Exception),  # noqa: B017
+        ):
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "failed"
+        assert [type(e) for e in node._node["errors"]] == [ArtifactLostError]
+        assert any(
+            isinstance(c.args[0], HorusTaskEvent)
+            and "could not restage" in (c.args[0].message or "")
+            for c in emit.call_args_list
+        )
