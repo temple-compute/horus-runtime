@@ -19,6 +19,7 @@
 Unit tests for ArtifactStore and the target filesystem primitives it uses.
 """
 
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -352,6 +353,48 @@ class TestGenericTransfer:
             await GenericTransfer().transfer(artifact, source, destination)
 
             assert (Path(dst_dir) / "data" / "a.txt").read_text() == "A"
+
+    async def test_concurrent_transfers_of_same_folder_package_once(
+        self, horus_context: HorusContext, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Two consumers of one folder on the same machine starting at once
+        share a single copy: one package, both repointed at it.
+        """
+        del horus_context
+        packaged: list[str] = []
+        package = ArtifactStore.package
+
+        async def _counting_package(
+            store: ArtifactStore, artifact: BaseArtifact
+        ) -> str:
+            packaged.append(artifact.id)
+            return await package(store, artifact)
+
+        monkeypatch.setattr(ArtifactStore, "package", _counting_package)
+
+        with (
+            tempfile.TemporaryDirectory() as src_dir,
+            tempfile.TemporaryDirectory() as dst_dir,
+        ):
+            src_data = Path(src_dir) / "data"
+            src_data.mkdir()
+            (src_data / "a.txt").write_text("A")
+
+            source = _FarLocalTarget(working_directory=src_dir)
+            destination = _FarLocalTarget(working_directory=dst_dir)
+            first = FolderArtifact(id="data", path=src_data)
+            second = FolderArtifact(id="data", path=src_data)
+
+            await asyncio.gather(
+                GenericTransfer().transfer(first, source, destination),
+                GenericTransfer().transfer(second, source, destination),
+            )
+
+            assert packaged == ["data"]
+            assert first.path == second.path == Path(dst_dir) / "data"
+            assert (Path(dst_dir) / "data" / "a.txt").read_text() == "A"
+            assert not list(Path(src_dir).glob("*.horuspkg"))
 
 
 @pytest.mark.unit

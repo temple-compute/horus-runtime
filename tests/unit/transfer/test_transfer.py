@@ -19,6 +19,7 @@
 Unit tests for BaseTransferStrategy abstract base class.
 """
 
+import asyncio
 from pathlib import Path
 from typing import ClassVar
 
@@ -392,3 +393,49 @@ class TestSkipIfPresent:
         )
 
         assert destination.probed == []
+
+
+class _FailOnceTransfer(BaseTransferStrategy):
+    """A strategy whose first run fails after yielding to the loop."""
+
+    add_to_registry = False
+    runs: ClassVar[int] = 0
+
+    async def _transfer(
+        self,
+        artifact: BaseArtifact,
+        source: BaseTarget,
+        destination: BaseTarget,
+    ) -> None:
+        del source
+        _FailOnceTransfer.runs += 1
+        await asyncio.sleep(0)
+        if _FailOnceTransfer.runs == 1:
+            raise RuntimeError("first copy failed")
+        artifact.path = Path(destination.path_on_target(artifact))
+
+
+@pytest.mark.unit
+class TestConcurrentTransfers:
+    """Concurrent transfers of one artifact to one machine share a copy."""
+
+    async def test_waiter_retries_when_the_shared_copy_fails(self) -> None:
+        """
+        The first transfer's failure reaches its own caller; the one waiting
+        on it runs its own copy instead of hanging or failing too.
+        """
+        _FailOnceTransfer.runs = 0
+        source = _UnregisteredTarget()
+        destination = _OtherUnregisteredTarget()
+        first = FileArtifact(id="a", path=Path("/data/a.txt"))
+        second = FileArtifact(id="a", path=Path("/data/a.txt"))
+
+        results = await asyncio.gather(
+            _FailOnceTransfer().transfer(first, source, destination),
+            _FailOnceTransfer().transfer(second, source, destination),
+            return_exceptions=True,
+        )
+
+        assert isinstance(results[0], RuntimeError)
+        assert results[1] is None
+        assert _FailOnceTransfer.runs == 2

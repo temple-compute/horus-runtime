@@ -27,6 +27,7 @@ automatically from the ``kind`` defaults of those target types, producing
 values such as ``"local.local"``.
 """
 
+import asyncio
 from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, final
@@ -46,6 +47,11 @@ if TYPE_CHECKING:
 # Type aliases for strategy class attributes.
 HandlesSourceType = type["BaseTarget"]
 HandlesDestinationType = type["BaseTarget"]
+
+# Transfers running right now, so a second consumer of the same artifact on
+# the same machine waits for the first copy instead of racing it. Entries live
+# only while their transfer runs.
+_in_flight: dict[tuple[object, ...], asyncio.Future[Path]] = {}
 
 
 class BaseTransferStrategy[
@@ -96,6 +102,11 @@ class BaseTransferStrategy[
         fingerprint). Skipping a transfer because a *stale* file happens to
         sit at the destination path would silently hand a consumer outdated
         bytes, so ordinary input materialization must keep transferring.
+
+        Concurrent transfers of the same source path to the same destination
+        machine (and generation) run once: later callers wait for the first
+        and are repointed at its result. If that copy fails, each waiter runs
+        its own.
         """
         if source.location_id == destination.location_id:
             artifact.path = Path(destination.path_on_target(artifact))
@@ -112,15 +123,41 @@ class BaseTransferStrategy[
                 )
                 return
 
-        await TransferMiddleware.call_with_middleware(
-            TransferMiddlewareContext(
-                transfer_strategy=self,
-                artifact=artifact,
-                source=source,
-                destination=destination,
-            ),
-            lambda: self._transfer(artifact, source, destination),
+        key = (
+            asyncio.get_running_loop(),
+            source.location_id,
+            source.path_on_target(artifact),
+            destination.location_id,
+            destination.generation,
+            destination.working_directory,
         )
+        while (pending := _in_flight.get(key)) is not None:
+            try:
+                artifact.path = await asyncio.shield(pending)
+                return
+            except asyncio.CancelledError:
+                # The copy we waited on failed: run our own unless we were
+                # the one cancelled.
+                task = asyncio.current_task()
+                if task is None or task.cancelling():
+                    raise
+
+        pending = asyncio.get_running_loop().create_future()
+        _in_flight[key] = pending
+        try:
+            await TransferMiddleware.call_with_middleware(
+                TransferMiddlewareContext(
+                    transfer_strategy=self,
+                    artifact=artifact,
+                    source=source,
+                    destination=destination,
+                ),
+                lambda: self._transfer(artifact, source, destination),
+            )
+            pending.set_result(artifact.path)
+        finally:
+            pending.cancel()
+            del _in_flight[key]
 
     @abstractmethod
     async def _transfer(
