@@ -1319,7 +1319,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             ArtifactLostError: When the recorded production generation is
                 not the machine's live one.
         """
-        if not source_target.releasable or source.artifact is None:
+        if (
+            not source_target.releasable
+            or source_target.keeps_data_on_release
+            or source.artifact is None
+        ):
             return
         produced = self.leases.produced_generation(
             str(source.task_id), source.artifact.id
