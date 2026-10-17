@@ -50,7 +50,7 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.exceptions import TargetLostError
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.status import TERMINAL_STATUSES, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -1389,6 +1389,8 @@ class _Node(LocalTarget):
     lost just before the clone ``lose_before`` starts, or while the clone
     ``lose_during`` runs (which then raises ``TargetLostError``): its
     directory is wiped, its generation bumped and its ready callbacks run.
+    Like terraform, a leaf task's attempt is pinned to the generation it
+    first used, keyed to ``(task.id, _target_loss_retries)``; a map is not.
     """
 
     add_to_registry: ClassVar[bool] = False
@@ -1404,8 +1406,10 @@ class _Node(LocalTarget):
             "callbacks": [],
             "errors": [],
             "lost_for": set(),
+            "restaging": False,
         }
     )
+    _pin: tuple[str, int, int] | None = PrivateAttr(default=None)
 
     @property
     def location_id(self) -> str:
@@ -1437,11 +1441,27 @@ class _Node(LocalTarget):
         shutil.rmtree(directory)
         directory.mkdir()
         self._node["gen"] += 1
+        self._node["restaging"] = True
         for callback in self._node["callbacks"]:
             try:
                 await callback()
             except Exception as exc:  # logged, not raised, like terraform
                 self._node["errors"].append(exc)
+        self._node["restaging"] = False
+
+    def _check_pin(self) -> None:
+        """Raise when the bound attempt's generation was replaced."""
+        task = self._task
+        if task is None or task.dispatches_children or self._node["restaging"]:
+            return
+        if task.status in TERMINAL_STATUSES:
+            self._pin = None
+            return
+        key = (task.id, task._target_loss_retries)
+        if self._pin is None or self._pin[:2] != key:
+            self._pin = (*key, self.generation)
+        elif self._pin[2] != self.generation:
+            raise TargetLostError("The machine was replaced.")
 
     async def _up(self) -> None:
         """Provision a new, empty generation if the machine is down."""
@@ -1452,6 +1472,7 @@ class _Node(LocalTarget):
     async def get_file(self, remote_path: str) -> bytes:
         """Provision first, like a terraform target."""
         await self._up()
+        self._check_pin()
         return await super().get_file(remote_path)
 
     async def _lose_for(self, task_id: str | None) -> bool:
@@ -1469,6 +1490,7 @@ class _Node(LocalTarget):
         """Lose the machine before the chosen clone first touches it."""
         await self._up()
         await self._lose_for(self.lose_before)
+        self._check_pin()
         await super().mkdir(path)
 
     async def run_command(self, cmd: str, **kwargs: Any) -> ChannelProcess:
@@ -1476,6 +1498,7 @@ class _Node(LocalTarget):
         await self._up()
         if await self._lose_for(self.lose_during):
             raise TargetLostError("node lost")
+        self._check_pin()
         return await super().run_command(cmd, **kwargs)
 
     async def put_file(self, content: bytes | Path, remote_path: str) -> None:
@@ -1483,6 +1506,7 @@ class _Node(LocalTarget):
         await self._up()
         if await self._lose_for(self.lose_during):
             raise TargetLostError("node lost")
+        self._check_pin()
         await super().put_file(content, remote_path)
 
 
@@ -1583,6 +1607,32 @@ class TestRestage:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1", "2"]
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
+
+    async def test_the_map_completes_under_the_pin(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The clone that first read the lost generation fails its attempt on
+        the pin and retries; the map, not pinned, writes its manifest on
+        the new generation and completes.
+        """
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert any(
+            "Node lost; retrying score[1]" in m
+            for m in _task_messages(emit, "score[1]")
+        )
+        assert wf.tasks[1]._target_loss_retries == 0
+        assert (tmp_path / "node" / ".horus" / "score.json").exists()
 
     async def test_a_clone_lost_mid_run_is_retried(
         self, tmp_path: Path, horus_context: HorusContext
