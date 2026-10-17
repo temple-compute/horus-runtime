@@ -623,6 +623,9 @@ class MapTask(HorusTask):
             "side_artifacts",
             "status",
             "skip_reason",
+            "error",
+            "started_at",
+            "finished_at",
             "runs",
         }
 

@@ -22,6 +22,7 @@ fan-out behaviour as an ordinary DAG node.
 
 import asyncio
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
@@ -281,6 +282,24 @@ class TestFolderFanOut:
         assert {
             (e.source, e.target) for e in wf.edges if e.target in clone_ids
         } == {("score", "score[0]"), ("score", "score[1]")}
+
+    def test_clones_start_without_the_maps_run_state(
+        self, tmp_path: Path
+    ) -> None:
+        """A clone does not inherit the map's times or error."""
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=tmp_path)
+        )
+        map_task.started_at = map_task.finished_at = datetime.now(UTC)
+        map_task.error = "RuntimeError: boom"
+
+        clone = map_task._clone(
+            "0", FileArtifact(id="batches", path=tmp_path / "a"), tmp_path
+        )
+
+        assert clone.started_at is None
+        assert clone.finished_at is None
+        assert clone.error is None
 
 
 @pytest.mark.unit
