@@ -20,28 +20,21 @@ Implementation of the ChoiceArtifact class, a value artifact whose value is
 picked from a list of authored options (a dropdown in the GUI).
 """
 
-import json
 from pathlib import Path
 from typing import ClassVar, Self
 
 from pydantic import Field, model_validator
 
-from horus_builtin.artifact.options import Option, OptionValue
+from horus_builtin.artifact.options import (
+    Option,
+    OptionValue,
+    check_options,
+    match_option,
+    option_text,
+)
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.i18n import tr as _
-
-
-def _text(value: OptionValue) -> str:
-    """
-    The text an option value renders to, on disk and in ``$id``.
-
-    Strings are written bare (like ``StringArtifact``) so ``--device $device``
-    and ``cat $device`` both give ``gpu``; anything else is JSON (like
-    ``NumberArtifact``/``BooleanArtifact``), which is what substitution
-    renders for those types too.
-    """
-    return value if isinstance(value, str) else json.dumps(value)
 
 
 class ChoiceArtifact(ValueArtifact[OptionValue | None]):
@@ -67,50 +60,19 @@ class ChoiceArtifact(ValueArtifact[OptionValue | None]):
 
     @model_validator(mode="after")
     def _check_options(self) -> Self:
-        if not self.options:
-            raise ValueError(
-                _("Choice artifact '%(id)s' needs at least one option.")
-                % {"id": self.id}
-            )
-        seen: set[str] = set()
-        for option in self.options:
-            text = _text(option.value)
-            if text in seen:
-                raise ValueError(
-                    _("Choice artifact '%(id)s' has duplicate option '%(v)s'.")
-                    % {"id": self.id, "v": text}
-                )
-            seen.add(text)
+        check_options(self.id, self.options)
         self.value = (
             self.options[0].value
             if self.value is None
-            else self._option_value(self.value)
+            else match_option(self.id, self.options, self.value)
         )
         return self
-
-    def _option_value(self, value: OptionValue) -> OptionValue:
-        """The option value matching *value*'s text, or ValueError."""
-        text = _text(value)
-        for option in self.options:
-            if _text(option.value) == text:
-                return option.value
-        raise ValueError(
-            _(
-                "Choice artifact '%(id)s': '%(v)s' is not one of its options "
-                "(%(options)s)."
-            )
-            % {
-                "id": self.id,
-                "v": text,
-                "options": ", ".join(_text(o.value) for o in self.options),
-            }
-        )
 
     def read(self) -> OptionValue:
         """
         Read the file back to the option value it holds.
         """
-        value = self._option_value(self.path.read_text())
+        value = match_option(self.id, self.options, self.path.read_text())
         self._emit_event(ArtifactEventsEnum.READ)
         return value
 
@@ -123,7 +85,7 @@ class ChoiceArtifact(ValueArtifact[OptionValue | None]):
                 _("Choice artifact '%(id)s' cannot write None.")
                 % {"id": self.id}
             )
-        text = _text(self._option_value(value))
+        text = option_text(match_option(self.id, self.options, value))
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(text)
         self._emit_event(ArtifactEventsEnum.WRITE)

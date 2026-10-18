@@ -96,7 +96,7 @@ loads the plugin registries). Only one workflow may run at a time.
 | task     | `horus_task`, `horus_map`, `sub:` block, `loop:` block, `function_task` (Python-only), `wf.branch()` (Python-only) |
 | runtime  | `command`, `python` (code string), `python_function`, `python_script` |
 | executor | `shell`, `python`, `python_function`, `python_function_external`  |
-| artifact | `file`, `folder`, `json`, `pickle`, `number`, `boolean`, `string`, `choice` |
+| artifact | `file`, `folder`, `json`, `pickle`, `number`, `boolean`, `string`, `choice`, `multichoice`, `list` |
 | target   | `local` (plugins add more, e.g. ssh, slurm, terraform)            |
 
 Compatible pairings: `command`/`python_script` runtime ↔ `shell` executor;

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifact.boolean import BooleanArtifact
 from horus_builtin.artifact.number import NumberArtifact
@@ -47,6 +47,8 @@ class TestValueArtifactRegistry:
         assert BaseArtifact.registry["number"] is NumberArtifact
         assert BaseArtifact.registry["boolean"] is BooleanArtifact
         assert BaseArtifact.registry["string"] is StringArtifact
+        assert "multichoice" in BaseArtifact.registry
+        assert "list" in BaseArtifact.registry
 
     def test_discriminated_union_round_trips_values(self) -> None:
         """Values survive model_dump/model_validate round trips by kind."""
@@ -279,3 +281,74 @@ class TestBooleanMapping:
             plain.write(False)
             assert plain.path.read_text() == "false"
             assert plain.read() is False
+
+
+@pytest.mark.unit
+class TestNumberBounds:
+    """``min``/``max``/``step`` bound the value; the grid starts at ``min``."""
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"min": 0, "max": 10, "value": 10},
+            {"min": 0, "step": 0.1, "value": 0.3},
+            {"min": 1, "step": 2, "value": 5},
+            {"step": 0.25, "value": -1.5},
+        ],
+    )
+    def test_values_in_range_and_on_the_grid_pass(
+        self, fields: dict[str, object]
+    ) -> None:
+        """Bounds are inclusive; float steps tolerate rounding."""
+        NumberArtifact.model_validate({"id": "n", "path": "/n", **fields})
+
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            ({"min": 5, "max": 1}, "is above max"),
+            ({"min": 0, "max": 10, "value": 11}, "outside"),
+            ({"min": 5, "value": 0}, "outside"),
+            ({"min": 1, "step": 2, "value": 4}, "not a multiple of step"),
+            ({"step": 0}, "greater than 0"),
+        ],
+    )
+    def test_invalid_bounds_are_rejected(
+        self, fields: dict[str, object], message: str
+    ) -> None:
+        """Inverted, out-of-range and off-grid values fail clearly."""
+        with pytest.raises(ValidationError, match=message):
+            NumberArtifact.model_validate({"id": "n", "path": "/n", **fields})
+
+    def test_unset_value_starts_at_min(self) -> None:
+        """A stripped value is valid again instead of failing on 0."""
+        artifact = NumberArtifact.model_validate(
+            {"id": "n", "path": "/n", "min": 5, "max": 10}
+        )
+        assert artifact.value == 5
+
+
+@pytest.mark.unit
+class TestStringConstraints:
+    """``pattern`` must match the whole value; ``max_length`` caps it."""
+
+    def test_full_match_passes(self) -> None:
+        """A value matching the whole pattern is valid."""
+        artifact = StringArtifact.model_validate(
+            {"id": "s", "path": "/s", "pattern": r"\d+", "value": "42"}
+        )
+        assert artifact.multiline is False
+
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            ({"pattern": r"\d+", "value": "42a"}, "does not match"),
+            ({"pattern": "(", "value": ""}, "invalid pattern"),
+            ({"max_length": 2, "value": "abc"}, "longer than 2"),
+        ],
+    )
+    def test_invalid_values_are_rejected(
+        self, fields: dict[str, object], message: str
+    ) -> None:
+        """Partial matches, bad regexes and long values fail."""
+        with pytest.raises(ValidationError, match=message):
+            StringArtifact.model_validate({"id": "s", "path": "/s", **fields})

@@ -117,7 +117,7 @@ Artifacts appear in a task's `inputs`/`outputs` or as workflow-level root
 
 ```yaml
 - id: result             # required; stable id (edge endpoint key)
-  kind: file             # file | folder | json | pickle | number | boolean | string | choice | <plugin kind>
+  kind: file             # file | folder | json | pickle | number | boolean | string | choice | multichoice | list | <plugin kind>
   path: out/result.txt   # required; absolute, or relative (see Paths)
   name: ""               # optional; defaults to id
   description: ""         # optional
@@ -138,14 +138,17 @@ default. Absolute paths are left as they are. Each task runs in
 
 ### Value artifacts
 
-`number`, `boolean`, `string` and `choice` carry an inline `value`. `$id`
-renders the **value**, not a path; the value is also written to `path` the
+`number`, `boolean`, `string`, `choice`, `multichoice` and `list` carry an
+inline `value`. `$id` renders the **value**, not a path; the value is also written to `path` the
 first time a task consumes it; read that file with `${id.path}`.
 
 ```yaml
 artifacts:
   - {id: steps, kind: number, path: steps.json, value: 1000}
+  - {id: temp, kind: number, path: temp.json, value: 300, min: 250, max: 400, step: 5}
   - {id: label, kind: string, path: label.txt, value: run-a}
+  - {id: pdb, kind: string, path: pdb.txt, value: 1abc, pattern: '[0-9][a-z0-9]{3}'}
+  - {id: notes, kind: string, path: notes.txt, value: "", max_length: 500, multiline: true}
   - id: device                # boolean mapped to the values the task receives
     kind: boolean
     path: device.json
@@ -159,6 +162,12 @@ artifacts:
       - {value: water}
       - {value: dmso, label: DMSO}
     value: dmso
+  - id: elements              # any subset of the options
+    kind: multichoice
+    path: elements.json
+    options: [{value: H}, {value: C}, {value: O, label: Oxygen}]
+    value: [H, O]
+  - {id: seeds, kind: list, path: seeds.json, value: [1, 2, 3]}
 ```
 
 - `boolean`: map both `on` and `off` or neither; mapped values must differ
@@ -167,6 +176,18 @@ artifacts:
   and the mapping is silently dropped.
 - `choice`: `options` must be non-empty with distinct values; `value` must be
   one of them.
+- `number`: `min`/`max` are inclusive; `step` counts from `min` (or 0), so
+  `step: 1` with an integer `min` allows only integers. An unset `value`
+  starts at `min`.
+- `string`: `pattern` is a Python regex that must match the whole value;
+  single-quote it in YAML so backslashes survive. `max_length` counts
+  characters. `multiline` only changes the editor.
+- `multichoice`: same `options` rules as `choice`; `value` is any subset
+  (empty is fine), kept in option order.
+- `multichoice`/`list`: `$id` renders the items as space-separated,
+  shell-quoted words (`--seeds $seeds` gives `--seeds 1 2 3`); the file at
+  `${id.path}` is a JSON array.
+- Quote option values YAML would read as booleans (`"yes"`, `"on"`).
 - A consumer input fed by an edge from a value artifact takes the source's
   value.
 

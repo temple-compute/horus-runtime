@@ -41,6 +41,7 @@ from collections.abc import Iterator, Mapping
 from string import Template
 from typing import TYPE_CHECKING
 
+from horus_builtin.artifact.options import option_text
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
@@ -57,11 +58,13 @@ if TYPE_CHECKING:
 # command or script be written once and run unchanged on a local or remote
 # target.
 #
-# A value-carrying artifact (NumberArtifact/BooleanArtifact/StringArtifact)
-# instead renders its authored ``value``: a task consuming ``$samples`` gets
-# ``10``, not a path to a file whose content happens to be ``10``. The value
-# still materializes to a file for anything that reads it directly; this only
-# changes how the placeholder renders.
+# A value-carrying artifact (number, boolean, string, choice, multichoice,
+# list) instead renders its authored ``value``: a task consuming ``$samples``
+# gets ``10``, not a path to a file whose content happens to be ``10``. A list
+# value renders as space-separated, shell-quoted words (``a 'b c'``), so
+# ``--tags $tags`` passes one argument per item. The value still materializes
+# to a file for anything that reads it directly; this only changes how the
+# placeholder renders.
 class _ArtifactRef:
     def __init__(self, artifact: "BaseArtifact", target: "BaseTarget") -> None:
         self._a = artifact
@@ -74,6 +77,8 @@ class _ArtifactRef:
 
     def _render(self) -> object:
         value = getattr(self._a, "value", None)
+        if isinstance(value, list):
+            return " ".join(shlex.quote(option_text(v)) for v in value)
         if value is not None:
             # Match the on-disk serialization (json.dump lowercases booleans)
             # so ``$flag`` and ``cat $flag`` agree.
@@ -134,7 +139,14 @@ class _Resolver(Mapping[str, str]):
                 obj = getattr(obj, part)
             except AttributeError as exc:
                 raise KeyError(key) from exc
-        return shlex.quote(str(obj)) if self._quote else str(obj)
+        # A list already renders as quoted words; quoting it again would fuse
+        # them into one argument.
+        if self._quote and not (
+            isinstance(obj, _ArtifactRef)
+            and isinstance(getattr(obj, "value", None), list)
+        ):
+            return shlex.quote(str(obj))
+        return str(obj)
 
     def __iter__(self) -> "Iterator[str]":
         return iter(self._roots)
