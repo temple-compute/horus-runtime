@@ -217,7 +217,7 @@ the highest `priority` is used. Built-in `OrchestratorEvacuator`
   declare which event types they care about and handle them — used for loguru
   logging, timing, and the TUI.
 - **Middleware** (`middleware/`): each layer (task, workflow, executor, runtime,
-  target, target_command, transfer, interaction) has a root that wraps the
-  corresponding `_hook` with async `before` / `after` / `wrap`. Every
+  target, target_command, bound_task, transfer, interaction) has a root that
+  wraps the corresponding `_hook` with async `before` / `after` / `wrap`. Every
   `horus.middleware.<domain>` group is loaded at boot. See
   `references/registry.md`.

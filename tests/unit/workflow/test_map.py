@@ -57,6 +57,10 @@ from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import ArtifactLostError
+from horus_runtime.middleware.bound_task import (
+    BoundTaskMiddleware,
+    BoundTaskMiddlewareContext,
+)
 
 # The body sees the item under `over.as` (`batch`), the collection it came
 # from still under its own id (`batches`), and the folder output id (`scored`)
@@ -361,6 +365,36 @@ class TestListFanOut:
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
         assert (scored / "0" / "result.txt").read_text() == '"x"'
         assert (scored / "1" / "result.txt").read_text() == '"y"'
+
+    async def test_hook_fires_for_the_map_and_each_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The bound-task hook runs once for the map and once per clone."""
+        del horus_context
+        calls: list[str] = []
+        original_registry = list(BoundTaskMiddleware.registry)
+
+        split = _json_split_task(tmp_path, ["x", "y"])
+        map_task = _map_task(
+            over_artifact=JSONArtifact(
+                id="batches", path=Path("batches_in.json")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        class RecordingMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                calls.append(context.task.id)
+
+        try:
+            await wf.run(trigger_id="split")
+        finally:
+            BoundTaskMiddleware.registry = original_registry
+
+        assert wf.status.value == "completed"
+        assert sorted(calls) == ["score", "score[0]", "score[1]", "split"]
 
     async def test_slot_index_is_zero_padded_to_the_widest_index(
         self, tmp_path: Path, horus_context: HorusContext

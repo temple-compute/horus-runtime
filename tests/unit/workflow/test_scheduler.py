@@ -20,6 +20,7 @@ Unit tests for the concurrent ready-set scheduler.
 """
 
 import asyncio
+import json
 from collections.abc import Generator
 from pathlib import Path
 from typing import ClassVar, cast
@@ -50,6 +51,7 @@ from horus_runtime.core.placement import (
 )
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.base import InputDigests
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
     TaskExecutionError,
@@ -57,9 +59,14 @@ from horus_runtime.core.task.exceptions import (
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.core.workflow.status import WorkflowStatus
+from horus_runtime.middleware.bound_task import (
+    BoundTaskMiddleware,
+    BoundTaskMiddlewareContext,
+)
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
 
@@ -95,6 +102,44 @@ def _edge(
         target=target,
         target_input=target_input,
     )
+
+
+@pytest.fixture
+def restore_bound_task_registry() -> Generator[None]:
+    """
+    Restore the bound-task middleware registry after each test; a
+    subclass defined in a test registers itself.
+    """
+    original_registry = list(BoundTaskMiddleware.registry)
+    try:
+        yield
+    finally:
+        BoundTaskMiddleware.registry = original_registry
+
+
+@pytest.fixture
+def bound_task_calls(
+    restore_bound_task_registry: None,
+) -> list[tuple[str, bool]]:
+    """
+    Record each bound-task middleware call as ``(task id, bound)``, where
+    ``bound`` means ``ctx.target`` is the task's target, bound to it.
+    """
+    del restore_bound_task_registry
+    calls: list[tuple[str, bool]] = []
+
+    class RecordingMiddleware(BoundTaskMiddleware):
+        async def before(self, context: BoundTaskMiddlewareContext) -> None:
+            target = context.target
+            calls.append(
+                (
+                    context.task.id,
+                    target is context.task.target
+                    and target._task is context.task,
+                )
+            )
+
+    return calls
 
 
 class _PassTask(HorusTask):
@@ -1108,6 +1153,218 @@ class TestSkipBeforeTransfer:
         assert (tmp_path / "dst" / "result.txt").read_text() == "changed\n"
 
 
+@pytest.mark.unit
+class TestBoundTaskMiddleware:
+    """
+    The bound-task middleware wraps each attempt of a placed task, after
+    bind and before the pre-transfer completion check, skipped or not.
+    """
+
+    _build = staticmethod(TestSkipBeforeTransfer._build)
+
+    @pytest.fixture(autouse=True)
+    def _generic_transfer(self) -> Generator[None]:
+        """Move bytes for real: local targets otherwise share a no-op."""
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=None
+        ):
+            yield
+
+    async def test_fires_before_the_check_for_executed_tasks(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """One call per task, on its bound target, before its check."""
+        del horus_context
+        wf, _ = self._build(tmp_path)
+        order: list[str] = []
+        check = HorusTask.is_complete_before_transfer
+
+        class OrderMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                order.append(f"hook {context.task.id}")
+
+        async def checking(
+            task: HorusTask, input_digests: InputDigests
+        ) -> bool:
+            order.append(f"check {task.id}")
+            return await check(task, input_digests)
+
+        with patch.object(HorusTask, "is_complete_before_transfer", checking):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert [t.status for t in wf.tasks] == [TaskStatus.COMPLETED] * 2
+        assert bound_task_calls == [("producer", True), ("consumer", True)]
+        assert order == [
+            "hook producer",
+            "check producer",
+            "hook consumer",
+            "check consumer",
+        ]
+
+    async def test_fires_for_skipped_tasks(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """A re-run skips both tasks and still calls the hook for each."""
+        del horus_context
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        bound_task_calls.clear()
+
+        wf, _ = self._build(tmp_path)
+        with patch.object(
+            _FarLocalTarget, "dispatch", new_callable=AsyncMock
+        ) as dispatch:
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert [t.status for t in wf.tasks] == [TaskStatus.SKIPPED] * 2
+        dispatch.assert_not_awaited()
+        assert bound_task_calls == [("producer", True), ("consumer", True)]
+
+    async def test_restore_in_before_makes_the_task_skip(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_bound_task_registry: None,
+    ) -> None:
+        """
+        A task seeded as a cache hit, its output gone from the target, skips
+        when ``before`` puts the output back, and re-executes without it.
+        """
+        del horus_context, restore_bound_task_registry
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        result = tmp_path / "dst" / "result.txt"
+
+        class RestoringMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                if context.task.id == "consumer":
+                    result.write_text("hi\n")
+
+        async def rerun() -> HorusTask:
+            result.unlink()
+            wf, consumer = self._build(tmp_path)
+            consumer.status = TaskStatus.SKIPPED
+            consumer.skip_reason = SkipReason.COMPLETE
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+            return consumer
+
+        consumer = await rerun()
+        assert consumer.status == TaskStatus.SKIPPED
+        assert consumer.runs == 0
+
+        BoundTaskMiddleware.registry.remove(RestoringMiddleware)
+        consumer = await rerun()
+        assert consumer.status == TaskStatus.COMPLETED
+        assert consumer.runs == 1
+
+    async def test_fires_with_skip_if_complete_false(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """A task that never skips still gets one call, and runs."""
+        del horus_context
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        bound_task_calls.clear()
+
+        wf, consumer = self._build(tmp_path)
+        consumer.skip_if_complete = False
+        await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert consumer.status == TaskStatus.COMPLETED
+        assert consumer.runs == 1
+        assert bound_task_calls == [("producer", True), ("consumer", True)]
+
+    async def test_inactive_branch_does_not_fire(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """A task on an untaken branch is never placed, so no call."""
+        del horus_context
+        decision = tmp_path / "check.json"
+        decision.write_text(json.dumps({"branch": "b"}))
+        check = HorusTask(
+            id="check",
+            name="check",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FileArtifact(id="decision", path=decision)],
+        )
+        untaken = _task("c", tmp_path=tmp_path)
+        wf = HorusWorkflow(
+            name="branch",
+            tasks=[check, untaken],
+            edges=[
+                WorkflowEdge(
+                    source="check",
+                    target="c",
+                    condition=EdgeCondition(
+                        source_task="check",
+                        source_output="decision",
+                        key="branch",
+                        op="eq",
+                        value="c",
+                    ),
+                )
+            ],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        await asyncio.wait_for(wf.run(trigger_id="check"), timeout=10)
+
+        assert untaken.skip_reason is SkipReason.INACTIVE
+        assert bound_task_calls == [("check", True)]
+
+    async def test_error_fails_the_task(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_bound_task_registry: None,
+    ) -> None:
+        """An error in ``before`` fails the task and, fail-fast, the run."""
+        del restore_bound_task_registry
+
+        class BrokenMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                del context
+                raise RuntimeError("restore broke")
+
+        task = _task("t", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(name="broken", tasks=[task])
+        events: list[object] = []
+        with (
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            pytest.raises(RuntimeError, match="restore broke"),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 0
+        assert task.status == TaskStatus.FAILED
+        assert wf.status == WorkflowStatus.FAILED
+        assert any(
+            "restore broke" in getattr(event, "message", "")
+            for event in events
+        )
+
+
 async def test_zero_max_concurrency_never_waits() -> None:
     """``max_concurrency=0`` hands out a slot per dispatch, with no cap."""
     target = LocalTarget()
@@ -1143,6 +1400,21 @@ class _LosingMapTask(_LosingTask):
     """Stands in for a map: it dispatches children."""
 
     dispatches_children: ClassVar[bool] = True
+
+
+class _LosingCheckTask(_LosingTask):
+    """Loses its machine in its first pre-transfer completion check."""
+
+    add_to_registry: ClassVar[bool] = False
+    checks: int = 0
+
+    async def is_complete_before_transfer(
+        self, input_digests: InputDigests
+    ) -> bool:
+        self.checks += 1
+        if self.checks == 1:
+            raise TargetLostError("node gone")
+        return await super().is_complete_before_transfer(input_digests)
 
 
 class _Node(LocalTarget):
@@ -1202,6 +1474,74 @@ class TestRetryOnTargetLoss:
             "Node lost; retrying t" in getattr(event, "message", "")
             for event in events
         )
+
+    async def test_hook_fires_once_per_node_attempt(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """One loss, two attempts: the hook runs on each node, bound."""
+        del horus_context
+        task = await self._run_one(tmp_path, losses=1)
+
+        assert task.runs == 2
+        assert task.status == TaskStatus.COMPLETED
+        assert bound_task_calls == [("t", True), ("t", True)]
+
+    async def test_loss_in_the_hook_retries_on_a_new_node(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """A node lost in ``before`` (mid-restore) is retried like a run."""
+        lost: list[bool] = []
+
+        class LosingMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                del context
+                if not lost:
+                    lost.append(True)
+                    raise TargetLostError("node gone")
+
+        events: list[object] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            task = await self._run_one(tmp_path, losses=0)
+
+        assert task.runs == 1
+        assert task.status == TaskStatus.COMPLETED
+        assert task._target_loss_retries == 1
+        assert bound_task_calls == [("t", True), ("t", True)]
+        assert any(
+            "Node lost; retrying t" in getattr(event, "message", "")
+            for event in events
+        )
+
+    async def test_loss_in_the_check_retries_on_a_new_node(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """
+        A node lost in the pre-transfer check is retried: the hook and the
+        check run again on the new node.
+        """
+        del horus_context
+        task = await self._run_one(
+            tmp_path, losses=0, task_cls=_LosingCheckTask
+        )
+
+        assert isinstance(task, _LosingCheckTask)
+        assert task.checks == 2
+        assert task.runs == 1
+        assert task.status == TaskStatus.COMPLETED
+        assert bound_task_calls == [("t", True), ("t", True)]
 
     async def test_lost_twice_fails(
         self, tmp_path: Path, horus_context: HorusContext
