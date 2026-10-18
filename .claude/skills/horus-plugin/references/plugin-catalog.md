@@ -136,6 +136,11 @@ scheduler's skip check before inputs are staged; *input_digests* is an async
 callable giving each input's digest at its source. Default `False` (transfer,
 then `run()` checks `is_complete`).
 
+Optional: `async manifest_matches(manifest: bytes, input_digests) -> bool` —
+whether a completion manifest held elsewhere (e.g. a cache) matches the
+task's current inputs and config, without reading the target. Default
+`False`.
+
 `run()` / `reset()` are `@final` and drive status + middleware; `reset()`
 clears `status`, `skip_reason`, `error` and the timestamps before `_reset()`.
 **Ref:** `task/horus_task.py` (`HorusTask`, `kind="horus_task"`: `_run` checks
@@ -143,7 +148,9 @@ inputs exist via `ArtifactStore`, fingerprints them, awaits
 `executor.execute(self)`, then writes the manifest
 `<working dir>/.horus/<id>.json`; `is_complete` → every output exists and the
 manifest matches the input digests and config, `False` when there are no
-outputs; `is_complete_before_transfer` → `is_complete(input_digests)`; `_reset`
+outputs; `is_complete_before_transfer` → `is_complete(input_digests)`;
+`manifest_matches` → the bytes parse as its manifest and equal the fingerprint
+from *input_digests*; `_reset`
 deletes outputs and the manifest).
 
 ## Workflow — `horus.workflow`

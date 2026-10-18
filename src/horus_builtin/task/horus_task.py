@@ -275,6 +275,25 @@ class HorusTask(BaseTask):
         """
         return await self.is_complete(input_digests)
 
+    async def manifest_matches(
+        self, manifest: bytes, input_digests: InputDigests
+    ) -> bool:
+        """
+        Whether *manifest* (the bytes of a ``.horus/<id>.json``) is the one
+        :meth:`is_complete` would accept with *input_digests*, without
+        reading the outputs or the manifest on the target.
+        """
+        if not self.outputs:
+            return False
+        try:
+            recorded = TaskFingerprint.model_validate_json(manifest)
+        except ValueError:
+            return False
+        digests = await input_digests()
+        if None in digests.values():
+            return False
+        return recorded == await self._fingerprint(digests)
+
     async def _reset(self) -> None:
         """
         Reset the task by deleting all output artifacts. This allows the task

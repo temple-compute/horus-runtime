@@ -526,6 +526,20 @@ class BaseTask(AutoRegistry, entry_point="task"):
         del input_digests
         return False
 
+    async def manifest_matches(
+        self, manifest: bytes, input_digests: InputDigests
+    ) -> bool:
+        """
+        Whether *manifest*, a completion manifest in this task's own format
+        (e.g. a cached copy), matches the task's current inputs and
+        configuration. Reads nothing on the target, so a plugin can ask it
+        before restoring outputs there.
+
+        The default has no manifest and returns ``False``.
+        """
+        del manifest, input_digests
+        return False
+
     def mark_skipped_complete(self) -> None:
         """
         Record that the task was skipped because it is already complete.

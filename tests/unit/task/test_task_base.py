@@ -151,6 +151,15 @@ class TestBaseTask:
         assert not task.outputs
         assert task.kind == "test_task"
 
+    async def test_manifest_matches_defaults_to_false(self) -> None:
+        """A task without a manifest format never matches one."""
+
+        async def digests() -> dict[str, str | None]:
+            raise AssertionError("not awaited")
+
+        task = _make_concrete_task()
+        assert await task.manifest_matches(b"{}", digests) is False
+
 
 @pytest.mark.unit
 class TestBaseTaskValidation:

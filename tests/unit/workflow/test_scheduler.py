@@ -59,6 +59,7 @@ from horus_runtime.core.task.exceptions import (
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.base import EdgeSource
 from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
@@ -1266,6 +1267,69 @@ class TestBoundTaskMiddleware:
         consumer = await rerun()
         assert consumer.status == TaskStatus.COMPLETED
         assert consumer.runs == 1
+
+    @pytest.mark.parametrize("stale", [False, True])
+    async def test_manifest_checked_before_restore(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_bound_task_registry: None,
+        stale: bool,
+    ) -> None:
+        """
+        ``before`` compares a cached manifest with ``context.input_digests``
+        and restores only on a match. The check reuses the same digests.
+        """
+        del horus_context, restore_bound_task_registry
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        result = tmp_path / "dst" / "result.txt"
+        manifest_path = tmp_path / "dst" / ".horus" / "consumer.json"
+        cached = json.loads(manifest_path.read_text())
+        if stale:
+            cached["config_hash"] = "changed"
+        cached_bytes = json.dumps(cached).encode()
+        result.unlink()
+        manifest_path.unlink()
+        matches: list[bool] = []
+
+        class RestoringMiddleware(BoundTaskMiddleware):
+            async def before(
+                self, context: BoundTaskMiddlewareContext
+            ) -> None:
+                if context.task.id != "consumer":
+                    return
+                match = await context.task.manifest_matches(
+                    cached_bytes, context.input_digests
+                )
+                matches.append(match)
+                if match:
+                    result.write_text("hi\n")
+                    manifest_path.write_bytes(cached_bytes)
+
+        digested: list[str] = []
+        source_digests = HorusWorkflow.source_digests
+
+        async def counting(
+            workflow: HorusWorkflow,
+            task: HorusTask,
+            source_map: dict[tuple[str, str], EdgeSource] | None = None,
+        ) -> dict[str, str | None]:
+            digested.append(task.id)
+            return await source_digests(workflow, task, source_map)
+
+        wf, consumer = self._build(tmp_path)
+        with patch.object(HorusWorkflow, "source_digests", counting):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert matches == [not stale]
+        assert digested.count("consumer") == 1
+        if stale:
+            assert consumer.status == TaskStatus.COMPLETED
+            assert consumer.runs == 1
+        else:
+            assert consumer.status == TaskStatus.SKIPPED
+            assert consumer.runs == 0
 
     async def test_fires_with_skip_if_complete_false(
         self,

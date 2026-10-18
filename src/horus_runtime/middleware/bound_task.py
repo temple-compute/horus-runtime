@@ -26,7 +26,7 @@ from horus_runtime.middleware.auto_middleware import AutoMiddleware
 
 if TYPE_CHECKING:
     from horus_runtime.core.target.base import BaseTarget
-    from horus_runtime.core.task.base import BaseTask
+    from horus_runtime.core.task.base import BaseTask, InputDigests
 
 
 @dataclass
@@ -34,10 +34,14 @@ class BoundTaskMiddlewareContext:
     """
     Context passed to BoundTaskMiddleware. ``target`` is the acquired
     target, already bound to ``task`` (``task.target is target``).
+    ``input_digests`` gives the task's input digests at their source, the
+    ones the completion check uses (e.g. for ``task.manifest_matches``).
+    They are computed on the first await and shared with the check.
     """
 
     task: "BaseTask"
     target: "BaseTarget"
+    input_digests: "InputDigests"
 
 
 class BoundTaskMiddleware(
@@ -49,6 +53,12 @@ class BoundTaskMiddleware(
     Runs for every task the scheduler places, skipped or not. A node lost
     during the attempt re-binds the task and wraps the retry again, so
     ``before`` sees the new node.
+
+    The task's lease already counts as pulling inputs, so a slow
+    ``before`` keeps its upstream machines up.
+
+    ``after`` must not raise: it runs in a ``finally``, so its exception
+    would replace the attempt's and decide whether it is retried.
     """
 
     registry: list[type["BoundTaskMiddleware"]]
