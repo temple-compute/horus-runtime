@@ -29,6 +29,8 @@ a task consumes it, because no producer ever wrote its bytes.
 
 from typing import ClassVar
 
+from pydantic import ConfigDict
+
 from horus_runtime.core.artifact.base import BaseArtifact
 
 
@@ -45,6 +47,10 @@ class ValueArtifact[T: object](BaseArtifact[T]):
 
     kind_name: ClassVar[str] = "Value"
     kind_description: ClassVar[str] = "A value-carrying artifact."
+
+    # Field docstrings become JSON-schema descriptions: the GUI's limit form
+    # shows them as help text.
+    model_config = ConfigDict(use_attribute_docstrings=True)
 
     value: T
     """

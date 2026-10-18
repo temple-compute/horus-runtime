@@ -128,6 +128,21 @@ class TestMultiChoice:
                 }
             )
 
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            ({"min_picks": 2, "value": ["H"]}, "at least 2 picks"),
+            ({"max_picks": 1, "value": ["H", "C"]}, "at most 1 picks"),
+        ],
+    )
+    def test_pick_counts(
+        self, tmp_path: Path, fields: dict[str, object], message: str
+    ) -> None:
+        """Too few or too many picks fail; a count inside passes."""
+        _elements(tmp_path / "e", min_picks=1, max_picks=2, value=["H", "C"])
+        with pytest.raises(ValidationError, match=message):
+            _elements(tmp_path / "e", **fields)
+
     def test_disk_is_a_json_array_checked_both_ways(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -162,6 +177,42 @@ class TestListArtifact:
         artifact.materialize()
         assert artifact.path.read_text() == '[1, "a b"]'
         assert artifact.read() == [1, "a b"]
+
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            ({"min_items": 2, "value": [1]}, "at least 2 items"),
+            ({"max_items": 1, "value": [1, 2]}, "at most 1 items"),
+            ({"unique": True, "value": [1, 1]}, "twice"),
+            ({"min": 0, "max": 10, "value": [11]}, "outside"),
+            ({"min": 0, "value": ["a"]}, "not a number"),
+            ({"exclude": ["a"], "value": ["b", "a"]}, "not allowed"),
+        ],
+    )
+    def test_limits_reject(
+        self, tmp_path: Path, fields: dict[str, object], message: str
+    ) -> None:
+        """Counts, duplicates, item bounds and exclusions fail clearly."""
+        with pytest.raises(ValidationError, match=message):
+            ListArtifact.model_validate(
+                {"id": "l", "path": tmp_path / "l", **fields}
+            )
+
+    def test_limits_accept(self, tmp_path: Path) -> None:
+        """A list inside every limit is valid."""
+        ListArtifact.model_validate(
+            {
+                "id": "l",
+                "path": tmp_path / "l",
+                "min_items": 1,
+                "max_items": 3,
+                "unique": True,
+                "min": 0,
+                "max": 10,
+                "exclude": [5],
+                "value": [1, 2.5, 10],
+            }
+        )
 
 
 @pytest.mark.unit

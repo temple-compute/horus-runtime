@@ -22,12 +22,18 @@ list of scalars (a chips input in the GUI).
 
 import json
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar, Self, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
+from horus_builtin.artifact.limits import (
+    check_count,
+    check_excluded,
+    check_range,
+)
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.i18n import tr as _
 
 ListItem = str | int | float
 
@@ -46,6 +52,52 @@ class ListArtifact(ValueArtifact[list[ListItem]]):
     kind_description: ClassVar[str] = "A list of strings or numbers."
 
     value: list[ListItem] = Field(default_factory=list)
+
+    min_items: int | None = Field(default=None, ge=0)
+    """The fewest items allowed (``None``: no minimum)."""
+
+    max_items: int | None = Field(default=None, ge=0)
+    """The most items allowed (``None``: no maximum)."""
+
+    unique: bool = False
+    """Reject a list that holds the same item twice."""
+
+    min: int | float | None = None
+    """The smallest allowed item; items must then be numbers."""
+
+    max: int | float | None = None
+    """The largest allowed item; items must then be numbers."""
+
+    exclude: list[ListItem] = Field(default_factory=list)
+    """Items that are never allowed."""
+
+    @model_validator(mode="after")
+    def _check_items(self) -> Self:
+        check_count(
+            self.id,
+            len(self.value),
+            self.min_items,
+            self.max_items,
+            _("items"),
+        )
+        bounded = self.min is not None or self.max is not None
+        seen: set[ListItem] = set()
+        for item in self.value:
+            if bounded:
+                if isinstance(item, str):
+                    raise ValueError(
+                        _("List artifact '%(id)s': '%(v)s' is not a number.")
+                        % {"id": self.id, "v": item}
+                    )
+                check_range(self.id, item, self.min, self.max)
+            check_excluded(self.id, item, self.exclude)
+            if self.unique and item in seen:
+                raise ValueError(
+                    _("List artifact '%(id)s' holds '%(v)s' twice.")
+                    % {"id": self.id, "v": item}
+                )
+            seen.add(item)
+        return self
 
     def read(self) -> list[ListItem]:
         """
