@@ -49,6 +49,8 @@ number = "horus_builtin.artifact.number"
 boolean = "horus_builtin.artifact.boolean"
 string = "horus_builtin.artifact.string"
 choice = "horus_builtin.artifact.choice"
+multichoice = "horus_builtin.artifact.multichoice"
+list = "horus_builtin.artifact.list"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"

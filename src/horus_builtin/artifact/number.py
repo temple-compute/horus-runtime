@@ -22,10 +22,13 @@ value artifact in the Horus runtime.
 
 import json
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar, Self, cast
+
+from pydantic import Field, model_validator
 
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.i18n import tr as _
 
 
 class NumberArtifact(ValueArtifact[int | float]):
@@ -41,6 +44,69 @@ class NumberArtifact(ValueArtifact[int | float]):
     kind_description: ClassVar[str] = "A numeric value artifact."
 
     value: int | float = 0
+
+    min: int | float | None = None
+    """The smallest allowed value (``None``: unbounded)."""
+
+    max: int | float | None = None
+    """The largest allowed value (``None``: unbounded)."""
+
+    step: int | float | None = Field(default=None, gt=0)
+    """
+    The allowed increment, counted from ``min`` (or 0): ``step: 1`` with an
+    integer ``min`` allows only integers. ``None`` allows any value.
+    """
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> Self:
+        if "value" not in self.model_fields_set and self.min is not None:
+            # An unset value (e.g. stripped from a published release) starts
+            # in range instead of failing on the 0 default.
+            self.value = self.min
+        if (
+            self.min is not None
+            and self.max is not None
+            and self.min > self.max
+        ):
+            raise ValueError(
+                _(
+                    "Number artifact '%(id)s': min %(min)s is above "
+                    "max %(max)s."
+                )
+                % {"id": self.id, "min": self.min, "max": self.max}
+            )
+        if (self.min is not None and self.value < self.min) or (
+            self.max is not None and self.value > self.max
+        ):
+            raise ValueError(
+                _(
+                    "Number artifact '%(id)s': %(v)s is outside "
+                    "[%(min)s, %(max)s]."
+                )
+                % {
+                    "id": self.id,
+                    "v": self.value,
+                    "min": "-inf" if self.min is None else self.min,
+                    "max": "inf" if self.max is None else self.max,
+                }
+            )
+        if self.step is not None:
+            n = (self.value - (self.min or 0)) / self.step
+            # Tolerance so 0.3 sits on a 0.1 grid despite float rounding.
+            if abs(n - round(n)) > 1e-9 * max(1.0, abs(n)):
+                raise ValueError(
+                    _(
+                        "Number artifact '%(id)s': %(v)s is not a multiple "
+                        "of step %(step)s from %(base)s."
+                    )
+                    % {
+                        "id": self.id,
+                        "v": self.value,
+                        "step": self.step,
+                        "base": self.min or 0,
+                    }
+                )
+        return self
 
     def read(self) -> int | float:
         """

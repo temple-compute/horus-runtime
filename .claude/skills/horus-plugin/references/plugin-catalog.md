@@ -45,7 +45,7 @@ and `unpackage`.
 **Ref:** `artifact/folder.py` (`FolderArtifact(BaseArtifact[Path])`,
 `kind="folder"`, tar `pack_command`/`unpack_command`).
 
-Value kinds (`number`, `boolean`, `string`, `choice`) build on
+Value kinds (`number`, `boolean`, `string`, `choice`, `multichoice`, `list`) build on
 `ValueArtifact[T]` (`horus_builtin/artifact/value.py`): a `value: T` field and
 a `materialize()` that writes `value` to `path` only when no file exists yet.
 Subclass it and implement `read`/`write`.

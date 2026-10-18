@@ -20,11 +20,15 @@ Implementation of the StringArtifact class, which represents a string
 value artifact in the Horus runtime.
 """
 
+import re
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Self
+
+from pydantic import Field, model_validator
 
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.i18n import tr as _
 
 
 class StringArtifact(ValueArtifact[str]):
@@ -41,6 +45,41 @@ class StringArtifact(ValueArtifact[str]):
     kind_description: ClassVar[str] = "A string value artifact."
 
     value: str = ""
+
+    pattern: str | None = None
+    """A Python regex the whole value must match (``None``: anything)."""
+
+    max_length: int | None = Field(default=None, ge=0)
+    """The longest allowed value, in characters (``None``: unbounded)."""
+
+    multiline: bool = False
+    """Edit the value in a multi-line box. A UI hint only."""
+
+    @model_validator(mode="after")
+    def _check_constraints(self) -> Self:
+        if self.max_length is not None and len(self.value) > self.max_length:
+            raise ValueError(
+                _("String artifact '%(id)s' is longer than %(n)s characters.")
+                % {"id": self.id, "n": self.max_length}
+            )
+        if self.pattern is None:
+            return self
+        try:
+            regex = re.compile(self.pattern)
+        except re.error as exc:
+            raise ValueError(
+                _("String artifact '%(id)s' has an invalid pattern: %(e)s")
+                % {"id": self.id, "e": exc}
+            ) from exc
+        if not regex.fullmatch(self.value):
+            raise ValueError(
+                _(
+                    "String artifact '%(id)s': '%(v)s' does not match "
+                    "pattern '%(p)s'."
+                )
+                % {"id": self.id, "v": self.value, "p": self.pattern}
+            )
+        return self
 
     def read(self) -> str:
         """

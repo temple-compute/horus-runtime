@@ -20,7 +20,11 @@ The ``{value, label}`` option shared by value artifacts that let the user
 pick among authored alternatives.
 """
 
+import json
+
 from pydantic import BaseModel
+
+from horus_runtime.i18n import tr as _
 
 type OptionValue = str | int | float | bool
 """A JSON scalar: what the task's runtime receives for the option."""
@@ -36,3 +40,57 @@ class Option(BaseModel):
 
     value: OptionValue
     label: str | None = None
+
+
+def option_text(value: OptionValue) -> str:
+    """
+    The text an option value renders to, on disk and in ``$id``.
+
+    Strings are written bare (like ``StringArtifact``) so ``--device $device``
+    and ``cat $device`` both give ``gpu``; anything else is JSON (like
+    ``NumberArtifact``/``BooleanArtifact``), which is what substitution
+    renders for those types too.
+    """
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def check_options(artifact_id: str, options: list[Option]) -> None:
+    """
+    Raise ValueError unless *options* is non-empty and distinct by text, so
+    a file can always be read back to exactly one option.
+    """
+    if not options:
+        raise ValueError(
+            _("Artifact '%(id)s' needs at least one option.")
+            % {"id": artifact_id}
+        )
+    seen: set[str] = set()
+    for option in options:
+        text = option_text(option.value)
+        if text in seen:
+            raise ValueError(
+                _("Artifact '%(id)s' has duplicate option '%(v)s'.")
+                % {"id": artifact_id, "v": text}
+            )
+        seen.add(text)
+
+
+def match_option(
+    artifact_id: str, options: list[Option], value: OptionValue
+) -> OptionValue:
+    """The option value matching *value*'s text, or ValueError."""
+    text = option_text(value)
+    for option in options:
+        if option_text(option.value) == text:
+            return option.value
+    raise ValueError(
+        _(
+            "Artifact '%(id)s': '%(v)s' is not one of its options "
+            "(%(options)s)."
+        )
+        % {
+            "id": artifact_id,
+            "v": text,
+            "options": ", ".join(option_text(o.value) for o in options),
+        }
+    )
