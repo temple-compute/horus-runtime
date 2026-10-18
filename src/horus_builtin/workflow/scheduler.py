@@ -43,7 +43,10 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.lease import LeaseState
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import MAX_TARGET_LOSS_RETRIES
+from horus_runtime.core.task.base import (
+    MAX_TARGET_LOSS_RETRIES,
+    InputDigests,
+)
 from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.task.status import (
     TERMINAL_STATUSES,
@@ -54,6 +57,10 @@ from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.exceptions import WorkflowExecutionError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.middleware.bound_task import (
+    BoundTaskMiddleware,
+    BoundTaskMiddlewareContext,
+)
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -215,28 +222,33 @@ async def _execute_on_target(
             target.bind(task)
             workflow.leases.member_started(task)
 
-            # A task already complete is skipped before any of its inputs is
-            # transferred, judged from their digests at the source. A miss
-            # falls through to the transfer and `run()`'s own check.
-            if (
-                task.skip_if_complete
-                and await task.is_complete_before_transfer(
-                    partial(workflow.source_digests, task, source_map)
-                )
-            ):
-                workflow.adopt_values(task, source_map)
-                task.mark_skipped_complete()
-                return
-
-            # A lost machine re-runs transfer, dispatch and wait on a new one,
-            # keeping this placement, pool slot and lease membership. A map
-            # gets one only for a loss of its own (after the fan-out): its
-            # clones' losses reach it grouped, and they retry on their own.
+            # A lost machine re-runs the bound-task middleware, the check,
+            # transfer, dispatch and wait on a new one, keeping this
+            # placement, pool slot and lease membership. A map gets one only
+            # for a loss of its own (after the fan-out): its clones' losses
+            # reach it grouped, and they retry on their own.
             while True:
                 retry = task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
                 task._retry_on_target_loss = retry  # noqa: SLF001
+                input_digests = _once(
+                    partial(workflow.source_digests, task, source_map)
+                )
                 try:
-                    await _transfer_and_run(workflow, task, target, source_map)
+                    await BoundTaskMiddleware.call_with_middleware(
+                        BoundTaskMiddlewareContext(
+                            task=task,
+                            target=target,
+                            input_digests=input_digests,
+                        ),
+                        partial(
+                            _skip_or_run,
+                            workflow,
+                            task,
+                            target,
+                            source_map,
+                            input_digests,
+                        ),
+                    )
                     break
                 except TargetLostError:
                     if not retry:
@@ -282,6 +294,42 @@ async def _execute_on_target(
         raise
     finally:
         await placement.release(location_id, resources)
+
+
+def _once(input_digests: InputDigests) -> InputDigests:
+    """
+    *input_digests*, run on the first await only, so the bound-task
+    middleware and the check share one digest of each input.
+    """
+    result: dict[str, str | None] | None = None
+
+    async def digests() -> dict[str, str | None]:
+        nonlocal result
+        if result is None:
+            result = await input_digests()
+        return result
+
+    return digests
+
+
+async def _skip_or_run(
+    workflow: BaseWorkflow,
+    task: "BaseTask",
+    target: BaseTarget,
+    source_map: dict[tuple[str, str], EdgeSource],
+    input_digests: InputDigests,
+) -> None:
+    """Skip *task* if already complete, else transfer and run it."""
+    # A task already complete is skipped before any of its inputs is
+    # transferred, judged from their digests at the source. A miss
+    # falls through to the transfer and `run()`'s own check.
+    if task.skip_if_complete and await task.is_complete_before_transfer(
+        input_digests
+    ):
+        workflow.adopt_values(task, source_map)
+        task.mark_skipped_complete()
+        return
+    await _transfer_and_run(workflow, task, target, source_map)
 
 
 async def _transfer_and_run(

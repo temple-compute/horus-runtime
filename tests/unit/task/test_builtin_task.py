@@ -35,6 +35,7 @@ from horus_builtin.runtime.python_script import PythonScriptRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
@@ -460,6 +461,65 @@ class TestHorusTaskInputFingerprint:
 
         assert task.runs == 1
         assert await task.is_complete() is True
+
+    async def test_manifest_matches_without_reading_the_target(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The manifest a run wrote matches from its bytes and the source
+        digests alone, even once the outputs and manifest are gone.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+        await task.run()
+        manifest_path = tmp_path / ".horus" / "copy_task.json"
+        manifest = manifest_path.read_bytes()
+        digest = await ArtifactStore(task.target).digest(task.inputs[0])
+        manifest_path.unlink()
+        (tmp_path / "out.txt").unlink()
+
+        async def digests() -> dict[str, str | None]:
+            return {"src": digest}
+
+        assert await task.manifest_matches(manifest, digests) is True
+
+    @pytest.mark.parametrize(
+        ("manifest", "digest"),
+        [
+            (None, "other"),
+            (None, None),
+            (b"not json", "keep"),
+        ],
+        ids=["changed-input", "undigestable-input", "broken-manifest"],
+    )
+    async def test_manifest_does_not_match(
+        self, tmp_path: Path, manifest: bytes | None, digest: str | None
+    ) -> None:
+        """A changed or undigestable input, or bad bytes, never match."""
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+        await task.run()
+        if manifest is None:
+            manifest = (tmp_path / ".horus" / "copy_task.json").read_bytes()
+        if digest == "keep":
+            digest = await ArtifactStore(task.target).digest(task.inputs[0])
+
+        async def digests() -> dict[str, str | None]:
+            return {"src": digest}
+
+        assert await task.manifest_matches(manifest, digests) is False
+
+    async def test_task_without_outputs_never_matches(
+        self, tmp_path: Path
+    ) -> None:
+        """Like ``is_complete``: no outputs, nothing to skip."""
+        task = self._make_copy_task(tmp_path)
+        task.outputs = []
+
+        async def digests() -> dict[str, str | None]:
+            return {}
+
+        assert await task.manifest_matches(b"{}", digests) is False
 
 
 @pytest.mark.unit
