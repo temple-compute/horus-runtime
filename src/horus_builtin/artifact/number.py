@@ -26,6 +26,7 @@ from typing import ClassVar, Self, cast
 
 from pydantic import Field, model_validator
 
+from horus_builtin.artifact.limits import check_excluded, check_range
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.i18n import tr as _
@@ -57,39 +58,16 @@ class NumberArtifact(ValueArtifact[int | float]):
     integer ``min`` allows only integers. ``None`` allows any value.
     """
 
+    exclude: list[int | float] = Field(default_factory=list)
+    """Values that are never allowed, even inside the range."""
+
     @model_validator(mode="after")
     def _check_bounds(self) -> Self:
         if "value" not in self.model_fields_set and self.min is not None:
             # An unset value (e.g. stripped from a published release) starts
             # in range instead of failing on the 0 default.
             self.value = self.min
-        if (
-            self.min is not None
-            and self.max is not None
-            and self.min > self.max
-        ):
-            raise ValueError(
-                _(
-                    "Number artifact '%(id)s': min %(min)s is above "
-                    "max %(max)s."
-                )
-                % {"id": self.id, "min": self.min, "max": self.max}
-            )
-        if (self.min is not None and self.value < self.min) or (
-            self.max is not None and self.value > self.max
-        ):
-            raise ValueError(
-                _(
-                    "Number artifact '%(id)s': %(v)s is outside "
-                    "[%(min)s, %(max)s]."
-                )
-                % {
-                    "id": self.id,
-                    "v": self.value,
-                    "min": "-inf" if self.min is None else self.min,
-                    "max": "inf" if self.max is None else self.max,
-                }
-            )
+        check_range(self.id, self.value, self.min, self.max)
         if self.step is not None:
             n = (self.value - (self.min or 0)) / self.step
             # Tolerance so 0.3 sits on a 0.1 grid despite float rounding.
@@ -106,6 +84,7 @@ class NumberArtifact(ValueArtifact[int | float]):
                         "base": self.min or 0,
                     }
                 )
+        check_excluded(self.id, self.value, self.exclude)
         return self
 
     def read(self) -> int | float:

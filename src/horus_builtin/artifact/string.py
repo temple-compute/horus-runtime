@@ -26,6 +26,7 @@ from typing import ClassVar, Self
 
 from pydantic import Field, model_validator
 
+from horus_builtin.artifact.limits import check_count, check_excluded
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.i18n import tr as _
@@ -49,19 +50,28 @@ class StringArtifact(ValueArtifact[str]):
     pattern: str | None = None
     """A Python regex the whole value must match (``None``: anything)."""
 
+    min_length: int | None = Field(default=None, ge=0)
+    """The shortest allowed value, in characters (``None``: no minimum)."""
+
     max_length: int | None = Field(default=None, ge=0)
     """The longest allowed value, in characters (``None``: unbounded)."""
 
     multiline: bool = False
     """Edit the value in a multi-line box. A UI hint only."""
 
+    exclude: list[str] = Field(default_factory=list)
+    """Values that are never allowed, e.g. a placeholder like ``changeme``."""
+
     @model_validator(mode="after")
     def _check_constraints(self) -> Self:
-        if self.max_length is not None and len(self.value) > self.max_length:
-            raise ValueError(
-                _("String artifact '%(id)s' is longer than %(n)s characters.")
-                % {"id": self.id, "n": self.max_length}
-            )
+        check_count(
+            self.id,
+            len(self.value),
+            self.min_length,
+            self.max_length,
+            _("characters"),
+        )
+        check_excluded(self.id, self.value, self.exclude)
         if self.pattern is None:
             return self
         try:

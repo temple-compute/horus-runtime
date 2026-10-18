@@ -26,6 +26,7 @@ from typing import ClassVar, Self
 
 from pydantic import Field, model_validator
 
+from horus_builtin.artifact.limits import check_count
 from horus_builtin.artifact.options import (
     Option,
     OptionValue,
@@ -35,6 +36,7 @@ from horus_builtin.artifact.options import (
 )
 from horus_builtin.artifact.value import ValueArtifact
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
+from horus_runtime.i18n import tr as _
 
 
 class MultiChoiceArtifact(ValueArtifact[list[OptionValue]]):
@@ -59,10 +61,23 @@ class MultiChoiceArtifact(ValueArtifact[list[OptionValue]]):
     value: list[OptionValue] = Field(default_factory=list)
     """The picked option values; empty picks none."""
 
+    min_picks: int | None = Field(default=None, ge=0)
+    """The fewest options that must be picked (``None``: no minimum)."""
+
+    max_picks: int | None = Field(default=None, ge=0)
+    """The most options that may be picked (``None``: no maximum)."""
+
     @model_validator(mode="after")
     def _check_options(self) -> Self:
         check_options(self.id, self.options)
         self.value = self._picked(self.value)
+        check_count(
+            self.id,
+            len(self.value),
+            self.min_picks,
+            self.max_picks,
+            _("picks"),
+        )
         return self
 
     def _picked(self, values: list[OptionValue]) -> list[OptionValue]:

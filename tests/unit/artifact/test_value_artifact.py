@@ -343,7 +343,7 @@ class TestStringConstraints:
         [
             ({"pattern": r"\d+", "value": "42a"}, "does not match"),
             ({"pattern": "(", "value": ""}, "invalid pattern"),
-            ({"max_length": 2, "value": "abc"}, "longer than 2"),
+            ({"max_length": 2, "value": "abc"}, "at most 2 characters"),
         ],
     )
     def test_invalid_values_are_rejected(
@@ -352,3 +352,52 @@ class TestStringConstraints:
         """Partial matches, bad regexes and long values fail."""
         with pytest.raises(ValidationError, match=message):
             StringArtifact.model_validate({"id": "s", "path": "/s", **fields})
+
+
+@pytest.mark.unit
+class TestValueLimits:
+    """The limits added on top of ranges: lengths, exclusions, schema docs."""
+
+    @pytest.mark.parametrize(
+        ("fields", "message"),
+        [
+            ({"min_length": 3, "value": "ab"}, "at least 3 characters"),
+            ({"min_length": 3, "max_length": 2}, "more than the at most"),
+            ({"exclude": ["changeme"], "value": "changeme"}, "not allowed"),
+        ],
+    )
+    def test_string_limits_reject(
+        self, fields: dict[str, object], message: str
+    ) -> None:
+        """Short, inverted and excluded strings fail."""
+        with pytest.raises(ValidationError, match=message):
+            StringArtifact.model_validate({"id": "s", "path": "/s", **fields})
+
+    def test_string_limits_accept(self) -> None:
+        """A value inside every limit is valid."""
+        StringArtifact.model_validate(
+            {
+                "id": "s",
+                "path": "/s",
+                "min_length": 2,
+                "max_length": 4,
+                "exclude": ["x"],
+                "value": "abc",
+            }
+        )
+
+    def test_number_exclude(self) -> None:
+        """An excluded number fails even inside the range."""
+        NumberArtifact.model_validate(
+            {"id": "n", "path": "/n", "exclude": [0], "value": 1}
+        )
+        with pytest.raises(ValidationError, match="not allowed"):
+            NumberArtifact.model_validate(
+                {"id": "n", "path": "/n", "min": -1, "exclude": [0]}
+                | {"value": 0}
+            )
+
+    def test_schema_carries_field_docs(self) -> None:
+        """Attribute docstrings reach the JSON schema the GUI renders."""
+        props = NumberArtifact.model_json_schema()["properties"]
+        assert "smallest allowed value" in props["min"]["description"]
