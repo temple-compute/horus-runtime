@@ -30,12 +30,14 @@ dependencies from the workflow's explicit edges and executes tasks in
 topological (DAG) order, which may differ from the order they are defined.
 """
 
+import asyncio
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
-from pathlib import Path
+from itertools import combinations
+from pathlib import Path, PurePosixPath
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -70,6 +72,7 @@ from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.transfer.events import TransferEvent, transfer_scope
 from horus_runtime.core.transfer.exceptions import (
     OrchestratorTargetNotSetError,
@@ -100,6 +103,14 @@ if TYPE_CHECKING:
     from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
 
 
+MAX_CONCURRENT_INPUT_TRANSFERS = 4
+"""
+How many of one task's inputs :meth:`BaseWorkflow.transfer_artifacts` pulls
+at once: enough to overlap per-transfer latency (a round trip, a remote
+pack) without flooding the source or the link.
+"""
+
+
 class EdgeSource(NamedTuple):
     """
     Where a consumer input is sourced from, resolved from the workflow edges.
@@ -111,13 +122,17 @@ class EdgeSource(NamedTuple):
     the producer task's id, or ``None`` for a root source. ``report`` is
     ``False`` for internal hand-offs that are not workflow edges (e.g. a map
     task feeding its clones), whose transfers emit no
-    :class:`TransferEvent`.
+    :class:`TransferEvent`. ``digest`` is the output's content digest, as
+    :meth:`ArtifactStore.digest` would compute it, when it is known without
+    reading the bytes (e.g. a cached output kept in storage);
+    :meth:`BaseWorkflow.source_digests` then uses it as is.
     """
 
     target: BaseTarget | None
     artifact: BaseArtifact | None
     task_id: str | None = None
     report: bool = True
+    digest: str | None = None
 
 
 class BaseWorkflow(AutoRegistry, entry_point="workflow"):
@@ -1204,6 +1219,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
            ``orchestrator_target`` is ``None`` a
            :exc:`OrchestratorTargetNotSetError` is raised.
 
+        Inputs are transferred concurrently, at most
+        :data:`MAX_CONCURRENT_INPUT_TRANSFERS` at a time, unless two of them
+        land on the same or nested paths: then one at a time, in order. The
+        first failure cancels the others and is raised as is (not as an
+        exception group), a :exc:`TargetLostError` first, so callers still
+        retry a lost node.
+
         Args:
             task: The task whose input artifacts should be transferred.
             source_map: Precomputed edge source map (see
@@ -1214,92 +1236,160 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             OrchestratorTargetNotSetError: When a root artifact cannot be
                 accessed by the destination and no orchestrator_target is set.
         """
-        if source_map is None:
-            source_map = self._build_source_map()
+        sources = (
+            self._build_source_map() if source_map is None else source_map
+        )
+        # A pinned input is already materialized in place by an expander
+        # (map/loop): not a transfer edge and not a root input either.
+        inputs = [a for a in task.inputs if not a.pinned]
+        if self._destinations_overlap(task, inputs, sources):
+            # A folder transfer replaces its whole directory: a nested
+            # input transferred alongside it would race its delete.
+            for artifact in inputs:
+                await self._transfer_input(task, artifact, sources)
+            return
+        slots = asyncio.Semaphore(MAX_CONCURRENT_INPUT_TRANSFERS)
 
-        for artifact in task.inputs:
-            if artifact.pinned:
-                # Already materialized in place by an expander (map/loop);
-                # not a transfer edge and not a root input either.
-                continue
+        async def transfer(artifact: BaseArtifact) -> None:
+            async with slots:
+                await self._transfer_input(task, artifact, sources)
 
+        try:
+            async with asyncio.TaskGroup() as group:
+                transfers = [
+                    group.create_task(transfer(artifact))
+                    for artifact in inputs
+                ]
+        except ExceptionGroup as failures:
+            # A lost node first, so it is retried; else the first to fail,
+            # which cancelled the rest.
+            raise next(  # noqa: B904
+                (
+                    exc
+                    for exc in failures.exceptions
+                    if isinstance(exc, TargetLostError)
+                ),
+                failures.exceptions[0],
+            )
+        # A group ignores a child that cancelled itself; the caller must not.
+        if any(t.cancelled() for t in transfers):
+            raise CancelledError
+
+    def _destinations_overlap(
+        self,
+        task: BaseTask,
+        inputs: list[BaseArtifact],
+        source_map: dict[tuple[str, str], EdgeSource],
+    ) -> bool:
+        """
+        Whether two of *inputs* are written to the same or nested paths on
+        *task*'s target. A transfer writes the producing artifact's path,
+        so both it and the input's own are counted.
+        """
+        written: list[list[PurePosixPath]] = []
+        for artifact in inputs:
             source = self._relocated(source_map.get((task.id, artifact.id)))
-            source_target, src_artifact = self._resolve_source(
-                task, artifact, source
+            artifacts = [artifact]
+            if source is not None and source.artifact is not None:
+                artifacts.append(source.artifact)
+            written.append(
+                [
+                    PurePosixPath(task.target.path_on_target(a))
+                    for a in artifacts
+                ]
             )
-            if source is not None and source.task_id is not None:
-                recovered = await self._recover_if_lost(source, source_target)
-                if recovered is not source:
-                    source = recovered
-                    source_target, src_artifact = self._resolve_source(
-                        task, artifact, source
-                    )
+        return any(
+            a == b or a.is_relative_to(b) or b.is_relative_to(a)
+            for mine, theirs in combinations(written, 2)
+            for a in mine
+            for b in theirs
+        )
 
-            # Transfer a copy of the *producing* artifact: it carries the id
-            # the data is stored under (so the lookup hits) and source path.
-            # The consumer input keeps its own id (the template key); we only
-            # point its path at the materialized result.
-            transfer_art = (src_artifact or artifact).model_copy()
-
-            if src_artifact is not None:
-                self._adopt_value(artifact, src_artifact)
-
-            # Look up the registered strategy for this (source, dest) pair,
-            # falling back to the source's own fallback (the target-agnostic
-            # GenericTransfer by default) when none is registered.
-            strategy_cls = BaseTransferStrategy.get_from_registry(
-                source_target, task.target
-            )
-            strategy = (
-                strategy_cls()
-                if strategy_cls is not None
-                else source_target.fallback_transfer()
-            )
-
-            horus_logger.log.debug(
-                _(
-                    "Transferring artifact '%(id)s' from '%(src)s'"
-                    " to '%(dst)s' via %(strategy)s."
+    async def _transfer_input(
+        self,
+        task: BaseTask,
+        artifact: BaseArtifact,
+        source_map: dict[tuple[str, str], EdgeSource],
+    ) -> None:
+        """
+        Transfer one input *artifact* of *task* (see
+        :meth:`transfer_artifacts`), resolving its source when its turn
+        comes, so a relocation recorded meanwhile is followed.
+        """
+        source = self._relocated(source_map.get((task.id, artifact.id)))
+        source_target, src_artifact = self._resolve_source(
+            task, artifact, source
+        )
+        if source is not None and source.task_id is not None:
+            recovered = await self._recover_if_lost(source, source_target)
+            if recovered is not source:
+                source = recovered
+                source_target, src_artifact = self._resolve_source(
+                    task, artifact, source
                 )
-                % {
-                    "id": transfer_art.id,
-                    "src": source_target.kind,
-                    "dst": task.target.kind,
-                    "strategy": type(strategy).__name__,
-                }
-            )
 
-            # Perform the transfer, then point the consumer input at the
-            # materialized location so its body templating resolves correctly.
-            # The scope reports it as a TransferEvent keyed by the edge it
-            # serves (consumer input + producer), so a UI can animate it;
-            # internal hand-offs (``report=False``) stay silent.
-            scope = (
-                transfer_scope(
-                    TransferEvent(
-                        phase="started",
-                        task_id=task.id,
-                        input_id=artifact.id,
-                        source_task_id=(
-                            source.task_id if source is not None else None
-                        ),
-                        source_artifact_id=transfer_art.id,
-                        strategy=type(strategy).__name__,
-                        same_location=(
-                            source_target.location_id
-                            == task.target.location_id
-                        ),
-                        is_value=hasattr(artifact, "value"),
-                    )
-                )
-                if source is None or source.report
-                else nullcontext()
+        # Transfer a copy of the *producing* artifact: it carries the id
+        # the data is stored under (so the lookup hits) and source path.
+        # The consumer input keeps its own id (the template key); we only
+        # point its path at the materialized result.
+        transfer_art = (src_artifact or artifact).model_copy()
+
+        if src_artifact is not None:
+            self._adopt_value(artifact, src_artifact)
+
+        # Look up the registered strategy for this (source, dest) pair,
+        # falling back to the source's own fallback (the target-agnostic
+        # GenericTransfer by default) when none is registered.
+        strategy_cls = BaseTransferStrategy.get_from_registry(
+            source_target, task.target
+        )
+        strategy = (
+            strategy_cls()
+            if strategy_cls is not None
+            else source_target.fallback_transfer()
+        )
+
+        horus_logger.log.debug(
+            _(
+                "Transferring artifact '%(id)s' from '%(src)s'"
+                " to '%(dst)s' via %(strategy)s."
             )
-            with scope:
-                await strategy.transfer(
-                    transfer_art, source_target, task.target
+            % {
+                "id": transfer_art.id,
+                "src": source_target.kind,
+                "dst": task.target.kind,
+                "strategy": type(strategy).__name__,
+            }
+        )
+
+        # Perform the transfer, then point the consumer input at the
+        # materialized location so its body templating resolves correctly.
+        # The scope reports it as a TransferEvent keyed by the edge it
+        # serves (consumer input + producer), so a UI can animate it;
+        # internal hand-offs (``report=False``) stay silent.
+        scope = (
+            transfer_scope(
+                TransferEvent(
+                    phase="started",
+                    task_id=task.id,
+                    input_id=artifact.id,
+                    source_task_id=(
+                        source.task_id if source is not None else None
+                    ),
+                    source_artifact_id=transfer_art.id,
+                    strategy=type(strategy).__name__,
+                    same_location=(
+                        source_target.location_id == task.target.location_id
+                    ),
+                    is_value=hasattr(artifact, "value"),
                 )
-            artifact.path = transfer_art.path
+            )
+            if source is None or source.report
+            else nullcontext()
+        )
+        with scope:
+            await strategy.transfer(transfer_art, source_target, task.target)
+        artifact.path = transfer_art.path
 
     def _relocated(self, source: EdgeSource | None) -> EdgeSource | None:
         """
@@ -1424,7 +1514,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         A digest does not depend on the path (a file's is its content's
         sha256, a directory's lists relative paths), so it equals the digest
         of the staged copy. A pinned input is digested in place on the task's
-        target. ``None`` marks an input that could not be digested.
+        target. A source that carries its digest (:attr:`EdgeSource.digest`)
+        is not read. ``None`` marks an input that could not be digested.
         """
         if source_map is None:
             source_map = self._build_source_map()
@@ -1436,10 +1527,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     artifact
                 )
                 continue
+            source = self._relocated(source_map.get((task.id, artifact.id)))
+            if source is not None and source.digest is not None:
+                digests[artifact.id] = source.digest
+                continue
             source_target, src_artifact = self._resolve_source(
-                task,
-                artifact,
-                self._relocated(source_map.get((task.id, artifact.id))),
+                task, artifact, source
             )
             try:
                 digests[artifact.id] = await ArtifactStore(

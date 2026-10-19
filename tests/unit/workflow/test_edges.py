@@ -23,8 +23,9 @@ own id/name while depending on a producer's differently-named output. A
 workflow with no edges has independent tasks (no dependencies).
 """
 
+import asyncio
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 from unittest.mock import patch
 
 import pytest
@@ -42,8 +43,14 @@ from horus_builtin.workflow.dag import (
 )
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
+from horus_runtime.core.workflow.base import (
+    MAX_CONCURRENT_INPUT_TRANSFERS,
+    EdgeSource,
+)
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
 
@@ -755,3 +762,220 @@ class TestArtifactLessOrderingEdges:
             WorkflowEdge(source="a", source_output="o", target="b")
         with pytest.raises(ValidationError, match="names only one of"):
             WorkflowEdge(source="a", target="b", target_input="in")
+
+
+class _NoShellTarget(LocalTarget):
+    """A target that fails the test if anything runs a command on it."""
+
+    add_to_registry: ClassVar[bool] = False
+
+    async def run_command_sync(
+        self,
+        cmd: str,
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> ChannelProcess:
+        del cmd, cwd, env
+        raise AssertionError("the source target was read")
+
+
+@pytest.mark.unit
+class TestSourceDigests:
+    """``source_digests`` reads each input at its source, unless it can't."""
+
+    async def test_known_digest_is_used_without_reading_the_source(
+        self, tmp_path: Path
+    ) -> None:
+        """A relocated source that carries its digest is not hashed."""
+        producer = _task(
+            task_id="producer",
+            inputs=[],
+            outputs=[FileArtifact(id="out", path=tmp_path / "p.txt")],
+        )
+        consumer = _task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="inp", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        wf = HorusWorkflow(
+            name="known_digest",
+            tasks=[producer, consumer],
+            edges=[_edge("producer", "out", "consumer", "inp")],
+        )
+        wf.relocate_output(
+            "producer",
+            "out",
+            EdgeSource(
+                _NoShellTarget(), producer.outputs[0], "producer", digest="ab"
+            ),
+        )
+
+        assert await wf.source_digests(consumer) == {"inp": "ab"}
+
+
+def _fan_in(tmp_path: Path, n: int) -> tuple[HorusWorkflow, HorusTask]:
+    """*n* producers, each feeding one input of ``consumer``."""
+    producers = [
+        _task(
+            task_id=f"p{i}",
+            inputs=[],
+            outputs=[FileArtifact(id="out", path=tmp_path / f"p{i}.txt")],
+        )
+        for i in range(n)
+    ]
+    consumer = _task(
+        task_id="consumer",
+        inputs=[
+            FileArtifact(id=f"in{i}", path=tmp_path / f"c{i}.txt")
+            for i in range(n)
+        ],
+        outputs=[],
+    )
+    wf = HorusWorkflow(
+        name="fan_in",
+        tasks=[*producers, consumer],
+        edges=[_edge(f"p{i}", "out", "consumer", f"in{i}") for i in range(n)],
+    )
+    return wf, consumer
+
+
+@pytest.mark.unit
+class TestConcurrentInputTransfers:
+    """A task's inputs are pulled concurrently, within a cap."""
+
+    async def test_concurrency_stays_within_the_cap(
+        self, tmp_path: Path
+    ) -> None:
+        """Every input transfers, never more than the cap at once."""
+        wf, consumer = _fan_in(tmp_path, MAX_CONCURRENT_INPUT_TRANSFERS * 3)
+        active = peak = 0
+
+        class _Slow:
+            async def transfer(self, *_: object) -> None:
+                nonlocal active, peak
+                active += 1
+                peak = max(peak, active)
+                await asyncio.sleep(0.01)
+                active -= 1
+
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=_Slow
+        ):
+            await wf.transfer_artifacts(consumer)
+
+        assert peak == MAX_CONCURRENT_INPUT_TRANSFERS
+        assert [a.path.name for a in consumer.inputs] == [
+            f"p{i}.txt" for i in range(MAX_CONCURRENT_INPUT_TRANSFERS * 3)
+        ]
+
+    async def test_first_failure_cancels_the_rest_and_propagates(
+        self, tmp_path: Path
+    ) -> None:
+        """The failure is raised unwrapped; the transfers in flight stop."""
+        wf, consumer = _fan_in(tmp_path, MAX_CONCURRENT_INPUT_TRANSFERS * 2)
+        started: list[str] = []
+        cancelled: list[str] = []
+
+        class _Failing:
+            async def transfer(
+                self, artifact: BaseArtifact, *_: object
+            ) -> None:
+                started.append(artifact.path.name)
+                if artifact.path.name == "p0.txt":
+                    raise TargetLostError("node gone")
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    cancelled.append(artifact.path.name)
+                    raise
+
+        with (
+            patch.object(
+                BaseTransferStrategy,
+                "get_from_registry",
+                return_value=_Failing,
+            ),
+            pytest.raises(TargetLostError, match="node gone"),
+        ):
+            await asyncio.wait_for(wf.transfer_artifacts(consumer), timeout=5)
+
+        # The queued ones never started (the failure's freed slot may let
+        # one more in); every started one but the failure was cancelled.
+        assert len(started) <= MAX_CONCURRENT_INPUT_TRANSFERS + 1
+        assert sorted(cancelled) == sorted(set(started) - {"p0.txt"})
+
+    async def test_a_lost_node_wins_over_a_sibling_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Both fail at once: the TargetLostError is raised, so it retries."""
+        wf, consumer = _fan_in(tmp_path, 2)
+
+        class _Failing:
+            async def transfer(
+                self, artifact: BaseArtifact, *_: object
+            ) -> None:
+                if artifact.path.name == "p0.txt":
+                    raise RuntimeError("sibling broke")
+                raise TargetLostError("node gone")
+
+        with (
+            patch.object(
+                BaseTransferStrategy,
+                "get_from_registry",
+                return_value=_Failing,
+            ),
+            pytest.raises(TargetLostError, match="node gone"),
+        ):
+            await wf.transfer_artifacts(consumer)
+
+    async def test_nested_destinations_transfer_one_at_a_time(
+        self, tmp_path: Path
+    ) -> None:
+        """A folder and a file inside it are transferred in order."""
+        results = tmp_path / "results"
+        producer = _task(
+            task_id="producer",
+            inputs=[],
+            outputs=[
+                FileArtifact(id="folder", path=results),
+                FileArtifact(id="summary", path=results / "summary.json"),
+            ],
+        )
+        consumer = _task(
+            task_id="consumer",
+            inputs=[
+                FileArtifact(id="in_folder", path=tmp_path / "a"),
+                FileArtifact(id="in_summary", path=tmp_path / "b"),
+            ],
+            outputs=[],
+        )
+        wf = HorusWorkflow(
+            name="nested",
+            tasks=[producer, consumer],
+            edges=[
+                _edge("producer", "folder", "consumer", "in_folder"),
+                _edge("producer", "summary", "consumer", "in_summary"),
+            ],
+        )
+        active = peak = 0
+        order: list[str] = []
+
+        class _Slow:
+            async def transfer(
+                self, artifact: BaseArtifact, *_: object
+            ) -> None:
+                nonlocal active, peak
+                active += 1
+                peak = max(peak, active)
+                order.append(artifact.id)
+                await asyncio.sleep(0.01)
+                active -= 1
+
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=_Slow
+        ):
+            await wf.transfer_artifacts(consumer)
+
+        assert peak == 1
+        assert order == ["folder", "summary"]

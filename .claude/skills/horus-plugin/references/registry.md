@@ -120,6 +120,7 @@ Per-domain roots and the group each loads from (`middleware/<file>.py`):
 | `ExecutorMiddleware` | `horus.middleware.executor` | `executor`, `task` | `BaseExecutor._execute` |
 | `RuntimeMiddleware` | `horus.middleware.runtime` | `runtime`, `task` | `BaseRuntime._setup_runtime` |
 | `TargetMiddleware` | `horus.middleware.target` | `target`, `task` | `BaseTarget._dispatch` |
+| `TaskSkipMiddleware` | `horus.middleware.task_skip` | `task`, `workflow`, `input_digests` (lazy, shared with the first attempt), `complete` | once per placed task, before its lease slot, placement and pool slot (scheduler `execute_task`); setting `complete` skips a `skip_if_complete` task as complete without placing it, so its outputs must be readable elsewhere (`workflow.relocate_output`) |
 | `BoundTaskMiddleware` | `horus.middleware.bound_task` | `task`, `target`, `input_digests` (lazy, shared with the check) | one attempt of a task on its bound target, from the pre-transfer completion check to the end of the run (scheduler `_execute_on_target`); runs for skipped tasks too, and again per node-loss retry; `after` must not raise |
 | `TargetCommandMiddleware` | `horus.middleware.target_command` | `target`, `command` (mutable), `cwd`, `env`, `detach` | `BaseTarget._run_command` |
 | `TransferMiddleware` | `horus.middleware.transfer` | `transfer_strategy`, `artifact`, `source`, `destination` | `BaseTransferStrategy._transfer` |

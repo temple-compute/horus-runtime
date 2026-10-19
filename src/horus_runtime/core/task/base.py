@@ -270,6 +270,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     _target_loss_retries: int = PrivateAttr(default=0)
     """Re-runs spent on :class:`TargetLostError`, up to the max."""
 
+    _staged_digests: dict[str, str] | None = PrivateAttr(default=None)
+    """
+    Set by the scheduler for one run: the digests of the non-pinned inputs
+    it just staged, taken at their source, so the run need not hash the
+    staged copies again.
+    """
+
     _retry_on_target_loss: bool = PrivateAttr(default=False)
     """
     Set by the scheduler before dispatch: a :class:`TargetLostError` from
