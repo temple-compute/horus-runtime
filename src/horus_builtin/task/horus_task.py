@@ -21,6 +21,7 @@ Default Horus task implementation.
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -112,7 +113,11 @@ class HorusTask(BaseTask):
         # memoize. Taken before execution because the executor rewrites the
         # runtime as it runs, while the next run's check starts from the
         # un-rewritten state.
-        fingerprint = await self._fingerprint() if self.outputs else None
+        fingerprint = (
+            await self._fingerprint(self._staged_digests)
+            if self.outputs
+            else None
+        )
 
         await self._execute()
 
@@ -139,7 +144,7 @@ class HorusTask(BaseTask):
         return f"{base}/.horus/{self.id}.json"
 
     async def _fingerprint(
-        self, input_digests: dict[str, str | None] | None = None
+        self, input_digests: Mapping[str, str | None] | None = None
     ) -> TaskFingerprint:
         """
         Everything that must stay unchanged for the previous run's outputs to
@@ -150,14 +155,13 @@ class HorusTask(BaseTask):
         unless *input_digests* already holds them (digested at their source,
         before any transfer: a digest does not depend on the path).
         """
-        if input_digests is None:
-            store = ArtifactStore(self.target)
-            input_digests = {
-                artifact.id: await store.digest(artifact)
-                for artifact in self.fingerprinted_inputs
-            }
+        store = ArtifactStore(self.target)
+        digests = dict(input_digests or {})
+        for artifact in self.fingerprinted_inputs:
+            if artifact.id not in digests:
+                digests[artifact.id] = await store.digest(artifact)
         inputs = {
-            artifact.id: input_digests.get(artifact.id) or _UNHASHABLE
+            artifact.id: digests.get(artifact.id) or _UNHASHABLE
             for artifact in self.fingerprinted_inputs
         }
         payload: dict[str, Any] = {

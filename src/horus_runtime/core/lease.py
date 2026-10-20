@@ -33,7 +33,8 @@ being pending (completed, skipped, blocked, failed).
 
 import asyncio
 from abc import abstractmethod
-from collections.abc import Collection, Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -365,6 +366,19 @@ class LeaseManager:
             lease.target.emit_node_phase("busy")
         if lease.work is None:
             lease.phase = Phase.BUSY
+
+    @contextmanager
+    def pulling(self, task: "BaseTask") -> Iterator[None]:
+        """
+        Count *task* as reading its sources' machines inside the block
+        (e.g. digesting them before it has a slot), so none is released
+        under it.
+        """
+        self._pulling.add(task.id)
+        try:
+            yield
+        finally:
+            self._done_pulling(task)
 
     def inputs_transferred(self, task: "BaseTask") -> None:
         """*task* no longer needs any other machine's outputs."""

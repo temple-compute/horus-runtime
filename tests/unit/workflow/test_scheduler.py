@@ -20,8 +20,9 @@ Unit tests for the concurrent ready-set scheduler.
 """
 
 import asyncio
+import hashlib
 import json
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from pathlib import Path
 from typing import ClassVar, cast
 from unittest.mock import AsyncMock, patch
@@ -45,8 +46,11 @@ from horus_builtin.workflow.scheduler import (
 )
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import (
     InsufficientCapacityError,
+    PlacementManager,
     ResourceCapacity,
 )
 from horus_runtime.core.resources import ResourceRequest
@@ -69,6 +73,10 @@ from horus_runtime.middleware.bound_task import (
     BoundTaskMiddlewareContext,
 )
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
+from horus_runtime.middleware.task_skip import (
+    TaskSkipMiddleware,
+    TaskSkipMiddlewareContext,
+)
 
 
 def _task(
@@ -1425,6 +1433,313 @@ class TestBoundTaskMiddleware:
         assert wf.status == WorkflowStatus.FAILED
         assert any(
             "restore broke" in getattr(event, "message", "")
+            for event in events
+        )
+
+
+@pytest.fixture
+def restore_task_skip_registry() -> Generator[None]:
+    """
+    Restore the task-skip middleware registry after each test; a subclass
+    defined in a test registers itself.
+    """
+    original_registry = list(TaskSkipMiddleware.registry)
+    try:
+        yield
+    finally:
+        TaskSkipMiddleware.registry = original_registry
+
+
+def _skip_consumer() -> list[TaskSkipMiddlewareContext]:
+    """
+    Register a task-skip middleware that marks ``consumer`` complete and
+    records every context it sees.
+    """
+    seen: list[TaskSkipMiddlewareContext] = []
+
+    class SkipConsumer(TaskSkipMiddleware):
+        async def before(self, context: TaskSkipMiddlewareContext) -> None:
+            seen.append(context)
+            context.complete = context.task.id == "consumer"
+
+    return seen
+
+
+@pytest.mark.unit
+class TestTaskSkipMiddleware:
+    """
+    The task-skip middleware runs before a task takes any slot, and can
+    skip it as complete from there.
+    """
+
+    _build = staticmethod(TestSkipBeforeTransfer._build)
+
+    @pytest.fixture(autouse=True)
+    def _generic_transfer(self) -> Generator[None]:
+        """Move bytes for real: local targets otherwise share a no-op."""
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=None
+        ):
+            yield
+
+    @staticmethod
+    def _spy(
+        calls: list[tuple[str, str]],
+        name: str,
+        method: Callable[..., Awaitable[object]],
+        task_of: Callable[..., str],
+    ) -> Callable[..., Awaitable[object]]:
+        """*method*, recording ``(name, task id)`` on each call."""
+
+        async def spy(*args: object, **kwargs: object) -> object:
+            calls.append((name, task_of(*args)))
+            return await method(*args, **kwargs)
+
+        return spy
+
+    async def test_complete_skips_before_any_slot(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """
+        A task marked complete takes no lease, placement or pool slot, is
+        neither transferred nor dispatched, and still adopts its values.
+        """
+        del horus_context, restore_task_skip_registry
+        seen = _skip_consumer()
+        wf, consumer = self._build(tmp_path)
+        consumer_target = consumer.target
+        calls: list[tuple[str, str]] = []
+        adopted: list[str] = []
+        adopt_values = HorusWorkflow.adopt_values
+
+        def adopting(
+            workflow: HorusWorkflow,
+            task: HorusTask,
+            source_map: dict[tuple[str, str], EdgeSource] | None = None,
+        ) -> None:
+            adopted.append(task.id)
+            adopt_values(workflow, task, source_map)
+
+        def by_target(_pool: TargetPool, target: BaseTarget) -> str:
+            return "consumer" if target is consumer_target else "other"
+
+        with (
+            patch.object(
+                LeaseManager,
+                "member_slot",
+                self._spy(
+                    calls,
+                    "slot",
+                    LeaseManager.member_slot,
+                    lambda _leases, task: task.id,
+                ),
+            ),
+            patch.object(
+                PlacementManager,
+                "acquire",
+                self._spy(
+                    calls,
+                    "placement",
+                    PlacementManager.acquire,
+                    lambda _placement, name, *_: name,
+                ),
+            ),
+            patch.object(
+                TargetPool,
+                "acquire",
+                self._spy(calls, "pool", TargetPool.acquire, by_target),
+            ),
+            patch.object(
+                HorusWorkflow,
+                "transfer_artifacts",
+                self._spy(
+                    calls,
+                    "transfer",
+                    HorusWorkflow.transfer_artifacts,
+                    lambda _wf, task, *_: task.id,
+                ),
+            ),
+            patch.object(
+                _FarLocalTarget,
+                "dispatch",
+                self._spy(
+                    calls,
+                    "dispatch",
+                    _FarLocalTarget.dispatch,
+                    lambda _target, task: task.id,
+                ),
+            ),
+            patch.object(HorusWorkflow, "adopt_values", adopting),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert consumer.status == TaskStatus.SKIPPED
+        assert consumer.skip_reason is SkipReason.COMPLETE
+        assert consumer.runs == 0
+        assert [(c.task.id, c.workflow is wf) for c in seen] == [
+            ("producer", True),
+            ("consumer", True),
+        ]
+        assert [call for call in calls if call[1] == "consumer"] == []
+        assert ("slot", "producer") in calls
+        assert ("dispatch", "producer") in calls
+        assert bound_task_calls == [("producer", True)]
+        assert adopted == ["consumer"]
+
+    async def test_ignored_without_skip_if_complete(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+    ) -> None:
+        """A task that never skips runs even when marked complete."""
+        del horus_context, restore_task_skip_registry
+        seen = _skip_consumer()
+        wf, consumer = self._build(tmp_path)
+        consumer.skip_if_complete = False
+        await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert [c.task.id for c in seen] == ["producer", "consumer"]
+        assert consumer.status == TaskStatus.COMPLETED
+        assert consumer.runs == 1
+
+    async def test_not_complete_changes_nothing_and_shares_digests(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+        bound_task_calls: list[tuple[str, bool]],
+    ) -> None:
+        """
+        Left unset, a re-run skips through the check as before, digesting
+        each input once for the middleware and the check together.
+        """
+        del horus_context, restore_task_skip_registry
+        wf, _ = self._build(tmp_path)
+        await wf.run(trigger_id="consumer")
+        bound_task_calls.clear()
+
+        class Untouched(TaskSkipMiddleware):
+            async def before(self, context: TaskSkipMiddlewareContext) -> None:
+                await context.input_digests()
+
+        digested: list[str] = []
+        source_digests = HorusWorkflow.source_digests
+
+        async def counting(
+            workflow: HorusWorkflow,
+            task: HorusTask,
+            source_map: dict[tuple[str, str], EdgeSource] | None = None,
+        ) -> dict[str, str | None]:
+            digested.append(task.id)
+            return await source_digests(workflow, task, source_map)
+
+        wf, consumer = self._build(tmp_path)
+        with patch.object(HorusWorkflow, "source_digests", counting):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert [t.status for t in wf.tasks] == [TaskStatus.SKIPPED] * 2
+        assert consumer.runs == 0
+        assert bound_task_calls == [("producer", True), ("consumer", True)]
+        assert digested.count("consumer") == 1
+
+    async def test_counts_as_pulling_while_it_runs(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+    ) -> None:
+        """No source machine is released while the middleware digests."""
+        del horus_context, restore_task_skip_registry
+        pulling: list[bool] = []
+
+        class Recording(TaskSkipMiddleware):
+            async def before(self, context: TaskSkipMiddlewareContext) -> None:
+                leases = context.workflow.leases
+                pulling.append(context.task.id in leases._pulling)
+
+        wf, consumer = self._build(tmp_path)
+        await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert pulling == [True, True]
+        assert consumer.id not in wf.leases._pulling
+
+    @pytest.mark.parametrize("resolved", [False, True])
+    async def test_run_reuses_resolved_digests(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+        resolved: bool,
+    ) -> None:
+        """
+        Once the digests were taken at the source, the run fingerprints
+        from them and does not hash its staged inputs again.
+        """
+        del horus_context, restore_task_skip_registry
+
+        class Digesting(TaskSkipMiddleware):
+            async def before(self, context: TaskSkipMiddlewareContext) -> None:
+                if resolved:
+                    await context.input_digests()
+
+        staged: list[str] = []
+        digest = ArtifactStore.digest
+        dst = (tmp_path / "dst").as_posix()
+
+        async def recording(
+            store: ArtifactStore, artifact: BaseArtifact
+        ) -> str | None:
+            if store.target.working_directory == dst:
+                staged.append(artifact.id)
+            return await digest(store, artifact)
+
+        wf, consumer = self._build(tmp_path)
+        with patch.object(ArtifactStore, "digest", recording):
+            await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
+
+        assert consumer.status == TaskStatus.COMPLETED
+        assert staged == ([] if resolved else ["inp"])
+        assert consumer._staged_digests is None
+        manifest = json.loads(
+            (tmp_path / "dst" / ".horus" / "consumer.json").read_text()
+        )
+        assert manifest["inputs"] == {
+            "inp": hashlib.sha256(b"hi\n").hexdigest()
+        }
+
+    async def test_error_fails_the_task(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        restore_task_skip_registry: None,
+    ) -> None:
+        """An error in ``before`` fails the task and, fail-fast, the run."""
+        del restore_task_skip_registry
+
+        class BrokenMiddleware(TaskSkipMiddleware):
+            async def before(self, context: TaskSkipMiddlewareContext) -> None:
+                del context
+                raise RuntimeError("manifest broke")
+
+        task = _task("t", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(name="broken", tasks=[task])
+        events: list[object] = []
+        with (
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            pytest.raises(RuntimeError, match="manifest broke"),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 0
+        assert task.status == TaskStatus.FAILED
+        assert wf.status == WorkflowStatus.FAILED
+        assert any(
+            "manifest broke" in getattr(event, "message", "")
             for event in events
         )
 

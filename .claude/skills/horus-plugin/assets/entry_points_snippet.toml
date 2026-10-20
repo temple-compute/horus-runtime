@@ -71,6 +71,9 @@ my_target_command_mw = "my_pkg.middleware.my_target_command_mw"
 [project.entry-points."horus.middleware.bound_task"]
 my_bound_task_mw = "my_pkg.middleware.my_bound_task_mw"
 
+[project.entry-points."horus.middleware.task_skip"]
+my_task_skip_mw = "my_pkg.middleware.my_task_skip_mw"
+
 [project.entry-points."horus.middleware.transfer"]
 my_transfer_mw = "my_pkg.middleware.my_transfer_mw"
 

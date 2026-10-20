@@ -61,6 +61,10 @@ from horus_runtime.middleware.bound_task import (
     BoundTaskMiddleware,
     BoundTaskMiddlewareContext,
 )
+from horus_runtime.middleware.task_skip import (
+    TaskSkipMiddleware,
+    TaskSkipMiddlewareContext,
+)
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
@@ -176,7 +180,28 @@ async def execute_task(
     A task on a releasable machine also reports to the workflow's lease
     manager (``member_cap`` slot, started, inputs pulled, finished), which
     decides when that machine is released.
+
+    The task-skip middleware runs first: a task it marks complete is
+    skipped before any of that, so it never waits behind running tasks for
+    a slot, and the lease manager never sees it.
     """
+    input_digests = _Once(partial(workflow.source_digests, task, source_map))
+    context = TaskSkipMiddlewareContext(
+        task=task, workflow=workflow, input_digests=input_digests
+    )
+    try:
+        # Counted as pulling, so a source machine is not released while
+        # the middleware digests on it.
+        with workflow.leases.pulling(task):
+            await TaskSkipMiddleware.call_with_middleware(context, _noop)
+    except Exception as exc:
+        _record_failure(task, exc)
+        raise
+    if task.skip_if_complete and context.complete:
+        workflow.adopt_values(task, source_map)
+        task.mark_skipped_complete()
+        return
+
     leases = workflow.leases
     await leases.member_slot(task)
     try:
@@ -186,9 +211,14 @@ async def execute_task(
             source_map=source_map,
             pool=pool,
             placement=placement,
+            input_digests=input_digests,
         )
     finally:
         leases.member_finished(task)
+
+
+async def _noop() -> None:
+    """The end of the task-skip middleware chain: nothing to wrap."""
 
 
 async def _execute_on_target(
@@ -198,8 +228,13 @@ async def _execute_on_target(
     source_map: dict[tuple[str, str], EdgeSource],
     pool: TargetPool,
     placement: PlacementManager,
+    input_digests: "_Once",
 ) -> None:
-    """The body of :func:`execute_task`, inside its lease slot."""
+    """
+    The body of :func:`execute_task`, inside its lease slot.
+    *input_digests* is the memo the task-skip middleware may have filled,
+    reused by the first attempt.
+    """
     declared_target = task.target
     location_id = declared_target.location_id
     # A map waiting on its clones reserves nothing: they need the room.
@@ -230,9 +265,6 @@ async def _execute_on_target(
             while True:
                 retry = task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
                 task._retry_on_target_loss = retry  # noqa: SLF001
-                input_digests = _once(
-                    partial(workflow.source_digests, task, source_map)
-                )
                 try:
                     await BoundTaskMiddleware.call_with_middleware(
                         BoundTaskMiddlewareContext(
@@ -267,49 +299,65 @@ async def _execute_on_target(
                     )
                     target.bind(task)
                     workflow.leases.repull(task)
+                    # Fresh digests on the new node, as before: pinned
+                    # inputs are digested there, and a lost source may be
+                    # relocated by now.
+                    input_digests = _Once(
+                        partial(workflow.source_digests, task, source_map)
+                    )
         finally:
             task._retry_on_target_loss = False  # noqa: SLF001
             task.target = declared_target
             pool.release(declared_target, target)
     except Exception as exc:
-        # Target acquisition, binding and artifact transfer all run outside
-        # `BaseTask.run`, which is the only place that records FAILED and the
-        # only thing the task middleware wraps. `CancelledError` is a
-        # BaseException and deliberately not caught: the dispatch path above
-        # already records CANCELED.
-        if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
-            task.status = TaskStatus.FAILED
-            message = _("Task %(task_name)s failed: %(error)s") % {
-                "task_name": task.name,
-                "error": exc,
-            }
-            horus_logger.log.error(message)
-            HorusContext.get_context().bus.emit(
-                HorusTaskEvent(
-                    task_id=task.id,
-                    task_name=task.name,
-                    message=message,
-                )
-            )
+        _record_failure(task, exc)
         raise
     finally:
         await placement.release(location_id, resources)
 
 
-def _once(input_digests: InputDigests) -> InputDigests:
+def _record_failure(task: "BaseTask", exc: Exception) -> None:
     """
-    *input_digests*, run on the first await only, so the bound-task
-    middleware and the check share one digest of each input.
+    Mark *task* FAILED with *exc*, unless it already recorded an outcome.
+
+    Middleware, target acquisition, binding and artifact transfer all run
+    outside `BaseTask.run`, which is the only place that records FAILED and
+    the only thing the task middleware wraps. `CancelledError` is a
+    BaseException and deliberately never passed here: the dispatch path
+    already records CANCELED.
     """
-    result: dict[str, str | None] | None = None
+    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED):
+        return
+    task.status = TaskStatus.FAILED
+    message = _("Task %(task_name)s failed: %(error)s") % {
+        "task_name": task.name,
+        "error": exc,
+    }
+    horus_logger.log.error(message)
+    HorusContext.get_context().bus.emit(
+        HorusTaskEvent(
+            task_id=task.id,
+            task_name=task.name,
+            message=message,
+        )
+    )
 
-    async def digests() -> dict[str, str | None]:
-        nonlocal result
-        if result is None:
-            result = await input_digests()
-        return result
 
-    return digests
+class _Once:
+    """
+    *input_digests*, run on the first await only, so the task-skip and
+    bound-task middleware, the check and the run share one digest of each
+    input. ``result`` is ``None`` until then.
+    """
+
+    def __init__(self, input_digests: InputDigests) -> None:
+        self._input_digests = input_digests
+        self.result: dict[str, str | None] | None = None
+
+    async def __call__(self) -> dict[str, str | None]:
+        if self.result is None:
+            self.result = await self._input_digests()
+        return self.result
 
 
 async def _skip_or_run(
@@ -317,7 +365,7 @@ async def _skip_or_run(
     task: "BaseTask",
     target: BaseTarget,
     source_map: dict[tuple[str, str], EdgeSource],
-    input_digests: InputDigests,
+    input_digests: "_Once",
 ) -> None:
     """Skip *task* if already complete, else transfer and run it."""
     # A task already complete is skipped before any of its inputs is
@@ -329,7 +377,7 @@ async def _skip_or_run(
         workflow.adopt_values(task, source_map)
         task.mark_skipped_complete()
         return
-    await _transfer_and_run(workflow, task, target, source_map)
+    await _transfer_and_run(workflow, task, target, source_map, input_digests)
 
 
 async def _transfer_and_run(
@@ -337,11 +385,24 @@ async def _transfer_and_run(
     task: "BaseTask",
     target: BaseTarget,
     source_map: dict[tuple[str, str], EdgeSource],
+    input_digests: "_Once",
 ) -> None:
     """Transfer *task*'s inputs, then dispatch it on *target* and wait."""
     # Transfer input artifacts to the task's target as needed.
     await workflow.transfer_artifacts(task, source_map)
     workflow.leases.inputs_transferred(task)
+
+    # Digests are path-independent and transfers copy bytes verbatim, the
+    # same assumption `is_complete_before_transfer` makes: the run reuses
+    # the source digests instead of re-reading the staged copies.
+    digests = input_digests.result
+    pinned = {a.id for a in task.inputs if a.pinned}
+    if digests is not None and None not in digests.values():
+        task._staged_digests = {  # noqa: SLF001
+            key: value
+            for key, value in digests.items()
+            if key not in pinned and value is not None  # (narrows the type)
+        }
 
     # Execute the task on its target and wait for it to finish.
     try:
@@ -358,6 +419,8 @@ async def _transfer_and_run(
         if task.status is TaskStatus.CANCELED:
             await asyncio.shield(task.executor.cancel_execution())
         raise
+    finally:
+        task._staged_digests = None  # noqa: SLF001
 
 
 async def _execute_ready_task(
