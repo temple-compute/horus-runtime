@@ -39,6 +39,7 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
+from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.core.workflow.edge import WorkflowEdge
 
 
@@ -56,7 +57,7 @@ def _value_root(
     }[kind](id=artifact_id, path=Path(f"roots/{artifact_id}"), value=value)
 
 
-def _consume_workflow(tmp_path: Path) -> HorusWorkflow:
+def _consume_workflow(tmp_path: Path, s: str = "hello") -> HorusWorkflow:
     """
     A single task that cats every value root into one report, so a run
     proves each value was materialized and substituted.
@@ -64,7 +65,7 @@ def _consume_workflow(tmp_path: Path) -> HorusWorkflow:
     roots = [
         _value_root("n", kind="number", value=42),
         _value_root("b", kind="boolean", value=True),
-        _value_root("s", kind="string", value="hello"),
+        _value_root("s", kind="string", value=s),
     ]
     task = HorusTask(
         id="consume",
@@ -133,6 +134,37 @@ class TestValueRootsMaterializeAndTransfer:
         assert (tmp_path / "roots/n").read_text() == "42"
         assert (tmp_path / "roots/b").read_text() == "true"
         assert (tmp_path / "roots/s").read_text() == "hello"
+
+    async def test_changed_value_reruns_the_consumer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Editing only a root's value re-runs its consumer in the same working
+        dir: the stale root file is rewritten, so the input digest changes.
+        """
+        del horus_context
+        await _consume_workflow(tmp_path).run(trigger_id="consume")
+
+        wf = _consume_workflow(tmp_path, s="changed")
+        await wf.run(trigger_id="consume")
+
+        task = next(t for t in wf.tasks if t.id == "consume")
+        assert task.status is TaskStatus.COMPLETED
+        assert (tmp_path / "roots/s").read_text() == "changed"
+        assert task.outputs[0].path.read_text().strip() == "42|true|changed"
+
+    async def test_unchanged_value_skips_the_consumer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A second run with the same values still skips the consumer."""
+        del horus_context
+        await _consume_workflow(tmp_path).run(trigger_id="consume")
+
+        wf = _consume_workflow(tmp_path)
+        await wf.run(trigger_id="consume")
+
+        task = next(t for t in wf.tasks if t.id == "consume")
+        assert task.status is TaskStatus.SKIPPED
 
     async def test_values_survive_dump_reload(
         self, tmp_path: Path, horus_context: HorusContext

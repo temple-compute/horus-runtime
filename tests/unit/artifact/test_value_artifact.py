@@ -22,6 +22,7 @@ Unit tests for the value-carrying artifact kinds (number, boolean, string).
 import tempfile
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -174,14 +175,42 @@ class TestValueArtifactMaterialize:
             artifact.materialize()
             assert target.read_text() == "42"
 
-    def test_materialize_is_idempotent_and_does_not_clobber(self) -> None:
-        """An existing backing file always wins over the authored value."""
+    def test_materialize_rewrites_a_stale_file(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A file left with another value is rewritten from the value."""
+        del horus_context
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "s.txt"
-            target.write_text("uploaded bytes")
+            target.write_text("old value")
             artifact = StringArtifact(id="s", path=target, value="edited")
             artifact.materialize()
-            assert target.read_text() == "uploaded bytes"
+            assert target.read_text() == "edited"
+
+    def test_materialize_rewrites_a_corrupt_file(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A file that does not parse as the kind is rewritten."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "n.json"
+            target.write_text("not json")
+            artifact = NumberArtifact(id="n", path=target, value=7)
+            artifact.materialize()
+            assert target.read_text() == "7"
+
+    def test_materialize_leaves_an_up_to_date_file_alone(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A file that already holds the value is not written again."""
+        del horus_context
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "n.json"
+            artifact = NumberArtifact(id="n", path=target, value=42)
+            artifact.materialize()
+            with patch.object(NumberArtifact, "write") as write:
+                artifact.materialize()
+            write.assert_not_called()
 
     def test_base_artifact_materialize_is_noop(self) -> None:
         """BaseArtifact.materialize() is a no-op for non-value artifacts."""
