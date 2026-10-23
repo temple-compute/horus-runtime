@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from pydantic import PrivateAttr, field_validator, model_validator
 
+from horus_runtime.context import current_task_env
 from horus_runtime.core.resources import ResourceScope
 from horus_runtime.core.target.channel import (
     ChannelProcess,
@@ -517,6 +518,10 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         first, so middleware may rewrite it (e.g. wrap it in an instrumentation
         tool) before it is dispatched.
         """
+        # The running task's secrets go under the caller's own variables.
+        task_secrets = current_task_env()
+        if task_secrets:
+            env = {**task_secrets, **(env or {})}
         ctx = TargetCommandMiddlewareContext(
             target=self,
             command=cmd,

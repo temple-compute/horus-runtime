@@ -39,7 +39,7 @@ from pydantic import (
 )
 
 from horus_builtin.event.task_event import HorusTaskEvent
-from horus_runtime.context import HorusContext, running_task
+from horus_runtime.context import HorusContext, running_task, task_env
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
@@ -57,6 +57,7 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import AutoRegistry
+from horus_runtime.secrets import Secret
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
@@ -191,6 +192,14 @@ class BaseTask(AutoRegistry, entry_point="task"):
         if name is not None and not (info.context or {}).get("inline_targets"):
             return {"ref": name}
         return handler(target)
+
+    secrets: dict[str, Secret] = Field(default_factory=dict)
+    """
+    Environment variables holding credentials, by name, e.g.
+    ``{HF_TOKEN: "${secret:hf_token}"}``. Each is resolved when the task
+    starts (see :meth:`Secret.resolve`) and set on every command the task
+    runs on its target; a missing one fails the task before it runs.
+    """
 
     resources: ResourceRequest | None = None
     """
@@ -429,7 +438,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     # too. The outer handlers below still cover failures
                     # raised by middleware itself.
                     try:
-                        await self._run()
+                        env = {k: v.resolve() for k, v in self.secrets.items()}
+                        with task_env(env):
+                            await self._run()
                     except CancelledError:
                         self._finish(TaskStatus.CANCELED)
                         raise
