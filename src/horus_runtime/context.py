@@ -68,6 +68,35 @@ def running_task(task_id: str) -> Iterator[None]:
         _current_task_id.reset(token)
 
 
+_current_task_env: ContextVar[dict[str, str] | None] = ContextVar(
+    "horus_current_task_env", default=None
+)
+"""
+Environment variables of the task currently executing in this context: its
+``secrets``, resolved. Set by :meth:`BaseTask.run` around the executor, and
+merged by :meth:`BaseTarget.run_command` under every command the task runs,
+whichever executor issues it.
+"""
+
+
+def current_task_env() -> dict[str, str]:
+    """Return the running task's secret environment (empty outside a task)."""
+    return _current_task_env.get() or {}
+
+
+@contextmanager
+def task_env(env: dict[str, str]) -> Iterator[None]:
+    """
+    Make *env* the running task's secret environment for the ``with`` block,
+    restoring the previous value on exit.
+    """
+    token = _current_task_env.set(env)
+    try:
+        yield
+    finally:
+        _current_task_env.reset(token)
+
+
 _runtime_ctx: ContextVar["HorusContext"] = ContextVar("horus_runtime_context")
 
 
