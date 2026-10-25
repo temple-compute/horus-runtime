@@ -26,6 +26,7 @@ now ready are dispatched too, without waiting for unrelated in-flight tasks.
 
 import asyncio
 from collections.abc import Collection
+from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -47,7 +48,10 @@ from horus_runtime.core.task.base import (
     MAX_TARGET_LOSS_RETRIES,
     InputDigests,
 )
-from horus_runtime.core.task.exceptions import TargetLostError
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    summarize_exception,
+)
 from horus_runtime.core.task.status import (
     TERMINAL_STATUSES,
     SkipReason,
@@ -329,6 +333,9 @@ def _record_failure(task: "BaseTask", exc: Exception) -> None:
     if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED):
         return
     task.status = TaskStatus.FAILED
+    # What the UI shows on the task, as `BaseTask._finish` records it.
+    task.error = summarize_exception(exc)
+    task.finished_at = datetime.now(UTC)
     message = _("Task %(task_name)s failed: %(error)s") % {
         "task_name": task.name,
         "error": exc,

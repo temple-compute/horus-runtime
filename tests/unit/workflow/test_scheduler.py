@@ -1040,6 +1040,8 @@ class TestPreRunFailureIsAttributed:
         # would still be IDLE and the terminal snapshot would name no task.
         assert consumer.runs == 0
         assert consumer.status == TaskStatus.FAILED
+        assert consumer.error == "TaskExecutionError: host key is not trusted"
+        assert consumer.finished_at is not None
         assert any(
             getattr(event, "task_id", None) == "consumer"
             and "host key is not trusted" in getattr(event, "message", "")
