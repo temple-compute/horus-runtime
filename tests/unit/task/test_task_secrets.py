@@ -24,6 +24,7 @@ variables on every command the task runs.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
@@ -95,3 +96,9 @@ class TestTaskSecrets:
         assert paths == ["secrets.HF_TOKEN"]
         dumped = task.model_dump(mode="json")
         assert dumped["secrets"] == {"HF_TOKEN": "${secret:hf_token}"}
+
+    @pytest.mark.parametrize("name", ["PATH", "HF TOKEN", "HORUS_X"])
+    def test_bad_name_is_rejected(self, tmp_path: Path, name: str) -> None:
+        """A bad env var name fails validation, naming the key."""
+        with pytest.raises(ValidationError, match=f"Secret '{name}': "):
+            _task(tmp_path, "true", {name: "${secret:hf_token}"})

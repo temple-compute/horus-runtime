@@ -35,6 +35,7 @@ from pydantic import (
     SerializationInfo,
     SerializerFunctionWrapHandler,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -57,7 +58,7 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import AutoRegistry
-from horus_runtime.secrets import Secret
+from horus_runtime.secrets import Secret, env_name_error
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
@@ -200,6 +201,21 @@ class BaseTask(AutoRegistry, entry_point="task"):
     starts (see :meth:`Secret.resolve`) and set on every command the task
     runs on its target; a missing one fails the task before it runs.
     """
+
+    @field_validator("secrets")
+    @classmethod
+    def _check_secret_names(
+        cls, secrets: dict[str, Secret]
+    ) -> dict[str, Secret]:
+        """Each key must be a usable, non-reserved env var name."""
+        for name in secrets:
+            error = env_name_error(name)
+            if error is not None:
+                raise ValueError(
+                    _("Secret %(name)s: %(error)s")
+                    % {"name": repr(name), "error": error}
+                )
+        return secrets
 
     resources: ResourceRequest | None = None
     """

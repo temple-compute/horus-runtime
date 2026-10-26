@@ -39,11 +39,18 @@ import yaml
 from pydantic import BaseModel, GetCoreSchemaHandler, SecretStr
 from pydantic_core import SchemaSerializer, core_schema
 
+from horus_runtime.i18n import tr as _
+
 __all__ = [
+    "ENV_NAME_MAX_LENGTH",
+    "ENV_NAME_RE",
+    "RESERVED_ENV_NAMES",
+    "RESERVED_ENV_PREFIXES",
     "SECRET_MASK",
     "Secret",
     "SecretResolutionError",
     "env_key_for_ref",
+    "env_name_error",
     "iter_secret_fields",
     "iter_secret_refs",
     "redact",
@@ -57,6 +64,41 @@ SECRET_MASK = "**********"
 
 #: Matches a secret reference literal, e.g. ``${secret:ssh-password}``.
 _REF_RE = re.compile(r"^\$\{secret:([A-Za-z0-9_.:-]+)\}$")
+
+
+#: A valid env var name for a task secret (``fullmatch``, case-sensitive).
+ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ENV_NAME_MAX_LENGTH = 128
+#: Prefixes the runtime itself sets (``HORUS_SECRET_*`` refs among them).
+RESERVED_ENV_PREFIXES = ("HORUS_",)
+#: Names a task secret would clobber in the command environment.
+RESERVED_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "TC_CACHE_DIR",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+    }
+)
+
+
+def env_name_error(name: str) -> str | None:
+    """Why *name* can't be a task secret's env var name, or ``None``."""
+    if not name:
+        return _("Enter a name.")
+    if len(name) > ENV_NAME_MAX_LENGTH:
+        return _("Use 128 characters or fewer.")
+    if not ENV_NAME_RE.fullmatch(name):
+        return _("Use letters, digits and _. Don't start with a digit.")
+    if name.startswith(RESERVED_ENV_PREFIXES):
+        return _("Names starting with HORUS_ are reserved.")
+    if name in RESERVED_ENV_NAMES:
+        return _("%(name)s is reserved.") % {"name": name}
+    return None
 
 
 class SecretResolutionError(RuntimeError):
