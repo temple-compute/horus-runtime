@@ -82,6 +82,14 @@ RESERVED_ENV_NAMES = frozenset(
         "TC_CACHE_DIR",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
+        "LD_AUDIT",
+        "IFS",
+        "BASH_ENV",
+        "ENV",
+        "CDPATH",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "PS4",
     }
 )
 

@@ -325,6 +325,14 @@ INVALID_ENV_NAMES = [
     ("PATH", "PATH is reserved."),
     ("LD_PRELOAD", "LD_PRELOAD is reserved."),
     ("TC_CACHE_DIR", "TC_CACHE_DIR is reserved."),
+    ("LD_AUDIT", "LD_AUDIT is reserved."),
+    ("IFS", "IFS is reserved."),
+    ("BASH_ENV", "BASH_ENV is reserved."),
+    ("ENV", "ENV is reserved."),
+    ("CDPATH", "CDPATH is reserved."),
+    ("SHELLOPTS", "SHELLOPTS is reserved."),
+    ("BASHOPTS", "BASHOPTS is reserved."),
+    ("PS4", "PS4 is reserved."),
 ]
 
 
