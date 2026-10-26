@@ -22,6 +22,7 @@ variables on every command the task runs.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -34,7 +35,7 @@ from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.secrets import SecretResolutionError, iter_secret_fields
 
 
-def _task(tmp_path: Path, cmd: str, secrets: dict[str, str]) -> HorusTask:
+def _task(tmp_path: Path, cmd: str, secrets: dict[str, Any]) -> HorusTask:
     """A shell task on a local target with *secrets*."""
     return HorusTask.model_validate(
         {
@@ -93,9 +94,33 @@ class TestTaskSecrets:
         """Export redaction finds the field and a reference dumps as itself."""
         task = _task(tmp_path, "true", {"HF_TOKEN": "${secret:hf_token}"})
         paths = [path for path, _ in iter_secret_fields(task)]
-        assert paths == ["secrets.HF_TOKEN"]
+        assert paths == ["secrets.HF_TOKEN.value"]
         dumped = task.model_dump(mode="json")
-        assert dumped["secrets"] == {"HF_TOKEN": "${secret:hf_token}"}
+        assert dumped["secrets"] == {
+            "HF_TOKEN": {
+                "value": "${secret:hf_token}",
+                "name": "",
+                "description": "",
+            }
+        }
+
+    async def test_name_and_description_round_trip(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The object form keeps its labels and resolves like the shorthand."""
+        monkeypatch.setenv("HORUS_SECRET_HF_TOKEN", "hf_abc")
+        entry = {
+            "value": "${secret:hf_token}",
+            "name": "Hugging Face",
+            "description": "Gated weights",
+        }
+        task = _task(
+            tmp_path, "printenv HF_TOKEN > token.txt", {"HF_TOKEN": entry}
+        )
+        assert task.model_dump(mode="json")["secrets"] == {"HF_TOKEN": entry}
+        await task.run()
+        token = Path(task.working_dir, "token.txt").read_text().strip()
+        assert token == "hf_abc"
 
     @pytest.mark.parametrize("name", ["PATH", "HF TOKEN", "HORUS_X"])
     def test_bad_name_is_rejected(self, tmp_path: Path, name: str) -> None:

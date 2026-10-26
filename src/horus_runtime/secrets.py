@@ -36,7 +36,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, GetCoreSchemaHandler, SecretStr
+from pydantic import (
+    BaseModel,
+    GetCoreSchemaHandler,
+    SecretStr,
+    model_validator,
+)
 from pydantic_core import SchemaSerializer, core_schema
 
 from horus_runtime.i18n import tr as _
@@ -49,6 +54,7 @@ __all__ = [
     "SECRET_MASK",
     "Secret",
     "SecretResolutionError",
+    "TaskSecret",
     "env_key_for_ref",
     "env_name_error",
     "iter_secret_fields",
@@ -218,6 +224,31 @@ class Secret(SecretStr):
                 "stored credential instead."
             )
         return value
+
+
+class TaskSecret(BaseModel):
+    """
+    One entry of a task's ``secrets``: the credential plus a label for it.
+
+    A bare string is shorthand for ``{value: <string>}``, so
+    ``HF_TOKEN: "${secret:hf_token}"`` stays valid.
+    """
+
+    value: Secret
+    """The credential, normally a ``${secret:<ref>}`` reference."""
+
+    name: str = ""
+    """Display name."""
+
+    description: str = ""
+    """What the credential is for."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_string(cls, data: Any) -> Any:
+        if isinstance(data, (str, Secret)):
+            return {"value": data}
+        return data
 
 
 def iter_secret_fields(
