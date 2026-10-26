@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
@@ -351,6 +352,53 @@ class TestLoopErrors:
 
         with pytest.raises(LoopConfigurationError, match="signal"):
             await wf.run(trigger_id="loop")
+
+    async def test_bad_secret_name_in_body_raises(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The body template is a plain dict, so a bad secret name passes
+        load and is rejected when the body is cloned, before it runs.
+        """
+        del horus_context
+        wf = BaseWorkflow.model_validate(
+            {
+                "name": "wf",
+                "kind": "horus_workflow",
+                "tasks": [
+                    {
+                        "id": "loop",
+                        "loop": {
+                            "body": {
+                                "kind": "horus_task",
+                                "runtime": {
+                                    "kind": "command",
+                                    "command": _ALWAYS_BODY,
+                                },
+                                "executor": {"kind": "shell"},
+                                "target": {"kind": "local"},
+                                "outputs": [
+                                    {
+                                        "id": "signal",
+                                        "kind": "file",
+                                        "path": "signal_out",
+                                    }
+                                ],
+                                "secrets": {"$(touch pwned)": "x"},
+                            },
+                            "until": "signal",
+                            "max_iterations": 2,
+                        },
+                    },
+                ],
+            }
+        )
+        wf.orchestrator_target = LocalTarget(
+            working_directory=tmp_path.as_posix()
+        )
+
+        with pytest.raises(ValidationError, match=r"Secret '\$\(touch"):
+            await wf.run(trigger_id="loop")
+        assert _body_ids(wf) == []
 
     async def test_missing_index_input_on_body_raises(
         self, tmp_path: Path, horus_context: HorusContext
