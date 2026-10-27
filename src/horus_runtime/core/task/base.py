@@ -35,6 +35,7 @@ from pydantic import (
     SerializationInfo,
     SerializerFunctionWrapHandler,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -57,7 +58,7 @@ from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 from horus_runtime.registry.auto_registry import AutoRegistry
-from horus_runtime.secrets import Secret
+from horus_runtime.secrets import TaskSecret, env_name_error
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
@@ -193,13 +194,29 @@ class BaseTask(AutoRegistry, entry_point="task"):
             return {"ref": name}
         return handler(target)
 
-    secrets: dict[str, Secret] = Field(default_factory=dict)
+    secrets: dict[str, TaskSecret] = Field(default_factory=dict)
     """
     Environment variables holding credentials, by name, e.g.
-    ``{HF_TOKEN: "${secret:hf_token}"}``. Each is resolved when the task
-    starts (see :meth:`Secret.resolve`) and set on every command the task
-    runs on its target; a missing one fails the task before it runs.
+    ``{HF_TOKEN: {value: "${secret:hf_token}", name: "Hugging Face"}}`` or
+    the shorthand ``{HF_TOKEN: "${secret:hf_token}"}``. Each is resolved when
+    the task starts (see :meth:`Secret.resolve`) and set on every command the
+    task runs on its target; a missing one fails the task before it runs.
     """
+
+    @field_validator("secrets")
+    @classmethod
+    def _check_secret_names(
+        cls, secrets: dict[str, TaskSecret]
+    ) -> dict[str, TaskSecret]:
+        """Each key must be a usable, non-reserved env var name."""
+        for name in secrets:
+            error = env_name_error(name)
+            if error is not None:
+                raise ValueError(
+                    _("Secret %(name)s: %(error)s")
+                    % {"name": repr(name), "error": error}
+                )
+        return secrets
 
     resources: ResourceRequest | None = None
     """
@@ -438,7 +455,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
                     # too. The outer handlers below still cover failures
                     # raised by middleware itself.
                     try:
-                        env = {k: v.resolve() for k, v in self.secrets.items()}
+                        env = {
+                            k: v.value.resolve()
+                            for k, v in self.secrets.items()
+                        }
                         with task_env(env):
                             await self._run()
                     except CancelledError:

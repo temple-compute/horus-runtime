@@ -34,6 +34,7 @@ from horus_runtime.secrets import (
     Secret,
     SecretResolutionError,
     env_key_for_ref,
+    env_name_error,
     iter_secret_fields,
     iter_secret_refs,
     redact,
@@ -297,3 +298,54 @@ class TestWorkflowExport:
         # Nothing else about the file changed shape: it still parses as the
         # same workflow, minus the redacted value.
         assert "kind: horus_task" in text
+
+
+# Shared case table: the backend and frontend tests mirror it.
+VALID_ENV_NAMES = [
+    "HF_TOKEN",
+    "_X",
+    "a1",
+    "hf_token",
+    "path",
+    "horus_x",
+    "A" * 128,
+]
+INVALID_ENV_NAMES = [
+    ("", "Enter a name."),
+    ("1A", "Use letters, digits and _. Don't start with a digit."),
+    ("HF TOKEN", "Use letters, digits and _. Don't start with a digit."),
+    ("HF-TOKEN", "Use letters, digits and _. Don't start with a digit."),
+    ("A.B", "Use letters, digits and _. Don't start with a digit."),
+    ("A=B", "Use letters, digits and _. Don't start with a digit."),
+    ("$(id)", "Use letters, digits and _. Don't start with a digit."),
+    ("Ä", "Use letters, digits and _. Don't start with a digit."),
+    ("A" * 129, "Use 128 characters or fewer."),
+    ("HORUS_X", "Names starting with HORUS_ are reserved."),
+    ("HORUS_SECRET_HF", "Names starting with HORUS_ are reserved."),
+    ("PATH", "PATH is reserved."),
+    ("LD_PRELOAD", "LD_PRELOAD is reserved."),
+    ("TC_CACHE_DIR", "TC_CACHE_DIR is reserved."),
+    ("LD_AUDIT", "LD_AUDIT is reserved."),
+    ("IFS", "IFS is reserved."),
+    ("BASH_ENV", "BASH_ENV is reserved."),
+    ("ENV", "ENV is reserved."),
+    ("CDPATH", "CDPATH is reserved."),
+    ("SHELLOPTS", "SHELLOPTS is reserved."),
+    ("BASHOPTS", "BASHOPTS is reserved."),
+    ("PS4", "PS4 is reserved."),
+]
+
+
+@pytest.mark.unit
+class TestEnvNameError:
+    """Tests for the task secret env var name rule."""
+
+    @pytest.mark.parametrize("name", VALID_ENV_NAMES)
+    def test_valid_name(self, name: str) -> None:
+        """A usable, non-reserved name has no error."""
+        assert env_name_error(name) is None
+
+    @pytest.mark.parametrize(("name", "message"), INVALID_ENV_NAMES)
+    def test_invalid_name(self, name: str, message: str) -> None:
+        """Each bad name gets the first matching message."""
+        assert env_name_error(name) == message
