@@ -54,29 +54,28 @@ def option_text(value: OptionValue) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def check_options(artifact_id: str, options: list[Option]) -> None:
+def check_options(label: str, options: list[Option]) -> None:
     """
     Raise ValueError unless *options* is non-empty and distinct by text, so
     a file can always be read back to exactly one option.
     """
     if not options:
         raise ValueError(
-            _("Artifact '%(id)s' needs at least one option.")
-            % {"id": artifact_id}
+            _("%(name)s needs at least one option.") % {"name": label}
         )
     seen: set[str] = set()
     for option in options:
         text = option_text(option.value)
         if text in seen:
             raise ValueError(
-                _("Artifact '%(id)s' has duplicate option '%(v)s'.")
-                % {"id": artifact_id, "v": text}
+                _("%(name)s has duplicate option '%(v)s'.")
+                % {"name": label, "v": text}
             )
         seen.add(text)
 
 
 def match_option(
-    artifact_id: str, options: list[Option], value: OptionValue
+    label: str, options: list[Option], value: OptionValue
 ) -> OptionValue:
     """The option value matching *value*'s text, or ValueError."""
     text = option_text(value)
@@ -84,12 +83,9 @@ def match_option(
         if option_text(option.value) == text:
             return option.value
     raise ValueError(
-        _(
-            "Artifact '%(id)s': '%(v)s' is not one of its options "
-            "(%(options)s)."
-        )
+        _("%(name)s: '%(v)s' is not one of its options (%(options)s).")
         % {
-            "id": artifact_id,
+            "name": label,
             "v": text,
             "options": ", ".join(option_text(o.value) for o in options),
         }

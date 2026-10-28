@@ -83,11 +83,8 @@ class StringArtifact(ValueArtifact[str]):
             ) from exc
         if not regex.fullmatch(self.value):
             raise ValueError(
-                _(
-                    "String artifact '%(id)s': '%(v)s' does not match "
-                    "pattern '%(p)s'."
-                )
-                % {"id": self.id, "v": self.value, "p": self.pattern}
+                _("%(name)s has an invalid format.")
+                % {"name": self.name or self.id}
             )
         return self
 
