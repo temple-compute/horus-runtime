@@ -69,10 +69,10 @@ class MultiChoiceArtifact(ValueArtifact[list[OptionValue]]):
 
     @model_validator(mode="after")
     def _check_options(self) -> Self:
-        check_options(self.id, self.options)
+        check_options(self.name, self.options)
         self.value = self._picked(self.value)
         check_count(
-            self.id,
+            self.name,
             len(self.value),
             self.min_picks,
             self.max_picks,
@@ -83,7 +83,8 @@ class MultiChoiceArtifact(ValueArtifact[list[OptionValue]]):
     def _picked(self, values: list[OptionValue]) -> list[OptionValue]:
         """*values* as option values in option order, or ValueError."""
         picked = {
-            option_text(match_option(self.id, self.options, v)) for v in values
+            option_text(match_option(self.name, self.options, v))
+            for v in values
         }
         return [
             o.value for o in self.options if option_text(o.value) in picked

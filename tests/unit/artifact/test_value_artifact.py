@@ -28,6 +28,9 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifact.boolean import BooleanArtifact
+from horus_builtin.artifact.choice import ChoiceArtifact
+from horus_builtin.artifact.list import ListArtifact
+from horus_builtin.artifact.multichoice import MultiChoiceArtifact
 from horus_builtin.artifact.number import NumberArtifact
 from horus_builtin.artifact.string import StringArtifact
 from horus_runtime.context import HorusContext
@@ -335,9 +338,10 @@ class TestNumberBounds:
         ("fields", "message"),
         [
             ({"min": 5, "max": 1}, "is above max"),
-            ({"min": 0, "max": 10, "value": 11}, "outside"),
-            ({"min": 5, "value": 0}, "outside"),
-            ({"min": 1, "step": 2, "value": 4}, "not a multiple of step"),
+            ({"min": 0, "max": 10, "value": 11}, "must be between 0 and 10"),
+            ({"min": 5, "value": 0}, "must be at least 5"),
+            ({"max": 5, "value": 6}, "must be at most 5"),
+            ({"min": 1, "step": 2, "value": 4}, "multiple of 2 from 1"),
             ({"step": 0}, "greater than 0"),
         ],
     )
@@ -347,6 +351,25 @@ class TestNumberBounds:
         """Inverted, out-of-range and off-grid values fail clearly."""
         with pytest.raises(ValidationError, match=message):
             NumberArtifact.model_validate({"id": "n", "path": "/n", **fields})
+
+    def test_range_error_names_the_field(self) -> None:
+        """The message uses the display name and a plain range, not the id."""
+        with pytest.raises(ValidationError) as exc:
+            NumberArtifact.model_validate(
+                {
+                    "id": "max_n_frac",
+                    "name": "Max N / ambiguous fraction",
+                    "path": "/n",
+                    "min": 0,
+                    "max": 0.5,
+                    "value": 2,
+                }
+            )
+        message = exc.value.errors()[0]["msg"]
+        assert message.endswith(
+            "Max N / ambiguous fraction must be between 0 and 0.5."
+        )
+        assert "max_n_frac" not in message
 
     def test_unset_value_starts_at_min(self) -> None:
         """A stripped value is valid again instead of failing on 0."""
@@ -370,7 +393,7 @@ class TestStringConstraints:
     @pytest.mark.parametrize(
         ("fields", "message"),
         [
-            ({"pattern": r"\d+", "value": "42a"}, "does not match"),
+            ({"pattern": r"\d+", "value": "42a"}, "invalid format"),
             ({"pattern": "(", "value": ""}, "invalid pattern"),
             ({"max_length": 2, "value": "abc"}, "at most 2 characters"),
         ],
@@ -430,3 +453,55 @@ class TestValueLimits:
         """Attribute docstrings reach the JSON schema the GUI renders."""
         props = NumberArtifact.model_json_schema()["properties"]
         assert "smallest allowed value" in props["min"]["description"]
+
+
+class TestErrorsNameTheLabel:
+    """Every value error names the field by its label, never its id."""
+
+    @pytest.mark.parametrize(
+        ("kind", "fields", "message"),
+        [
+            (NumberArtifact, {"step": 2, "value": 4, "min": 1}, "multiple"),
+            (StringArtifact, {"pattern": r"\d+", "value": "x"}, "format"),
+            (StringArtifact, {"exclude": ["x"], "value": "x"}, "not allowed"),
+            (ListArtifact, {"value": [1, 1], "unique": True}, "twice"),
+            (ListArtifact, {"value": ["a"], "min": 0}, "not a number"),
+            (
+                ChoiceArtifact,
+                {"options": [{"value": "a"}], "value": "b"},
+                "not one of its options",
+            ),
+            (ChoiceArtifact, {"options": []}, "at least one option"),
+            (
+                ChoiceArtifact,
+                {"options": [{"value": "a"}, {"value": "a"}]},
+                "duplicate option",
+            ),
+            (
+                MultiChoiceArtifact,
+                {"options": [{"value": "a"}], "value": ["b"]},
+                "not one of its options",
+            ),
+            (
+                MultiChoiceArtifact,
+                {
+                    "options": [{"value": "a"}, {"value": "b"}],
+                    "value": ["a", "b"],
+                    "max_picks": 1,
+                },
+                "allows at most 1 picks",
+            ),
+        ],
+    )
+    def test_label_replaces_id(
+        self, kind: type[BaseArtifact], fields: dict[str, object], message: str
+    ) -> None:
+        """The label appears in the message and the id does not."""
+        with pytest.raises(ValidationError) as exc:
+            kind.model_validate(
+                {"id": "x_id", "name": "Nice Label", "path": "/x", **fields}
+            )
+        msg = exc.value.errors()[0]["msg"]
+        assert message in msg
+        assert "Nice Label" in msg
+        assert "x_id" not in msg

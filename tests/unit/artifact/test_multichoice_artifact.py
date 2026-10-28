@@ -184,7 +184,7 @@ class TestListArtifact:
             ({"min_items": 2, "value": [1]}, "at least 2 items"),
             ({"max_items": 1, "value": [1, 2]}, "at most 1 items"),
             ({"unique": True, "value": [1, 1]}, "twice"),
-            ({"min": 0, "max": 10, "value": [11]}, "outside"),
+            ({"min": 0, "max": 10, "value": [11]}, "between 0 and 10"),
             ({"min": 0, "value": ["a"]}, "not a number"),
             ({"exclude": ["a"], "value": ["b", "a"]}, "not allowed"),
         ],

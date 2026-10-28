@@ -18,8 +18,8 @@
 """
 Limit checks shared by the value artifacts: a bounded range, a bounded
 count (characters, picks, items) and excluded values. Each raises a
-translated ``ValueError`` naming the artifact, so a model validator only
-calls them.
+translated ``ValueError`` naming the artifact by its label, so a model
+validator only calls them.
 """
 
 from collections.abc import Collection
@@ -30,28 +30,26 @@ type Number = int | float
 
 
 def check_range(
-    artifact_id: str, value: Number, lo: Number | None, hi: Number | None
+    label: str, value: Number, lo: Number | None, hi: Number | None
 ) -> None:
     """Raise unless ``lo <= value <= hi``; ``None`` leaves a side open."""
     if lo is not None and hi is not None and lo > hi:
         raise ValueError(
-            _("Artifact '%(id)s': min %(min)s is above max %(max)s.")
-            % {"id": artifact_id, "min": lo, "max": hi}
+            _("%(name)s: min %(min)s is above max %(max)s.")
+            % {"name": label, "min": lo, "max": hi}
         )
     if (lo is not None and value < lo) or (hi is not None and value > hi):
-        raise ValueError(
-            _("Artifact '%(id)s': %(v)s is outside [%(min)s, %(max)s].")
-            % {
-                "id": artifact_id,
-                "v": value,
-                "min": "-inf" if lo is None else lo,
-                "max": "inf" if hi is None else hi,
-            }
-        )
+        if lo is None:
+            msg = _("%(name)s must be at most %(max)s.")
+        elif hi is None:
+            msg = _("%(name)s must be at least %(min)s.")
+        else:
+            msg = _("%(name)s must be between %(min)s and %(max)s.")
+        raise ValueError(msg % {"name": label, "min": lo, "max": hi})
 
 
 def check_count(
-    artifact_id: str, count: int, lo: int | None, hi: int | None, what: str
+    label: str, count: int, lo: int | None, hi: int | None, what: str
 ) -> None:
     """
     Raise unless ``lo <= count <= hi``. *what* names the counted thing
@@ -60,29 +58,29 @@ def check_count(
     if lo is not None and hi is not None and lo > hi:
         raise ValueError(
             _(
-                "Artifact '%(id)s': at least %(lo)s %(what)s is more than "
+                "%(name)s: at least %(lo)s %(what)s is more than "
                 "the at most %(hi)s."
             )
-            % {"id": artifact_id, "lo": lo, "hi": hi, "what": what}
+            % {"name": label, "lo": lo, "hi": hi, "what": what}
         )
     if lo is not None and count < lo:
         raise ValueError(
-            _("Artifact '%(id)s' needs at least %(n)s %(what)s, has %(c)s.")
-            % {"id": artifact_id, "n": lo, "what": what, "c": count}
+            _("%(name)s needs at least %(n)s %(what)s, has %(c)s.")
+            % {"name": label, "n": lo, "what": what, "c": count}
         )
     if hi is not None and count > hi:
         raise ValueError(
-            _("Artifact '%(id)s' allows at most %(n)s %(what)s, has %(c)s.")
-            % {"id": artifact_id, "n": hi, "what": what, "c": count}
+            _("%(name)s allows at most %(n)s %(what)s, has %(c)s.")
+            % {"name": label, "n": hi, "what": what, "c": count}
         )
 
 
 def check_excluded(
-    artifact_id: str, value: object, exclude: Collection[object]
+    label: str, value: object, exclude: Collection[object]
 ) -> None:
     """Raise when *value* is one of the *exclude* values."""
     if value in exclude:
         raise ValueError(
-            _("Artifact '%(id)s': '%(v)s' is not allowed.")
-            % {"id": artifact_id, "v": value}
+            _("%(name)s: '%(v)s' is not allowed.")
+            % {"name": label, "v": value}
         )

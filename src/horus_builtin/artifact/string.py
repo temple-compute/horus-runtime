@@ -65,13 +65,13 @@ class StringArtifact(ValueArtifact[str]):
     @model_validator(mode="after")
     def _check_constraints(self) -> Self:
         check_count(
-            self.id,
+            self.name or self.id,
             len(self.value),
             self.min_length,
             self.max_length,
             _("characters"),
         )
-        check_excluded(self.id, self.value, self.exclude)
+        check_excluded(self.name or self.id, self.value, self.exclude)
         if self.pattern is None:
             return self
         try:
@@ -83,11 +83,8 @@ class StringArtifact(ValueArtifact[str]):
             ) from exc
         if not regex.fullmatch(self.value):
             raise ValueError(
-                _(
-                    "String artifact '%(id)s': '%(v)s' does not match "
-                    "pattern '%(p)s'."
-                )
-                % {"id": self.id, "v": self.value, "p": self.pattern}
+                _("%(name)s has an invalid format.")
+                % {"name": self.name or self.id}
             )
         return self
 

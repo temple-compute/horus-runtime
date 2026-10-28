@@ -60,11 +60,11 @@ class ChoiceArtifact(ValueArtifact[OptionValue | None]):
 
     @model_validator(mode="after")
     def _check_options(self) -> Self:
-        check_options(self.id, self.options)
+        check_options(self.name, self.options)
         self.value = (
             self.options[0].value
             if self.value is None
-            else match_option(self.id, self.options, self.value)
+            else match_option(self.name, self.options, self.value)
         )
         return self
 
@@ -72,7 +72,7 @@ class ChoiceArtifact(ValueArtifact[OptionValue | None]):
         """
         Read the file back to the option value it holds.
         """
-        value = match_option(self.id, self.options, self.path.read_text())
+        value = match_option(self.name, self.options, self.path.read_text())
         self._emit_event(ArtifactEventsEnum.READ)
         return value
 
@@ -82,10 +82,9 @@ class ChoiceArtifact(ValueArtifact[OptionValue | None]):
         """
         if value is None:
             raise ValueError(
-                _("Choice artifact '%(id)s' cannot write None.")
-                % {"id": self.id}
+                _("%(name)s cannot write None.") % {"name": self.name}
             )
-        text = option_text(match_option(self.id, self.options, value))
+        text = option_text(match_option(self.name, self.options, value))
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(text)
         self._emit_event(ArtifactEventsEnum.WRITE)

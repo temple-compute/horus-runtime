@@ -74,7 +74,7 @@ class ListArtifact(ValueArtifact[list[ListItem]]):
     @model_validator(mode="after")
     def _check_items(self) -> Self:
         check_count(
-            self.id,
+            self.name or self.id,
             len(self.value),
             self.min_items,
             self.max_items,
@@ -86,15 +86,15 @@ class ListArtifact(ValueArtifact[list[ListItem]]):
             if bounded:
                 if isinstance(item, str):
                     raise ValueError(
-                        _("List artifact '%(id)s': '%(v)s' is not a number.")
-                        % {"id": self.id, "v": item}
+                        _("%(name)s: '%(v)s' is not a number.")
+                        % {"name": self.name or self.id, "v": item}
                     )
-                check_range(self.id, item, self.min, self.max)
-            check_excluded(self.id, item, self.exclude)
+                check_range(self.name or self.id, item, self.min, self.max)
+            check_excluded(self.name or self.id, item, self.exclude)
             if self.unique and item in seen:
                 raise ValueError(
-                    _("List artifact '%(id)s' holds '%(v)s' twice.")
-                    % {"id": self.id, "v": item}
+                    _("%(name)s holds '%(v)s' twice.")
+                    % {"name": self.name or self.id, "v": item}
                 )
             seen.add(item)
         return self
