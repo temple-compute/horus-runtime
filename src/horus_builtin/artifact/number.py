@@ -67,24 +67,20 @@ class NumberArtifact(ValueArtifact[int | float]):
             # An unset value (e.g. stripped from a published release) starts
             # in range instead of failing on the 0 default.
             self.value = self.min
-        check_range(self.id, self.value, self.min, self.max)
+        check_range(self.name or self.id, self.value, self.min, self.max)
         if self.step is not None:
             n = (self.value - (self.min or 0)) / self.step
             # Tolerance so 0.3 sits on a 0.1 grid despite float rounding.
             if abs(n - round(n)) > 1e-9 * max(1.0, abs(n)):
                 raise ValueError(
-                    _(
-                        "Number artifact '%(id)s': %(v)s is not a multiple "
-                        "of step %(step)s from %(base)s."
-                    )
+                    _("%(name)s must be a multiple of %(step)s from %(base)s.")
                     % {
-                        "id": self.id,
-                        "v": self.value,
+                        "name": self.name or self.id,
                         "step": self.step,
                         "base": self.min or 0,
                     }
                 )
-        check_excluded(self.id, self.value, self.exclude)
+        check_excluded(self.name or self.id, self.value, self.exclude)
         return self
 
     def read(self) -> int | float:

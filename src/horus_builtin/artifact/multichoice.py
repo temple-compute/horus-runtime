@@ -72,7 +72,7 @@ class MultiChoiceArtifact(ValueArtifact[list[OptionValue]]):
         check_options(self.id, self.options)
         self.value = self._picked(self.value)
         check_count(
-            self.id,
+            self.name or self.id,
             len(self.value),
             self.min_picks,
             self.max_picks,

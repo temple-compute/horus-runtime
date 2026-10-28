@@ -335,9 +335,10 @@ class TestNumberBounds:
         ("fields", "message"),
         [
             ({"min": 5, "max": 1}, "is above max"),
-            ({"min": 0, "max": 10, "value": 11}, "outside"),
-            ({"min": 5, "value": 0}, "outside"),
-            ({"min": 1, "step": 2, "value": 4}, "not a multiple of step"),
+            ({"min": 0, "max": 10, "value": 11}, "must be between 0 and 10"),
+            ({"min": 5, "value": 0}, "must be at least 5"),
+            ({"max": 5, "value": 6}, "must be at most 5"),
+            ({"min": 1, "step": 2, "value": 4}, "multiple of 2 from 1"),
             ({"step": 0}, "greater than 0"),
         ],
     )
@@ -347,6 +348,25 @@ class TestNumberBounds:
         """Inverted, out-of-range and off-grid values fail clearly."""
         with pytest.raises(ValidationError, match=message):
             NumberArtifact.model_validate({"id": "n", "path": "/n", **fields})
+
+    def test_range_error_names_the_field(self) -> None:
+        """The message uses the display name and a plain range, not the id."""
+        with pytest.raises(ValidationError) as exc:
+            NumberArtifact.model_validate(
+                {
+                    "id": "max_n_frac",
+                    "name": "Max N / ambiguous fraction",
+                    "path": "/n",
+                    "min": 0,
+                    "max": 0.5,
+                    "value": 2,
+                }
+            )
+        message = exc.value.errors()[0]["msg"]
+        assert message.endswith(
+            "Max N / ambiguous fraction must be between 0 and 0.5."
+        )
+        assert "max_n_frac" not in message
 
     def test_unset_value_starts_at_min(self) -> None:
         """A stripped value is valid again instead of failing on 0."""
