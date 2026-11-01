@@ -26,7 +26,7 @@ output.
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -37,7 +37,11 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.substitution import placeholder_roots
-from horus_builtin.task.horus_task import HorusTask, TaskFingerprint
+from horus_builtin.task.horus_task import (
+    _UNHASHABLE,
+    HorusTask,
+    TaskFingerprint,
+)
 from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -142,6 +146,9 @@ class MapTask(HorusTask):
         default_factory=dict
     )
     """Re-runs of lost slots :meth:`_restage` started, by clone index."""
+
+    _input_digests: dict[str, str] = PrivateAttr(default_factory=dict)
+    """The digests of this task's inputs from its last fingerprint."""
 
     @property
     def _over_artifact(self) -> IterableArtifact:
@@ -280,7 +287,10 @@ class MapTask(HorusTask):
         # TransferEvents (one per clone x input would flood the bus).
         source_map: dict[tuple[str, str], EdgeSource] = {
             (clone.id, artifact.id): EdgeSource(
-                self.target, artifact, report=False
+                self.target,
+                artifact,
+                report=False,
+                digest=self._input_digests.get(artifact.id),
             )
             for clone in clones
             for artifact in clone.inputs
@@ -566,6 +576,22 @@ class MapTask(HorusTask):
             )
         )
 
+    async def _fingerprint(
+        self, input_digests: Mapping[str, str | None] | None = None
+    ) -> TaskFingerprint:
+        """
+        The fingerprint, keeping its input digests: ``_run`` takes it just
+        before :meth:`_execute`, so the clones reuse them for the inputs
+        they share instead of each hashing them again.
+        """
+        fingerprint = await super()._fingerprint(input_digests)
+        self._input_digests = {
+            key: value
+            for key, value in fingerprint.inputs.items()
+            if value != _UNHASHABLE
+        }
+        return fingerprint
+
     async def _write_manifest(self, fingerprint: TaskFingerprint) -> None:
         """
         Record *fingerprint*, unless items were dropped: then remove any
@@ -661,6 +687,11 @@ class MapTask(HorusTask):
         # when any other item changed. Keep it only when the body names it.
         if not self._body_may_read(self.over.input_id):
             clone.unfingerprinted_inputs = [self.over.input_id]
+
+        # The shared inputs are the copies this task just digested (a
+        # digest does not depend on the path): the clone hashes its item
+        # only. The scheduler replaces this when it digested them itself.
+        clone._staged_digests = dict(self._input_digests)  # noqa: SLF001
 
         # Register this clone's item as a side artifact, so the upload
         # middleware persists it to S3 under the clone's own task id and the
