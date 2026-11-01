@@ -47,7 +47,7 @@ from horus_builtin.workflow.scheduler import (
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
-from horus_runtime.core.lease import LeaseManager
+from horus_runtime.core.lease import LeaseManager, _FairSlots
 from horus_runtime.core.placement import (
     InsufficientCapacityError,
     PlacementManager,
@@ -2087,7 +2087,7 @@ class TestRetryOnTargetLoss:
             ],
             capacity={location_id: ResourceCapacity(gpus=1)},
         )
-        slots: list[asyncio.Semaphore] = []
+        slots: list[_FairSlots] = []
         member_slot = wf.leases.member_slot
 
         async def record_slot(task: HorusTask) -> None:
@@ -2102,5 +2102,5 @@ class TestRetryOnTargetLoss:
         assert [task.runs for task in tasks] == [2, 2]
         assert all(task.status == TaskStatus.COMPLETED for task in tasks)
         assert slots
-        assert all(slot._value == 1 for slot in slots)
+        assert all(slot.free == 1 for slot in slots)
         assert wf.placement._remaining[location_id] == {"gpus": 1}

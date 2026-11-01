@@ -32,7 +32,9 @@ being pending (completed, skipped, blocked, failed).
 """
 
 import asyncio
+import re
 from abc import abstractmethod
+from collections import deque
 from collections.abc import Collection, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -65,6 +67,9 @@ EVACUATION_CONCURRENCY = 4
 RELEASE_RETRY_S = 60.0
 """First wait before retrying a failed release; doubles up to an hour."""
 
+_CLONE_ID = re.compile(r"(.+)\[\d+\]")
+"""A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``)."""
+
 
 class Phase(StrEnum):
     """Where a lease's machine is in its life."""
@@ -81,6 +86,51 @@ class Phase(StrEnum):
     """Destroying the machine."""
 
 
+class _FairSlots:
+    """
+    ``member_cap`` slots on one machine. A freed slot goes to a waiting
+    task outside any map first (often a fan-in), then round-robin across
+    the waiting maps, so a large map queued first starves nothing.
+    """
+
+    def __init__(self, cap: int) -> None:
+        self.free = cap
+        # Per map id (``None``: not a clone), in turn order.
+        self._waiters: dict[str | None, deque[asyncio.Future[None]]] = {}
+
+    async def acquire(self, group: str | None) -> None:
+        """Take a slot, waiting in *group*'s queue while none is free."""
+        if self.free:
+            # Never free while anyone waits: release() hands slots over.
+            self.free -= 1
+            return
+        waiter = asyncio.get_running_loop().create_future()
+        self._waiters.setdefault(group, deque()).append(waiter)
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            # Cancelled while queued: release() skips it. Granted, then
+            # cancelled before resuming: pass the slot on.
+            if not waiter.cancelled():
+                self.release()
+            raise
+
+    def release(self) -> None:
+        """Hand the slot to the next waiter, or free it."""
+        while self._waiters:
+            group = (
+                None if None in self._waiters else next(iter(self._waiters))
+            )
+            queue = self._waiters.pop(group)
+            waiter = queue.popleft()
+            if queue:
+                self._waiters[group] = queue  # back of the turn order
+            if not waiter.done():
+                waiter.set_result(None)
+                return
+        self.free += 1
+
+
 @dataclass(eq=False)
 class Lease:
     """The lease on one declared releasable target (and all its copies)."""
@@ -90,7 +140,7 @@ class Lease:
     running: set[str] = field(default_factory=set)
     timer: "asyncio.Task[None] | None" = None
     work: "asyncio.Task[None] | None" = None
-    slots: asyncio.Semaphore | None = None
+    slots: _FairSlots | None = None
     phase: Phase = Phase.COLD
     retry: "asyncio.Task[None] | None" = None
     """Pending retry after a failed destroy; the lease is left alone."""
@@ -271,7 +321,7 @@ class LeaseManager:
             lease = Lease(key=target.lease_key, target=target)
             cap = target.member_cap
             if cap is not None:
-                lease.slots = asyncio.Semaphore(cap)
+                lease.slots = _FairSlots(cap)
             self._declare_capacity(target, self.workflow.placement)
             self._leases[lease.key] = lease
             if self._keeper is None:
@@ -349,7 +399,8 @@ class LeaseManager:
             and lease.slots is not None
             and not task.dispatches_children
         ):
-            await lease.slots.acquire()
+            clone = _CLONE_ID.fullmatch(task.id)
+            await lease.slots.acquire(clone[1] if clone else None)
 
     def member_started(self, task: "BaseTask") -> None:
         """*task* is bound to its machine and about to pull its inputs."""
