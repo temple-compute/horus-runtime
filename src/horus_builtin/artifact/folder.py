@@ -97,8 +97,18 @@ class FolderArtifact(BaseArtifact[Path], IterableArtifact):
         rooted at ``.`` (not the directory name itself); the matching
         :meth:`unpack_command` then extracts straight into the destination
         directory without nesting.
+
+        Compressed at gzip's fastest level: packaging sits on the critical
+        path (a task's outputs are packed before it completes) and level 6
+        took about twice as long for a few percent smaller tarballs. Still
+        plain gzip, so every unpacker reads it. A ``tar`` without
+        ``--use-compress-program`` (busybox) falls back to ``czf``.
         """
-        return f"tar czf {shlex.quote(pkg)} -C {shlex.quote(src)} ."
+        q_pkg, q_src = shlex.quote(pkg), shlex.quote(src)
+        return (
+            f"tar --use-compress-program='gzip -1' -cf {q_pkg} -C {q_src} . "
+            f"2>/dev/null || tar czf {q_pkg} -C {q_src} ."
+        )
 
     def unpack_command(self, pkg: str, dest: str) -> str | None:
         """

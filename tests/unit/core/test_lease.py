@@ -1047,6 +1047,136 @@ class TestSlotsAndCapacity:
         assert not placement._fits("loc", {"cpus": 1})
         assert placement._fits("new", {"cpus": 8})
 
+    async def test_slots_go_to_single_tasks_then_round_robin(self) -> None:
+        """
+        A freed slot goes to a task outside any map first, then alternates
+        between the waiting maps in the order they first queued.
+        """
+        slots = lease_module._FairSlots(1)
+        await slots.acquire(None)
+        granted: list[str] = []
+
+        async def wait(name: str, group: str | None) -> None:
+            await slots.acquire(group)
+            granted.append(name)
+
+        waiters = []
+        for name, group in [
+            ("a0", "a"),
+            ("a1", "a"),
+            ("a2", "a"),
+            ("b0", "b"),
+            ("b1", "b"),
+            ("s", None),
+        ]:
+            waiters.append(asyncio.create_task(wait(name, group)))
+            await asyncio.sleep(0)
+        for _ in waiters:
+            slots.release()
+            await asyncio.sleep(0)
+
+        assert granted == ["s", "a0", "b0", "a1", "b1", "a2"]
+
+    async def test_cancelled_waiters_leak_no_slot(self) -> None:
+        """
+        A waiter cancelled in the queue, or right after it was granted the
+        slot, leaves the slot free.
+        """
+        slots = lease_module._FairSlots(1)
+        await slots.acquire(None)
+        queued = asyncio.create_task(slots.acquire("a"))
+        await asyncio.sleep(0)
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queued
+        slots.release()
+        assert slots.free == 1
+
+        await slots.acquire(None)
+        granted = asyncio.create_task(slots.acquire("a"))
+        await asyncio.sleep(0)
+        slots.release()  # hands the slot over...
+        granted.cancel()  # ...before the waiter resumes
+        with pytest.raises(asyncio.CancelledError):
+            await granted
+        assert slots.free == 1
+
+    async def test_maps_share_the_machine_with_a_single_task(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        Under ``max_parallel=1``, two maps' clones alternate and a task
+        queued after them runs before the first map finishes.
+        """
+        del horus_context, evacuator
+        log = tmp_path / "order.log"
+        batches = tmp_path / "batches"
+        batches.mkdir()
+        for name in "wxyz":
+            (batches / name).write_text(name)
+        split = HorusTask(
+            id="split",
+            name="split",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FolderArtifact(id="batches", path=batches)],
+        )
+        node = FakeNode(working_directory=tmp_path.as_posix(), max_parallel=1)
+
+        def _map(map_id: str) -> MapTask:
+            return MapTask(
+                id=map_id,
+                name=map_id,
+                over=MapOver(input_id="batches", item_id="batch"),
+                runtime=CommandRuntime(
+                    command=f"echo {map_id} >> {log}; sleep 0.1"
+                ),
+                executor=ShellExecutor(),
+                target=node,
+                inputs=[FolderArtifact(id="batches", path=Path(map_id))],
+                outputs=[FolderArtifact(id="out", path=Path(f"{map_id}_out"))],
+            )
+
+        slow = _step("slow", LocalTarget(), tmp_path, delay=0.05)
+        single = HorusTask(
+            id="single",
+            name="single",
+            runtime=CommandRuntime(command=f"echo single >> {log}"),
+            executor=ShellExecutor(),
+            target=node,
+        )
+        wf = _workflow(
+            tmp_path,
+            [split, _map("a"), _map("b"), slow, single],
+            [
+                *(
+                    WorkflowEdge(
+                        source="split",
+                        source_output="batches",
+                        target=map_id,
+                        target_input="batches",
+                    )
+                    for map_id in "ab"
+                ),
+                WorkflowEdge(source="split", target="slow"),
+                WorkflowEdge(source="slow", target="single"),
+            ],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=20)
+
+        order = log.read_text().split()
+        assert wf.status.value == "completed"
+        assert sorted(order) == ["a"] * 4 + ["b"] * 4 + ["single"]
+        # FIFO would run it last, and each map's clones in one block.
+        assert order.index("single") < 3
+        maps = "".join(entry for entry in order if entry != "single")
+        assert "aaa" not in maps and "bbb" not in maps
+
 
 @pytest.mark.unit
 class TestLostArtifacts:

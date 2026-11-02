@@ -49,6 +49,7 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
+from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.exceptions import TargetLostError
@@ -469,6 +470,79 @@ class TestSharedInput:
         for slot, name in enumerate(("a.txt", "b.txt")):
             content = (scored / str(slot) / "result.txt").read_text()
             assert content == f"{name}RECEPTOR"
+
+    async def test_clones_reuse_the_maps_shared_input_digests(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The map hashes a shared input once; each clone hashes only its own
+        item, and still records the fingerprint it would hash by itself.
+        """
+        del horus_context
+        (tmp_path / "receptor.txt").write_text("RECEPTOR")
+
+        def _build() -> HorusWorkflow:
+            split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+            map_task = _map_task(
+                over_artifact=FolderArtifact(
+                    id="batches", path=Path("batches_in")
+                ),
+                command="cat $batch $receptor > $scored/result.txt",
+                extra_inputs=[
+                    FileArtifact(id="receptor", path=Path("receptor_in"))
+                ],
+            )
+            return _wire(
+                tmp_path,
+                split=split,
+                map_task=map_task,
+                artifacts=[
+                    FileArtifact(id="receptor", path=tmp_path / "receptor.txt")
+                ],
+                extra_edges=[
+                    WorkflowEdge(
+                        source="artifact-receptor",
+                        source_output="receptor",
+                        target="score",
+                        target_input="receptor",
+                    )
+                ],
+            )
+
+        hashed: list[str] = []
+        original = ArtifactStore.digest
+
+        async def spy(
+            self: ArtifactStore, artifact: BaseArtifact
+        ) -> str | None:
+            hashed.append(artifact.id)
+            return await original(self, artifact)
+
+        wf = _build()
+        with patch.object(ArtifactStore, "digest", spy):
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert hashed.count("receptor") == 1
+        assert hashed.count("batch") == 3
+        clones = [t for t in wf.tasks if t.id.startswith("score[")]
+        for clone in clones:
+            assert isinstance(clone, HorusTask)
+            assert await clone._read_manifest() == await clone._fingerprint()
+
+        # A map that lost its manifest runs again: its clones' skip check
+        # reuses the digests too.
+        score = cast(MapTask, next(t for t in wf.tasks if t.id == "score"))
+        Path(cast(str, score._manifest_path())).unlink()
+        hashed.clear()
+        wf = _build()
+        with patch.object(ArtifactStore, "digest", spy):
+            await wf.run(trigger_id="split")
+
+        assert hashed.count("receptor") == 1
+        assert hashed.count("batch") == 3
+        clones = [t for t in wf.tasks if t.id.startswith("score[")]
+        assert [t.status for t in clones] == [TaskStatus.SKIPPED] * 3
 
 
 @pytest.mark.unit
