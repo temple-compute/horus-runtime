@@ -1187,7 +1187,6 @@ class MapTask(HorusTask):
         ):
             if result is None and slot not in upstream:
                 continue
-            await self.target.remove(str(root / slot))
             self._dropped_slots.append(slot)
             if result is None:
                 continue
@@ -1204,6 +1203,9 @@ class MapTask(HorusTask):
             )
             if len(lines) < _DROPS_LISTED:
                 lines.append(f"{slot} ({label}): {summary}")
+        await self.target.remove_all(
+            [str(root / slot) for slot in self._dropped_slots]
+        )
         if len(dropped) > _DROPS_LISTED:
             lines.append(
                 _("+%(n)d more") % {"n": len(dropped) - _DROPS_LISTED}

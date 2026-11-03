@@ -715,3 +715,22 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         out = await self.run_command_sync(f"rm -rf {shlex.quote(path)}")
         await out.wait()
+
+    async def remove_all(self, paths: list[str]) -> None:
+        """
+        Remove every path in *paths*, as :meth:`remove` does. The default
+        runs one shell command for all of them, one round trip; a target
+        with a native :meth:`remove` uses it for each path.
+        """
+        if type(self).remove is not BaseTarget.remove:
+            for path in paths:
+                await self.remove(path)
+            return
+        if not paths:
+            return
+        # shortcut: one command line for every path; split it if a map
+        # drops more slots than a command line holds.
+        out = await self.run_command_sync(
+            "rm -rf " + " ".join(shlex.quote(path) for path in paths)
+        )
+        await out.wait()
