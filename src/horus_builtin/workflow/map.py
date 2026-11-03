@@ -36,7 +36,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.runtime.command import CommandRuntime
-from horus_builtin.runtime.substitution import placeholder_roots
+from horus_builtin.runtime.substitution import (
+    placeholder_names,
+    placeholder_roots,
+)
 from horus_builtin.task.horus_task import (
     _UNHASHABLE,
     HorusTask,
@@ -59,6 +62,9 @@ from horus_runtime.logging import horus_logger
 # _ERROR_CHARS: a large map dropping many items must not flood the log.
 _DROPS_LISTED = 20
 _ERROR_CHARS = 500
+
+# The highest exit code a process can report.
+_MAX_EXIT_CODE = 255
 
 
 class MapConfigurationError(WorkflowError):
@@ -120,6 +126,20 @@ class MapTask(HorusTask):
     maps whose items are independent.
     """
 
+    chain: bool = False
+    """Start each item once every chained input has that item."""
+
+    zip: list[MapOver] = Field(default_factory=list)
+    """
+    Inputs paired by item: slot X of each is bound to clone X as ``$<as>``.
+    """
+
+    drop_exit_codes: list[int] = Field(default_factory=list)
+    """
+    Exit codes that drop the item instead of failing it, whatever
+    :attr:`on_item_failure` says.
+    """
+
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
     """Slots dropped by the current execution (``on_item_failure="drop"``)."""
 
@@ -155,18 +175,24 @@ class MapTask(HorusTask):
         """
         Returns the input artifact to iterate over.
         """
+        return self._iterable_input(self.over.input_id)
+
+    def _iterable_input(self, input_id: str) -> IterableArtifact:
+        """
+        The input *input_id*, which must be an iterable artifact.
+        """
         input_artifact = next(
-            (inp for inp in self.inputs if inp.id == self.over.input_id), None
+            (inp for inp in self.inputs if inp.id == input_id), None
         )
         if input_artifact is None:
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' not found in task inputs.")
-                % {"id": self.over.input_id}
+                % {"id": input_id}
             )
         if not isinstance(input_artifact, IterableArtifact):
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' is not iterable.")
-                % {"id": self.over.input_id}
+                % {"id": input_id}
             )
 
         return input_artifact
@@ -174,11 +200,11 @@ class MapTask(HorusTask):
     @model_validator(mode="after")
     def validate_input_artifact_iterable(self) -> "MapTask":
         """
-        Validates that the input artifact specified by `over` is an
-        IterableArtifact.
+        Validates that the input artifacts specified by `over` and `zip` are
+        IterableArtifacts.
         """
-        # Obtain the input artifact to iterate over
-        _unused = self._over_artifact
+        for over in (self.over, *self.zip):
+            self._iterable_input(over.input_id)
 
         return self
 
@@ -196,6 +222,86 @@ class MapTask(HorusTask):
                 )
                 % {"id": self.id, "item": self.over.item_id}
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_zip_bindings(self) -> "MapTask":
+        """
+        Validates that each zip entry binds a free id, and that no input is
+        iterated twice.
+        """
+        taken = {a.id for a in (*self.inputs, *self.outputs)}
+        bound = {self.over.item_id}
+        paired = {self.over.input_id}
+        for entry in self.zip:
+            item = None
+            if entry.item_id in taken or entry.item_id in bound:
+                item = entry.item_id
+            elif entry.input_id in paired:
+                item = entry.input_id
+            if item is not None:
+                raise MapConfigurationError(
+                    _("Map task '%(id)s' binds '%(item)s' twice.")
+                    % {"id": self.id, "item": item}
+                )
+            bound.add(entry.item_id)
+            paired.add(entry.input_id)
+        return self
+
+    @model_validator(mode="after")
+    def validate_chained_body(self) -> "MapTask":
+        """
+        Validates that a chained command body reads each streamed input one
+        item at a time: the whole folder is not there while it streams.
+        ``${task.resources...}``, ``${task.id}`` and ``${task.name}`` are
+        fine; ``${task.inputs}`` and ``${task.outputs}`` are not.
+        """
+        if not self.chain or not isinstance(self.runtime, CommandRuntime):
+            return self
+        names = placeholder_names(self._body_text())
+        roots = {name.split(".")[0] for name in names}
+        for over in (self.over, *self.zip):
+            if over.input_id in roots:
+                self._raise_chained_read(over.input_id, over.item_id)
+        for name in sorted(names):
+            head = ".".join(name.split(".")[:2])
+            if head in ("task.inputs", "task.outputs"):
+                self._raise_chained_read(head, self.over.item_id)
+        return self
+
+    def _raise_chained_read(self, input_id: str, item_id: str) -> None:
+        """Raise the V7 error for *input_id*, pointing at *item_id*."""
+        raise MapConfigurationError(
+            _(
+                "Map task '%(id)s' is chained, so it cannot read all of "
+                "'%(input)s'. Use '$%(as)s' for this item."
+            )
+            % {"id": self.id, "input": input_id, "as": item_id}
+        )
+
+    @model_validator(mode="after")
+    def validate_drop_exit_codes(self) -> "MapTask":
+        """
+        Validates that each drop code is an exit code a command can return
+        on failure.
+        """
+        for code in self.drop_exit_codes:
+            if code == 0:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' lists exit code %(code)d to drop "
+                        "items, but 0 means success."
+                    )
+                    % {"id": self.id, "code": code}
+                )
+            if not 1 <= code <= _MAX_EXIT_CODE:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' lists exit code %(code)d to drop "
+                        "items. Use a code from 1 to 255."
+                    )
+                    % {"id": self.id, "code": code}
+                )
         return self
 
     @model_validator(mode="after")
@@ -612,13 +718,18 @@ class MapTask(HorusTask):
         """
         if not isinstance(self.runtime, CommandRuntime):
             return True
-        text = json.dumps(
+        return bool(
+            placeholder_roots(self._body_text()) & {artifact_id, "task"}
+        )
+
+    def _body_text(self) -> str:
+        """The runtime and executor, as the text their placeholders are in."""
+        return json.dumps(
             [
                 self.runtime.model_dump(mode="json"),
                 self.executor.model_dump(mode="json"),
             ]
         )
-        return bool(placeholder_roots(text) & {artifact_id, "task"})
 
     def _clone(
         self, slot: str, item: BaseArtifact, slot_root: Path

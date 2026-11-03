@@ -22,6 +22,7 @@ fan-out behaviour as an ordinary DAG node.
 
 import asyncio
 import contextvars
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TargetLostError
 from horus_runtime.core.task.status import TERMINAL_STATUSES, TaskStatus
 from horus_runtime.core.transfer.events import TransferEvent
@@ -1068,6 +1070,292 @@ class TestMapPorts:
             )
 
 
+def _edge(
+    source: str, output: str, target: str, input_id: str
+) -> WorkflowEdge:
+    """A transfer edge from *source*'s *output* into *target*'s input."""
+    return WorkflowEdge(
+        source=source,
+        source_output=output,
+        target=target,
+        target_input=input_id,
+    )
+
+
+def _plain(task_id: str) -> HorusTask:
+    """A plain task with one folder output, ``<task_id>_out``."""
+    return HorusTask(
+        id=task_id,
+        name=task_id,
+        runtime=CommandRuntime(command="true"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        outputs=[FolderArtifact(id="out", path=Path(f"{task_id}_out"))],
+    )
+
+
+def _over_map(task_id: str, **kwargs: Any) -> MapTask:
+    """A map over its ``batches`` input, writing ``<task_id>_out``."""
+    return MapTask(
+        id=task_id,
+        name=task_id,
+        over=MapOver(input_id="batches", item_id="batch"),
+        runtime=CommandRuntime(command="cp $batch $scored/"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id="batches", path=Path(f"{task_id}_in"))],
+        outputs=[FolderArtifact(id="scored", path=Path(f"{task_id}_out"))],
+        **kwargs,
+    )
+
+
+def _consumer(
+    *,
+    inputs: tuple[str, ...] = ("a_out",),
+    command: str = "ls $item > $out/ls.txt",
+    **kwargs: Any,
+) -> MapTask:
+    """Map ``b`` over its ``a_out`` input, one folder input per id."""
+    return MapTask(
+        id="b",
+        name="b",
+        over=MapOver(input_id="a_out", item_id="item"),
+        runtime=CommandRuntime(command=command),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id=i, path=Path(f"{i}_in")) for i in inputs],
+        outputs=[FolderArtifact(id="out", path=Path("b_out"))],
+        **kwargs,
+    )
+
+
+def _pairing_wf(
+    b: MapTask, tasks: list[BaseTask], edges: list[WorkflowEdge]
+) -> HorusWorkflow:
+    """A workflow of *tasks* and *b*, wired by *edges*."""
+    return HorusWorkflow(name="wf", tasks=[*tasks, b], edges=edges)
+
+
+@pytest.mark.unit
+class TestMapFields:
+    """``chain``, ``zip`` and ``drop_exit_codes`` are checked at load."""
+
+    def test_v1_zip_input_not_found(self) -> None:
+        """A zip entry must name one of the map's own inputs."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Input artifact 'reads' not found in task inputs."
+            ),
+        ):
+            _consumer(zip=[MapOver(input_id="reads", item_id="read")])
+
+    def test_v2_zip_input_not_iterable(self) -> None:
+        """A zip input must enumerate its items."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape("Input artifact 'reads' is not iterable."),
+        ):
+            MapTask(
+                id="b",
+                name="b",
+                over=MapOver(input_id="a_out", item_id="item"),
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[
+                    FolderArtifact(id="a_out", path=Path("a_out_in")),
+                    FileArtifact(id="reads", path=Path("reads.txt")),
+                ],
+                outputs=[FolderArtifact(id="out", path=Path("b_out"))],
+                zip=[MapOver(input_id="reads", item_id="read")],
+            )
+
+    @pytest.mark.parametrize(
+        ("entry", "item"),
+        [
+            (MapOver(input_id="c_out", item_id="item"), "item"),
+            (MapOver(input_id="c_out", item_id="c_out"), "c_out"),
+            (MapOver(input_id="a_out", item_id="pair"), "a_out"),
+        ],
+    )
+    def test_v3_zip_binding_collides(self, entry: MapOver, item: str) -> None:
+        """A zip ``as`` is a free id, and no input is iterated twice."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(f"Map task 'b' binds '{item}' twice."),
+        ):
+            _consumer(inputs=("a_out", "c_out"), zip=[entry])
+
+    def test_v4_chain_over_not_from_map(self) -> None:
+        """A chained map's ``over`` must come from a map."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, but 'a_out' does not come from a "
+                "map."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("a")],
+                [_edge("a", "out", "b", "a_out")],
+            )
+
+    def test_v5_zip_not_from_map(self) -> None:
+        """A zip input must come from a map, not a plain task."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' pairs 'c_out' by item, but it does not come "
+                "from a map."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(
+                    inputs=("a_out", "c_out"),
+                    zip=[MapOver(input_id="c_out", item_id="pair")],
+                ),
+                [_plain("split"), _over_map("a"), _plain("c")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    _edge("c", "out", "b", "c_out"),
+                ],
+            )
+
+    def test_v6_zip_other_item_space(self) -> None:
+        """Paired maps must iterate the same collection."""
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+        )
+        tasks: list[BaseTask] = [
+            _plain("split"),
+            _plain("split2"),
+            _over_map("a"),
+            _over_map("c"),
+        ]
+        edges = [
+            _edge("split", "out", "a", "batches"),
+            _edge("a", "scored", "b", "a_out"),
+            _edge("c", "scored", "b", "c_out"),
+        ]
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' pairs 'c_out' by item, but 'c' maps over "
+                "different items than 'a'."
+            ),
+        ):
+            _pairing_wf(
+                b, tasks, [*edges, _edge("split2", "out", "c", "batches")]
+            )
+
+        # Over the same collection, the pairing loads.
+        _pairing_wf(
+            b.model_copy(deep=True),
+            tasks,
+            [*edges, _edge("split", "out", "c", "batches")],
+        )
+
+    def test_v7_chained_body_reads_whole_folder(self) -> None:
+        """A chained command cannot name a streamed folder."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of 'c_out'. "
+                "Use '$pair' for this item."
+            ),
+        ):
+            _consumer(
+                inputs=("a_out", "c_out"),
+                command="cp ${c_out.path}/x $out/",
+                chain=True,
+                zip=[MapOver(input_id="c_out", item_id="pair")],
+            )
+        # `$$` is a literal dollar, not a placeholder.
+        _consumer(command="echo $$a_out > $out/x", chain=True)
+
+    def test_v7_task_placeholder(self) -> None:
+        """``${task.inputs}`` reads every folder; ``${task.resources.*}``,
+        ``${task.id}`` and ``${task.name}`` do not.
+        """
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of "
+                "'task.inputs'. Use '$item' for this item."
+            ),
+        ):
+            _consumer(command="ls ${task.inputs}", chain=True)
+        _consumer(
+            command=(
+                "run -t ${task.resources.cpus} ${task.id} ${task.name} $item"
+            ),
+            chain=True,
+        )
+
+    def test_v8_python_chain_loads(self) -> None:
+        """A Python body cannot be checked, so a chain over it loads."""
+        b = _consumer(chain=True)
+        b.runtime = PythonFunctionRuntime(func=_reads_everything)
+        b.executor = PythonFunctionExecutor()
+        wf = _pairing_wf(
+            MapTask.model_validate(b.model_dump()),
+            [_plain("split"), _over_map("a")],
+            [
+                _edge("split", "out", "a", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+            ],
+        )
+        loaded = next(t for t in wf.tasks if t.id == "b")
+        assert isinstance(loaded, MapTask)
+        assert loaded.chain
+
+    def test_v9_second_edge_from_chained_source(self) -> None:
+        """A chained source feeds nothing but its paired input."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so no other input can take "
+                "all of its output."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(inputs=("a_out", "a_all"), chain=True),
+                [_plain("split"), _over_map("a")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    _edge("a", "scored", "b", "a_all"),
+                ],
+            )
+
+    def test_drop_code_zero_rejected(self) -> None:
+        """0 is success, never a drop."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' lists exit code 0 to drop items, but 0 means "
+                "success."
+            ),
+        ):
+            _consumer(drop_exit_codes=[3, 0])
+
+    @pytest.mark.parametrize("code", [-1, 256])
+    def test_drop_code_out_of_range_rejected(self, code: int) -> None:
+        """A drop code is an exit code a command can return."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                f"Map task 'b' lists exit code {code} to drop items. Use a "
+                "code from 1 to 255."
+            ),
+        ):
+            _consumer(drop_exit_codes=[code])
+
+
 @pytest.mark.unit
 class TestRoundTrip:
     """A map is an ordinary task document: to_yaml/from_yaml preserves it
@@ -1106,6 +1394,61 @@ class TestRoundTrip:
         assert isinstance(score2, MapTask)
         assert score2.over.input_id == "batches"
         assert score2.over.item_id == "batch"
+
+        await wf2.run(trigger_id="split")
+        assert wf2.status.value == "completed"
+
+    async def test_chain_zip_drop_codes_round_trip(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A chained map runs after its source like any other map, and the
+        new fields survive to_yaml/from_yaml.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        a = _over_map("a")
+        c = _over_map("c")
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            chain=True,
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+            drop_exit_codes=[3, 10],
+        )
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, a, c, b],
+            edges=[
+                _edge("split", "batches", "a", "batches"),
+                _edge("split", "batches", "c", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+                _edge("c", "scored", "b", "c_out"),
+            ],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
+        assert sorted(p.name for p in (tmp_path / "b_out").iterdir()) == [
+            "0",
+            "1",
+        ]
+
+        out_path = tmp_path / "dump.yaml"
+        wf.to_yaml(out_path)
+
+        dumped = yaml.safe_load(out_path.read_text())
+        b_dict = next(t for t in dumped["tasks"] if t["id"] == "b")
+        assert b_dict["chain"] is True
+        assert b_dict["drop_exit_codes"] == [3, 10]
+        assert [z["input_id"] for z in b_dict["zip"]] == ["c_out"]
+
+        wf2 = BaseWorkflow.from_yaml(out_path)
+        b2 = next(t for t in wf2.tasks if t.id == "b")
+        assert isinstance(b2, MapTask)
+        assert b2.chain is True
+        assert b2.zip == [MapOver(input_id="c_out", item_id="pair")]
+        assert b2.drop_exit_codes == [3, 10]
 
         await wf2.run(trigger_id="split")
         assert wf2.status.value == "completed"

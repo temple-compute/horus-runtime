@@ -155,17 +155,25 @@ class _Resolver(Mapping[str, str]):
         return len(self._roots)
 
 
+def placeholder_names(text: str) -> set[str]:
+    """
+    Full names of the ``$id`` / ``${id.attr}`` placeholders in *text*, e.g.
+    ``{"org", "task.name"}`` for ``"--in ${org} --name ${task.name}"``.
+    """
+    names: set[str] = set()
+    for match in _DotTemplate.pattern.finditer(text):
+        name = match.group("named") or match.group("braced")
+        if name:
+            names.add(name)
+    return names
+
+
 def placeholder_roots(text: str) -> set[str]:
     """
     Root ids of the ``$id`` / ``${id.attr}`` placeholders in *text*, e.g.
     ``{"org", "task"}`` for ``"--in ${org} --name ${task.name}"``.
     """
-    roots: set[str] = set()
-    for match in _DotTemplate.pattern.finditer(text):
-        name = match.group("named") or match.group("braced")
-        if name:
-            roots.add(name.split(".")[0])
-    return roots
+    return {name.split(".")[0] for name in placeholder_names(text)}
 
 
 def is_template(value: "str | PurePath") -> bool:
