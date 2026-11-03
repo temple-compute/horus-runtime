@@ -580,7 +580,16 @@ def _ready(
     for task_id in sorted(scope - dispatched - blocked):
         pending = deps[task_id] - completed
         if pending:
-            streams = tasks_by_id[task_id].stream_sources(source_map)
+            streams = {
+                dep: fut
+                for dep, fut in tasks_by_id[task_id]
+                .stream_sources(source_map)
+                .items()
+                # A cancelled or failed stream never opened: wait for the
+                # source to finish instead.
+                if not fut.done()
+                or (not fut.cancelled() and fut.exception() is None)
+            }
             unopened = {
                 dep
                 for dep in pending
@@ -958,11 +967,18 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             # clones too, or they stall the run.
             tasks_by_id = {task.id: task for task in workflow.tasks}
             deps = _dependencies_with_implicit(workflow)
-            newly_blocked = descendants(task_id, deps) - blocked
+            # A completed task's outputs stay valid (a chained map can finish
+            # before its source fails late), so the walk stops at it.
+            open_deps = {t: d for t, d in deps.items() if t not in completed}
+            newly_blocked = descendants(task_id, open_deps) - blocked
             blocked |= newly_blocked
             # Cancel first, so a descendant running on the failed task's
             # stream records CANCELED before it is marked blocked below.
-            await _cancel_blocked(running, newly_blocked)
+            try:
+                await _cancel_blocked(running, newly_blocked)
+            except asyncio.CancelledError:
+                await _cancel_running(running)
+                raise
             _mark_blocked(
                 sorted(newly_blocked - {task_id}),
                 failed_task=tasks_by_id[task_id],

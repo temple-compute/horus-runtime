@@ -35,6 +35,7 @@ from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow import scheduler as scheduler_mod
 from horus_builtin.workflow.dag import (
     StalledWorkflowError,
     ancestors,
@@ -2324,6 +2325,156 @@ class TestStreaming:
 
         assert b.seen == [frozenset({"a"}), frozenset()]
         assert b.status == TaskStatus.COMPLETED
+
+    async def test_dead_stream_waits_for_the_source(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A cancelled or failed stream future never counts as open, and is
+        not waited on: the consumer waits for its source to complete.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        b = _consumer("b", a, tmp_path)
+        tasks_by_id: dict[str, BaseTask] = {"a": a, "b": b}
+        deps: dict[str, set[str]] = {"a": set(), "b": {"a"}}
+
+        def ready(completed: set[str]) -> tuple[list[str], set[object]]:
+            got, waits = _ready(
+                set(deps),
+                deps,
+                completed=completed,
+                dispatched={"a"} | completed,
+                blocked=set(),
+                tasks_by_id=tasks_by_id,
+                source_map={},
+            )
+            return got, set(waits)
+
+        a.opened().cancel()
+        assert ready(set()) == ([], set())
+        a._opened = None
+        a.opened().set_exception(TaskExecutionError("boom"))
+        assert ready(set()) == ([], set())
+        assert ready({"a"}) == (["b"], set())
+
+    async def test_run_cancel_while_unblocking_cancels_the_rest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A run cancelled while a blocked consumer unwinds still cancels the
+        unrelated tasks in flight.
+        """
+        del horus_context
+        unwinding = asyncio.Event()
+
+        class SlowUnwind(_StreamConsumer):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                assert self._source is not None
+                self._source._release.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    unwinding.set()
+                    await asyncio.Event().wait()
+
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        a.fail = True
+        b = _consumer("b", a, tmp_path, task_cls=SlowUnwind)
+        c = _consumer("c", a, tmp_path, hang=True, streams=False)
+        c._source = None
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(
+            name="stream_cancel_unblock",
+            tasks=[root, a, b, c],
+            edges=[
+                WorkflowEdge(source="root", target="a"),
+                WorkflowEdge(source="root", target="c"),
+                WorkflowEdge(source="a", target="b"),
+            ],
+            failure_policy="continue",
+        )
+
+        run = asyncio.create_task(wf.run(trigger_id="root"))
+        await asyncio.wait_for(unwinding.wait(), timeout=5)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=5)
+
+        assert c.cancelled
+        assert c.status == TaskStatus.CANCELED
+
+    async def test_late_source_failure_keeps_completed_consumer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``continue``, a source failing after its streaming consumer
+        completed leaves that consumer completed and its own running
+        consumer running to the end.
+        """
+        del horus_context
+        handled = asyncio.Event()
+
+        class LateFail(_StreamSource):
+            add_to_registry: ClassVar[bool] = False
+            _late: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+
+            async def _run(self) -> None:
+                try:
+                    self.opened().set_result(None)
+                    await self._late.wait()
+                    raise TaskExecutionError("source failed late")
+                finally:
+                    self._opened = None
+
+        class AfterB(_PassTask):
+            add_to_registry: ClassVar[bool] = False
+            cancelled: bool = False
+
+            async def _run(self) -> None:
+                a._late.set()
+                try:
+                    await handled.wait()
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+
+        a = _task("a", tmp_path=tmp_path, task_cls=LateFail)
+        assert isinstance(a, LateFail)
+        b = _consumer("b", a, tmp_path)
+        c = _task("c", tmp_path=tmp_path, task_cls=AfterB)
+        assert isinstance(c, AfterB)
+        wf = HorusWorkflow(
+            name="stream_late_fail",
+            tasks=[a, b, c],
+            edges=[
+                WorkflowEdge(source="a", target="b"),
+                WorkflowEdge(source="b", target="c"),
+            ],
+            failure_policy="continue",
+        )
+        mark_blocked = scheduler_mod._mark_blocked
+
+        def spy(*args: object, **kwargs: object) -> None:
+            mark_blocked(*args, **kwargs)  # type: ignore[arg-type]
+            handled.set()
+
+        with (
+            patch.object(scheduler_mod, "_mark_blocked", spy),
+            pytest.raises(WorkflowExecutionError) as exc_info,
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert exc_info.value.failed_task_ids == ["a"]
+        assert a.status == TaskStatus.FAILED
+        assert b.status == TaskStatus.COMPLETED
+        assert b.skip_reason is None
+        assert not c.cancelled
+        assert c.status == TaskStatus.COMPLETED
 
 
 @pytest.mark.unit
