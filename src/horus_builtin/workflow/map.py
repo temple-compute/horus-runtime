@@ -625,6 +625,10 @@ class MapTask(HorusTask):
             pair_stream = streams.get(pair.input_id)
             if pair_stream is not None:
                 for slot in slots:
+                    # A slot the zip side never had is a gap, as below.
+                    if pair is not self.over and slot not in pair_stream.slots:
+                        waits[slot].append(partial(_gap, source_id))
+                        continue
                     waits[slot].append(
                         partial(
                             pair_stream.wait,
@@ -858,7 +862,7 @@ class MapTask(HorusTask):
                     slot, self.id, _("exit code %(code)d") % {"code": code}
                 )
                 return exc
-            if self.on_item_failure == "drop":
+            if self._droppable(exc):
                 stream.dropped(
                     slot, self.id, (clone.error or "")[:_ERROR_CHARS]
                 )
@@ -920,7 +924,8 @@ class MapTask(HorusTask):
 
     def _droppable(self, exc: BaseException) -> bool:
         """Whether a clone failing with *exc* drops its item."""
-        if isinstance(exc, asyncio.CancelledError):
+        # A configuration error is never the item's fault.
+        if isinstance(exc, (asyncio.CancelledError, MapConfigurationError)):
             return False
         return (
             self._drop_code(exc) is not None or self.on_item_failure == "drop"

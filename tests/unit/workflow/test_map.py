@@ -3211,9 +3211,7 @@ class TestChain:
             return bool(self.id == "b" and lost) or await skip(self, *args)
 
         monkeypatch.setattr(MapTask, "_settle", lose_once)
-        monkeypatch.setattr(
-            MapTask, "is_complete_before_transfer", skip_retry
-        )
+        monkeypatch.setattr(MapTask, "is_complete_before_transfer", skip_retry)
         _set(tmp_path, "delay", "c_out_1", 0.3)
         b = _stage_map(tmp_path, "b", chain=True)
         c = _stage_map(tmp_path, "c", chain=True)
@@ -3871,6 +3869,54 @@ class TestZip:
             "b[2]": TaskStatus.COMPLETED,
         }
         assert _result(tmp_path, "b", "2").startswith("z>h_out_2")
+
+    @pytest.mark.parametrize("policy", ["fail", "drop"])
+    async def test_slot_missing_from_a_running_zip_source_is_a_gap(
+        self, tmp_path: Path, horus_context: HorusContext, policy: str
+    ) -> None:
+        """
+        M drops slot 2, so S, over M without chain, has no slot 2. C,
+        chained over H and pairing S while S still runs, drops C[2] as
+        dropped in S, the same as when S had finished.
+        """
+        del horus_context
+        _set(tmp_path, "exit", "m_out_2", 3)
+        _set(tmp_path, "delay", "s_out_3", 0.5)
+        c = _zip_map(tmp_path, "c", chain=True, on_item_failure=policy)
+        wf = _stages(
+            tmp_path,
+            ["w", "x", "y", "z"],
+            [
+                _stage_map(tmp_path, "m", drop_exit_codes=[3]),
+                _stage_map(tmp_path, "s"),
+            ],
+            extra_tasks=[_stage_map(tmp_path, "h"), c],
+            extra_edges=[
+                _edge("split", "batches", "h", "in"),
+                _edge("h", "out", "c", "in"),
+                _edge("s", "out", "c", "mates"),
+            ],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert c._upstream_dropped == {"2": "s"}
+        assert _clone_states(wf, "c") == {
+            "c[0]": TaskStatus.COMPLETED,
+            "c[1]": TaskStatus.COMPLETED,
+            "c[2]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
+            "c[3]": TaskStatus.COMPLETED,
+        }
+
+    def test_configuration_error_is_never_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        """``on_item_failure: drop`` does not hide a configuration error."""
+        task = _zip_map(tmp_path, "c", on_item_failure="drop")
+
+        assert task._droppable(RuntimeError("item broke"))
+        assert not task._droppable(MapConfigurationError("bad config"))
 
     def test_r1_slot_missing_from_a_stream(self) -> None:
         """Waiting on a slot the stream never had is a bug guard."""
