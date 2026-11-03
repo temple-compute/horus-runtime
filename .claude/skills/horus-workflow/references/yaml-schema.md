@@ -28,6 +28,8 @@ capacity:                  # optional; per-location resource caps (see Resources
   without waiting for a slot, and each caps only its own clones, so six maps
   can run 48 clones at once. On a laptop or shared host, set `capacity` to
   bound the total.
+- A chained map keeps each source map's machine until its own last item has
+  read from it, so a slow consumer keeps a fast source's machine running.
 - `orchestrator_target` defaults to `local` for `horus_workflow`; set it only
   when dispatching to remote targets that can't reach local files. It does not
   take a `{ref}`.
