@@ -822,6 +822,9 @@ class MapTask(HorusTask):
                 # source failed); revisit if a source can fail without raising.
                 await asyncio.get_running_loop().create_future()
         await self._settle(root, labels, clones, results)
+        # This map's folder is final: its consumers need not wait for the
+        # digests below.
+        stream.close(ok=True)
         if streams:
             # Fingerprinted again, now that they settled.
             self._streaming_from = frozenset()

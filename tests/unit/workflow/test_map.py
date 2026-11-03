@@ -3367,6 +3367,40 @@ class TestChain:
         assert wf.status.value == "completed"
         assert pulling == [True]
 
+    async def test_stream_closes_before_the_source_digests(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B's folder is final once it settled: C need not wait for B to
+        digest A before it digests B.
+        """
+        del horus_context
+        digests = HorusWorkflow.source_digests
+        closed: list[bool] = []
+
+        async def record(
+            self: HorusWorkflow, task: BaseTask, *args: Any, **kwargs: Any
+        ) -> Any:
+            if task.id == "b" and kwargs.get("only"):
+                closed.append(
+                    cast(MapTask, task)._stream is None
+                    or (cast(MapTask, task)._stream.closed.done())
+                )
+            return await digests(self, task, *args, **kwargs)
+
+        monkeypatch.setattr(HorusWorkflow, "source_digests", record)
+        b = _stage_map(tmp_path, "b", chain=True)
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert closed == [True]
+
     async def test_source_retry_skipped_whole_closes_its_stream(
         self,
         tmp_path: Path,
