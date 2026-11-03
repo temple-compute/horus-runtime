@@ -769,19 +769,34 @@ class MapTask(HorusTask):
         # TransferEvents (one per clone x input would flood the bus).
         # A streamed item is not here: it comes from its producing clone,
         # a no-op on the same machine too, and reported when it crosses.
-        per_item = {
-            (clone.id, pair.item_id): EdgeSource(
-                pair_stream.target,
-                producer.outputs[0],
-                task_id=producer.id,
-                report=pair_stream.target is not None
-                and pair_stream.target.location_id != self.target.location_id,
+        # Every item is named after its slot, so an item from another
+        # machine lands in a folder of its source's own.
+        per_item: dict[tuple[str, str], EdgeSource] = {}
+        for pair in (self.over, *self.zip):
+            pair_stream = streams.get(pair.input_id)
+            if pair_stream is None:
+                continue
+            crosses = (
+                pair_stream.target is not None
+                and pair_stream.target.location_id != self.target.location_id
             )
-            for pair in (self.over, *self.zip)
-            if (pair_stream := streams.get(pair.input_id)) is not None
-            for slot, clone in zip(slots, clones, strict=True)
-            if (producer := pair_stream.clones.get(slot)) is not None
-        }
+            source = sources[(self.id, pair.input_id)]
+            into = (
+                f"{self.target.resolved_working_directory}"
+                f"/.horus_items/{source.task_id}"
+                if crosses
+                else None
+            )
+            for slot, clone in zip(slots, clones, strict=True):
+                producer = pair_stream.clones.get(slot)
+                if producer is not None:
+                    per_item[(clone.id, pair.item_id)] = EdgeSource(
+                        pair_stream.target,
+                        producer.outputs[0],
+                        task_id=producer.id,
+                        report=crosses,
+                        into=into,
+                    )
         source_map: dict[tuple[str, str], EdgeSource] = {
             (clone.id, artifact.id): per_item.get((clone.id, artifact.id))
             or EdgeSource(

@@ -125,7 +125,10 @@ class EdgeSource(NamedTuple):
     :class:`TransferEvent`. ``digest`` is the output's content digest, as
     :meth:`ArtifactStore.digest` would compute it, when it is known without
     reading the bytes (e.g. a cached output kept in storage);
-    :meth:`BaseWorkflow.source_digests` then uses it as is.
+    :meth:`BaseWorkflow.source_digests` then uses it as is. ``into`` is
+    the folder a copy from another machine lands in, instead of the
+    consumer target's working directory: a copy lands at
+    ``<folder>/<name>``, so two inputs that share a name need two folders.
     """
 
     target: BaseTarget | None
@@ -133,6 +136,7 @@ class EdgeSource(NamedTuple):
     task_id: str | None = None
     report: bool = True
     digest: str | None = None
+    into: str | None = None
 
 
 class BaseWorkflow(AutoRegistry, entry_point="workflow"):
@@ -1322,7 +1326,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         :meth:`transfer_artifacts`), resolving its source when its turn
         comes, so a relocation recorded meanwhile is followed.
         """
-        source = self._relocated(source_map.get((task.id, artifact.id)))
+        edge = source_map.get((task.id, artifact.id))
+        source = self._relocated(edge)
         source_target, src_artifact = self._resolve_source(
             task, artifact, source
         )
@@ -1393,8 +1398,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             if source is None or source.report
             else nullcontext()
         )
+        destination = task.target
+        if edge is not None and edge.into is not None:
+            destination = task.target.idle_copy()
+            destination.working_directory = edge.into
         with scope:
-            await strategy.transfer(transfer_art, source_target, task.target)
+            await strategy.transfer(transfer_art, source_target, destination)
         artifact.path = transfer_art.path
 
     def _relocated(self, source: EdgeSource | None) -> EdgeSource | None:

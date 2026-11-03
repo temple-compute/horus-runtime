@@ -4140,6 +4140,7 @@ def _zipped(
     *,
     chain: bool = False,
     a: dict[str, Any] | None = None,
+    b: dict[str, Any] | None = None,
     c: dict[str, Any] | None = None,
 ) -> HorusWorkflow:
     """``split -> a -> b`` and ``split -> c``, b pairing c's items."""
@@ -4148,13 +4149,34 @@ def _zipped(
         names,
         [
             _stage_map(tmp_path, "a", **(a or {})),
-            _zip_map(tmp_path, "b", chain=chain),
+            _zip_map(tmp_path, "b", chain=chain, **(b or {})),
         ],
         extra_tasks=[_stage_map(tmp_path, "c", **(c or {}))],
         extra_edges=[
             _edge("split", "batches", "c", "in"),
             _edge("c", "out", "b", "mates"),
         ],
+    )
+
+
+class _Machine(LocalTarget):
+    """A machine of its own: inputs from another one are copied onto it."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_machine"
+    machine: str
+
+    @property
+    def location_id(self) -> str:
+        """Its own location."""
+        return f"fake://{self.machine}"
+
+
+def _machine(tmp_path: Path, name: str) -> _Machine:
+    """A machine working in ``tmp_path/<name>``."""
+    (tmp_path / name).mkdir()
+    return _Machine(
+        machine=name, working_directory=(tmp_path / name).as_posix()
     )
 
 
@@ -4348,6 +4370,48 @@ class TestZip:
             "c[2]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
             "c[3]": TaskStatus.COMPLETED,
         }
+
+    @pytest.mark.parametrize("chain", [True, False])
+    async def test_items_from_two_machines_land_apart(
+        self, tmp_path: Path, horus_context: HorusContext, chain: bool
+    ) -> None:
+        """
+        A, B and C each run on their own machine. Every item of B[X] is
+        copied to its own path on B's machine, and holds its own slot.
+        """
+        del horus_context
+        wf = _zipped(
+            tmp_path,
+            ["x", "y", "z"],
+            chain=chain,
+            a={"target": _machine(tmp_path, "node_a")},
+            b={"target": _machine(tmp_path, "node_b")},
+            c={"target": _machine(tmp_path, "node_c")},
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        for slot, name in enumerate("xyz"):
+            assert _result(tmp_path, "b", str(slot)) == (
+                f"{name}>a_out_{slot}\n{name}>c_out_{slot}\n>b_out_{slot}\n"
+            )
+            clone = next(t for t in wf.tasks if t.id == f"b[{slot}]")
+            paths = {a.id: a.path for a in clone.inputs}
+            node_b = tmp_path / "node_b"
+            assert paths["item"] == (
+                node_b / (".horus_items/a" if chain else "a_out") / str(slot)
+            )
+            assert paths["mate"] == (
+                node_b / (".horus_items/c" if chain else "c_out") / str(slot)
+            )
+            for source, path in (("a", paths["item"]), ("c", paths["mate"])):
+                assert sorted(p.name for p in path.iterdir()) == ["result.txt"]
+                assert (
+                    (path / "result.txt").read_text()
+                    == (_result(tmp_path, source, str(slot)))
+                    == f"{name}>{source}_out_{slot}\n"
+                )
 
     def test_retry_and_rerun_reopen_slots_not_asked_for(self) -> None:
         """
