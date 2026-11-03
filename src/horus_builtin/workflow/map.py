@@ -330,7 +330,12 @@ class MapTask(HorusTask):
         }
 
     def mark_skipped_complete(self) -> None:
-        """Skipped whole: a stream a consumer asked for will never open."""
+        """
+        Skipped whole: a stream a consumer asked for will never open, and
+        one a retry kept open closes, its outputs complete.
+        """
+        if self._stream is not None and self._stream.opened.done():
+            self._stream.close(ok=True)
         self._stream = None
         super().mark_skipped_complete()
 

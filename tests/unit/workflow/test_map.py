@@ -3186,6 +3186,48 @@ class TestChain:
             "b[1]": TaskStatus.COMPLETED,
         }
 
+    async def test_source_retry_skipped_whole_closes_its_stream(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B loses its machine after its fan-out and the retry skips B whole;
+        C, chained on B, still gets B's stream closed and completes.
+        """
+        del horus_context
+        settle = MapTask._settle
+        skip = MapTask.is_complete_before_transfer
+        lost: list[str] = []
+
+        async def lose_once(self: MapTask, *args: Any) -> None:
+            await settle(self, *args)
+            if self.id == "b" and not lost:
+                lost.append(self.id)
+                raise TargetLostError("node lost")
+
+        async def skip_retry(self: MapTask, *args: Any) -> bool:
+            return bool(self.id == "b" and lost) or await skip(self, *args)
+
+        monkeypatch.setattr(MapTask, "_settle", lose_once)
+        monkeypatch.setattr(
+            MapTask, "is_complete_before_transfer", skip_retry
+        )
+        _set(tmp_path, "delay", "c_out_1", 0.3)
+        b = _stage_map(tmp_path, "b", chain=True)
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert (b.status, b.skip_reason) == (
+            TaskStatus.SKIPPED,
+            SkipReason.COMPLETE,
+        )
+        assert c.status == TaskStatus.COMPLETED
+
     async def test_chained_clone_drops_whole_streamed_folders(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
