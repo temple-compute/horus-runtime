@@ -68,7 +68,10 @@ from horus_runtime.core.task.status import (
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import ArtifactLostError
+from horus_runtime.core.workflow.exceptions import (
+    ArtifactLostError,
+    WorkflowExecutionError,
+)
 from horus_runtime.middleware.bound_task import (
     BoundTaskMiddleware,
     BoundTaskMiddlewareContext,
@@ -961,7 +964,7 @@ class TestCloneFailure:
         wf = _wire(tmp_path, split=split, map_task=map_task)
         wf.failure_policy = "continue"
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(WorkflowExecutionError):
             await wf.run(trigger_id="split")
 
         clones = {

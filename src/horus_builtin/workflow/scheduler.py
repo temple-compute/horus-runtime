@@ -954,6 +954,10 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             # Unrelated branches already in `running`, or that become ready
             # on a later iteration, are left alone.
             failed[task_id] = exc
+            # A map may have expanded the DAG while we waited: block its
+            # clones too, or they stall the run.
+            tasks_by_id = {task.id: task for task in workflow.tasks}
+            deps = _dependencies_with_implicit(workflow)
             newly_blocked = descendants(task_id, deps) - blocked
             blocked |= newly_blocked
             # Cancel first, so a descendant running on the failed task's
