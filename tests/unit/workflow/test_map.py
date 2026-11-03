@@ -68,6 +68,7 @@ from horus_runtime.core.task.exceptions import (
     CommandFailedError,
     TargetLostError,
     TaskExecutionError,
+    exception_leaves,
 )
 from horus_runtime.core.task.status import (
     TERMINAL_STATUSES,
@@ -1765,13 +1766,19 @@ class TestDropFailedItems:
         map_task = _dropping_map(command="exit 1")
         wf = _wire(tmp_path, split=split, map_task=map_task)
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(TaskExecutionError) as exc_info:
             await wf.run(trigger_id="split")
 
         assert map_task.status == TaskStatus.FAILED
         assert map_task.error is not None
         assert "All 2 items were dropped in score." in map_task.error
         assert wf.status.value == "failed"
+        # The clone errors stay attached for the traceback.
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, BaseExceptionGroup)
+        leaves = exception_leaves(cause)
+        assert len(leaves) == 2
+        assert all(isinstance(e, CommandFailedError) for e in leaves)
 
     async def test_drop_code_drops_under_fail_policy(
         self, tmp_path: Path, horus_context: HorusContext

@@ -1103,10 +1103,20 @@ class MapTask(HorusTask):
                 fatal,
             )
         if len(errors) + len(upstream) == len(clones):
+            # The clone errors ride along as the cause, for the traceback.
+            cause = (
+                BaseExceptionGroup(
+                    _("%(n)d of %(total)d map clone(s) failed.")
+                    % {"n": len(errors), "total": len(clones)},
+                    errors,
+                )
+                if errors
+                else None
+            )
             raise TaskExecutionError(
                 _("All %(n)d items were dropped in %(name)s.")
                 % {"n": len(clones), "name": self.name}
-            )
+            ) from cause
 
         lines: list[str] = []
         dropped: list[dict[str, str]] = []
