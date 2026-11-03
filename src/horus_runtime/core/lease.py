@@ -39,6 +39,7 @@ from collections.abc import Collection, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from horus_runtime.core.target.base import BaseTarget
@@ -67,7 +68,7 @@ EVACUATION_CONCURRENCY = 4
 RELEASE_RETRY_S = 60.0
 """First wait before retrying a failed release; doubles up to an hour."""
 
-_CLONE_ID = re.compile(r"(.+)\[\d+\]")
+_CLONE_ID = re.compile(r"(.+)\[(\d+)\]")
 """A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``)."""
 
 
@@ -232,9 +233,7 @@ class OrchestratorEvacuator(BaseEvacuator):
                 % {"out": output.id}
             )
         # Per task, so two outputs with the same file name do not collide.
-        directory = (
-            f"{orchestrator.resolved_working_directory}/.evacuated/{task.id}"
-        )
+        directory = _evacuated_dir(orchestrator, task.id)
         destination = orchestrator.model_copy(
             update={"working_directory": directory}
         )
@@ -250,6 +249,44 @@ class OrchestratorEvacuator(BaseEvacuator):
         )
         await strategy.transfer(copy, source, destination)
         return EdgeSource(destination, copy, task.id)
+
+    async def recover(
+        self, task: "BaseTask", output: "BaseArtifact"
+    ) -> "EdgeSource | None":
+        """
+        A map clone's slot inside its map's evacuated folder, if that was
+        evacuated here.
+        """
+        # Local imports: both modules import this one.
+        from horus_runtime.context import HorusContext  # noqa: PLC0415
+        from horus_runtime.core.workflow.base import (  # noqa: PLC0415
+            EdgeSource,
+        )
+
+        workflow = HorusContext.get_context().workflow
+        orchestrator = workflow.orchestrator_target if workflow else None
+        clone = _CLONE_ID.fullmatch(task.id)
+        if workflow is None or orchestrator is None or clone is None:
+            return None
+        owner, slot = clone.groups()
+        rel = workflow._relocations.get((owner, output.id))  # noqa: SLF001
+        if (
+            rel is None
+            or rel.target is None
+            or rel.artifact is None
+            or rel.target.working_directory
+            != _evacuated_dir(orchestrator, owner)
+        ):
+            return None
+        item = rel.artifact.model_copy(
+            update={"path": Path(rel.artifact.path) / slot}
+        )
+        return EdgeSource(rel.target, item, task.id)
+
+
+def _evacuated_dir(orchestrator: BaseTarget, task_id: str) -> str:
+    """Where :class:`OrchestratorEvacuator` copies *task_id*'s outputs."""
+    return f"{orchestrator.resolved_working_directory}/.evacuated/{task_id}"
 
 
 def _lease_keys(task: "BaseTask") -> set[str]:

@@ -1322,6 +1322,16 @@ class TestLostArtifacts:
         await wf.transfer_artifacts(b)
 
 
+class _Elsewhere(FakeNode):
+    """A node off the orchestrator's filesystem, so copies really move."""
+
+    add_to_registry: ClassVar[bool] = False
+
+    @property
+    def location_id(self) -> str:
+        return f"fake://{self.lease_key}"
+
+
 @pytest.mark.unit
 class TestOrchestratorEvacuator:
     """The default evacuator copies an output to the orchestrator."""
@@ -1333,14 +1343,6 @@ class TestOrchestratorEvacuator:
         source_dir = tmp_path / "node"
         source_dir.mkdir()
         (source_dir / "a.out").write_text("payload")
-
-        class _Elsewhere(FakeNode):
-            add_to_registry: ClassVar[bool] = False
-
-            @property
-            def location_id(self) -> str:
-                return f"fake://{self.lease_key}"
-
         node = _Elsewhere(working_directory=source_dir.as_posix())
         a = _step("a", node, source_dir)
         orchestrator = tmp_path / "orch"
@@ -1356,6 +1358,39 @@ class TestOrchestratorEvacuator:
         copied = orchestrator / ".evacuated" / "a" / "a.out"
         assert Path(source.artifact.path) == copied
         assert copied.read_text() == "payload"
+
+    async def test_orchestrator_recover_finds_clone_in_owner_folder(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone's lost output is its slot in the map's evacuated folder."""
+        node_dir = tmp_path / "node"
+        (node_dir / "items" / "02").mkdir(parents=True)
+        (node_dir / "items" / "02" / "x.txt").write_text("two")
+        node = _Elsewhere(working_directory=node_dir.as_posix())
+        owner = _step("m", node, node_dir)
+        owner.outputs = [FolderArtifact(id="out", path=node_dir / "items")]
+        clone = _step("m[02]", node, node_dir)
+        other = _step("n[02]", node, node_dir)
+        orchestrator = tmp_path / "orch"
+        orchestrator.mkdir()
+        wf = _workflow(orchestrator, [owner, clone, other], [])
+        horus_context.workflow = wf
+        evacuator = OrchestratorEvacuator()
+        wf.relocate_output(
+            "m", "out", await evacuator.evacuate(owner, owner.outputs[0], node)
+        )
+
+        source = await evacuator.recover(clone, clone.outputs[0])
+
+        assert source is not None
+        assert source.task_id == "m[02]"
+        assert source.artifact is not None
+        slot = orchestrator / ".evacuated" / "m" / "items" / "02"
+        assert Path(source.artifact.path) == slot
+        assert (slot / "x.txt").read_text() == "two"
+        # Not a clone, or its map was not evacuated here.
+        assert await evacuator.recover(owner, owner.outputs[0]) is None
+        assert await evacuator.recover(other, other.outputs[0]) is None
 
 
 @pytest.mark.unit

@@ -19,6 +19,8 @@
 Exceptions related to task execution in the Horus runtime.
 """
 
+from typing import Self
+
 
 class BaseTaskError(Exception):
     """
@@ -30,6 +32,21 @@ class TaskExecutionError(BaseTaskError):
     """
     Exception raised when a task execution fails in the Horus runtime.
     """
+
+
+class CommandFailedError(TaskExecutionError):
+    """
+    The task's command ran and exited non-zero. Never retried; a map reads
+    :attr:`exit_code` to drop an item, never the (translated) message.
+    """
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+    def __reduce__(self) -> tuple[type[Self], tuple[str, int]]:
+        """Keep :attr:`exit_code` across pickling."""
+        return (type(self), (str(self), self.exit_code))
 
 
 class TargetLostError(TaskExecutionError):

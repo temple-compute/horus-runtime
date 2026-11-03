@@ -116,3 +116,15 @@ class SkipReason(Enum):
     task could never get its inputs. Unlike the other reasons, it does not
     count as satisfied: everything downstream of it is skipped too.
     """
+
+    UPSTREAM_DROPPED = "upstream_dropped"
+    """
+    An upstream map dropped this item, so this clone had no input. Counts as
+    satisfied; the slot stays a gap.
+    """
+
+    DROPPED = "dropped"
+    """
+    This clone exited with one of its map's ``drop_exit_codes``, so the map
+    dropped the item on purpose. Counts as satisfied; the slot stays a gap.
+    """

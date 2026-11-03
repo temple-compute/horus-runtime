@@ -34,7 +34,7 @@ import asyncio
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import nullcontext
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -1240,8 +1240,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self._build_source_map() if source_map is None else source_map
         )
         # A pinned input is already materialized in place by an expander
-        # (map/loop): not a transfer edge and not a root input either.
-        inputs = [a for a in task.inputs if not a.pinned]
+        # (map/loop): not a transfer edge and not a root input either. A
+        # streamed input arrives per item while the task runs.
+        streamed = task.streamed_inputs
+        inputs = [
+            a for a in task.inputs if not a.pinned and a.id not in streamed
+        ]
         if self._destinations_overlap(task, inputs, sources):
             # A folder transfer replaces its whole directory: a nested
             # input transferred alongside it would race its delete.
@@ -1505,11 +1509,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         self,
         task: BaseTask,
         source_map: dict[tuple[str, str], EdgeSource] | None = None,
+        *,
+        only: Collection[str] | None = None,
     ) -> dict[str, str | None]:
         """
         Digest every fingerprinted input of *task* where
         :meth:`transfer_artifacts` would read it from, without transferring
-        anything.
+        anything. With *only*, digest just the inputs with those ids.
 
         A digest does not depend on the path (a file's is its content's
         sha256, a directory's lists relative paths), so it equals the digest
@@ -1522,6 +1528,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         digests: dict[str, str | None] = {}
         for artifact in task.fingerprinted_inputs:
+            if only is not None and artifact.id not in only:
+                continue
             if artifact.pinned:
                 digests[artifact.id] = await ArtifactStore(task.target).digest(
                     artifact
