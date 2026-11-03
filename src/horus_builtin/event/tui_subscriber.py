@@ -53,7 +53,7 @@ from horus_runtime.core.interaction.transport import (
     InteractionFailedEvent,
 )
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow
 from horus_runtime.core.workflow.status import WorkflowStatus
 from horus_runtime.event.base import BaseEvent
@@ -134,6 +134,12 @@ _TERMINAL: frozenset[TaskStatus] = frozenset(
     }
 )
 
+# Skip reasons that mean a map item was dropped; they render dim, not blue.
+_DROPPED: frozenset[SkipReason] = frozenset(
+    {SkipReason.UPSTREAM_DROPPED, SkipReason.DROPPED}
+)
+_DROPPED_GLYPH = "\u2013"  # en dash
+
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SECONDS_PER_MINUTE = 60
 
@@ -164,6 +170,28 @@ def _make_console() -> Console:
     frames to the real terminal.
     """
     return Console(file=sys.__stdout__ or sys.stdout)
+
+
+def _is_dropped(task: BaseTask) -> bool:
+    return task.status is TaskStatus.SKIPPED and task.skip_reason in _DROPPED
+
+
+def _status_look(task: BaseTask) -> tuple[str, str]:
+    """Glyph and Rich style for a task's current status."""
+    if _is_dropped(task):
+        return _DROPPED_GLYPH, "dim"
+    return (
+        _STATUS_GLYPH.get(task.status, "?"),
+        _STATUS_STYLE.get(task.status, "white"),
+    )
+
+
+def _name_text(task: BaseTask, style: str) -> Text:
+    """Task name, with a ``dropped`` note so state is not color alone."""
+    text = Text(task.name, style=style)
+    if _is_dropped(task):
+        text.append(" " + _("dropped"), style="dim italic")
+    return text
 
 
 def _spinner_frame() -> str:
@@ -608,14 +636,12 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         table.add_column(_("Elapsed"), justify="right")
         table.add_column(_("Runs"), justify="right", style="dim")
         for task in _dag_order(workflow):
-            style = _STATUS_STYLE.get(task.status, "white")
+            icon, style = _status_look(task)
             if task.status is TaskStatus.RUNNING:
-                glyph = Text(_spinner_frame(), style=style)
-            else:
-                glyph = Text(_STATUS_GLYPH.get(task.status, "?"), style=style)
+                icon = _spinner_frame()
             table.add_row(
-                glyph,
-                Text(task.name, style=style),
+                Text(icon, style=style),
+                _name_text(task, style),
                 _fmt_target(task),
                 _fmt_resources(task),
                 _fmt_duration(self._task_elapsed(task)),
@@ -633,8 +659,7 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
         them off the same branch made a map's clones look like just another
         step in the dependency chain ahead of whatever consumes its output.
         """
-        names = {t.id: t.name for t in workflow.tasks}
-        status = {t.id: t.status for t in workflow.tasks}
+        tasks = {t.id: t for t in workflow.tasks}
         children, fanout, roots = _dag_children(workflow)
 
         tree = Tree(_("Dependencies"), style="bold")
@@ -643,10 +668,12 @@ class WorkflowTUISubscriber(BaseEventSubscriber):
             if tid in seen:  # guard against cycles in display
                 return
             seen.add(tid)
-            style = _STATUS_STYLE.get(
-                status.get(tid, TaskStatus.IDLE), "white"
-            )
-            branch = node.add(Text(names.get(tid, tid), style=style))
+            task = tasks.get(tid)
+            if task is None:
+                label = Text(tid, style=_STATUS_STYLE[TaskStatus.IDLE])
+            else:
+                label = _name_text(task, _status_look(task)[1])
+            branch = node.add(label)
 
             fanout_kids = fanout.get(tid, [])
             if fanout_kids:

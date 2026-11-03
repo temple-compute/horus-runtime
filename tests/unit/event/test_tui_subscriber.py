@@ -26,7 +26,11 @@ from rich.console import Console
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
-from horus_builtin.event.tui_subscriber import WorkflowTUISubscriber
+from horus_builtin.event.tui_subscriber import (
+    _DROPPED_GLYPH,
+    WorkflowTUISubscriber,
+    _status_look,
+)
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.task.horus_task import HorusTask
@@ -36,7 +40,7 @@ from horus_runtime.core.interaction.transport import (
     InteractionAskedEvent,
 )
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.event.subscriber import BaseEventSubscriber
 
@@ -53,6 +57,19 @@ def _workflow() -> HorusWorkflow:
         for tid, name in (("a", "Alpha"), ("b", "Beta"))
     ]
     return HorusWorkflow(name="demo_wf", tasks=tasks)
+
+
+def _render_skipped(reason: SkipReason) -> tuple[HorusWorkflow, str]:
+    """Render with Alpha skipped for ``reason`` and Beta a cache hit."""
+    wf = _workflow()
+    for task, why in zip(wf.tasks, (reason, SkipReason.COMPLETE), strict=True):
+        task.status = TaskStatus.SKIPPED
+        task.skip_reason = why
+    tui = WorkflowTUISubscriber()
+    tui.track(wf)
+    console = Console(record=True, width=120)
+    console.print(tui.render())
+    return wf, console.export_text()
 
 
 @pytest.mark.unit
@@ -214,3 +231,19 @@ class TestWorkflowTUISubscriber:
         assert (
             out.index("Clone 0") < out.index("Clone 1") < out.index("Report")
         )
+
+    def test_render_marks_upstream_dropped(self) -> None:
+        """An upstream drop reads dim with a dropped note, not blue."""
+        wf, out = _render_skipped(SkipReason.UPSTREAM_DROPPED)
+        assert _status_look(wf.tasks[0]) == (_DROPPED_GLYPH, "dim")
+        assert _status_look(wf.tasks[1]) == ("→", "blue")
+        assert "Alpha dropped" in out
+        assert "Beta dropped" not in out
+        assert _DROPPED_GLYPH in out
+
+    def test_render_marks_dropped(self) -> None:
+        """A drop by exit code reads like an upstream drop."""
+        wf, out = _render_skipped(SkipReason.DROPPED)
+        assert _status_look(wf.tasks[0]) == (_DROPPED_GLYPH, "dim")
+        assert "Alpha dropped" in out
+        assert _DROPPED_GLYPH in out
