@@ -76,6 +76,7 @@ from horus_runtime.core.task.status import (
 )
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
+from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactLostError,
@@ -1362,6 +1363,47 @@ class TestMapFields:
                     _edge("a", "scored", "b", "a_all"),
                 ],
             )
+
+    @pytest.mark.parametrize("transfer", [True, False])
+    def test_condition_on_chained_edge_rejected(self, transfer: bool) -> None:
+        """
+        A chained map starts before its source ends, so a condition on an
+        edge from that source would be read too early.
+        """
+        edge = _edge("a", "scored", "b", "a_out")
+        edges = [_edge("split", "out", "a", "batches"), edge]
+        condition = EdgeCondition(
+            key="ok", op="truthy", source_output="scored"
+        )
+        if transfer:
+            edge.condition = condition
+        else:
+            edges.append(
+                WorkflowEdge(source="a", target="b", condition=condition)
+            )
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so its edge cannot have a "
+                "condition."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("split"), _over_map("a")],
+                edges,
+            )
+
+    def test_condition_on_unchained_edge_allowed(self) -> None:
+        """Without a chain, the condition is read once A ended, as before."""
+        edge = _edge("a", "scored", "b", "a_out")
+        edge.condition = EdgeCondition(key="ok", op="truthy")
+
+        _pairing_wf(
+            _consumer(),
+            [_plain("split"), _over_map("a")],
+            [_edge("split", "out", "a", "batches"), edge],
+        )
 
     def test_drop_code_zero_rejected(self) -> None:
         """0 is success, never a drop."""
