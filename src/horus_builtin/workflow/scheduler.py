@@ -409,7 +409,9 @@ async def _transfer_and_run(
     """Transfer *task*'s inputs, then dispatch it on *target* and wait."""
     # Transfer input artifacts to the task's target as needed.
     await workflow.transfer_artifacts(task, source_map)
-    workflow.leases.inputs_transferred(task)
+    # A streaming map still reads its sources per item: it says when done.
+    if not task.streamed_inputs:
+        workflow.leases.inputs_transferred(task)
 
     # Digests are path-independent and transfers copy bytes verbatim, the
     # same assumption `is_complete_before_transfer` makes: the run reuses

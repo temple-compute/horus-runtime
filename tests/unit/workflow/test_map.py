@@ -3186,6 +3186,38 @@ class TestChain:
             "b[1]": TaskStatus.COMPLETED,
         }
 
+    async def test_chained_map_holds_its_source_until_its_fan_out(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B counts as pulling from A's machine from its start to its fan-out,
+        so A's machine is never released between the two.
+        """
+        del horus_context
+        map_items = MapTask._map_items
+        pulling: list[bool] = []
+
+        async def record(self: MapTask, wf: BaseWorkflow, *args: Any) -> None:
+            if self.id == "b":
+                pulling.append(self.id in wf.leases._pulling)
+            await map_items(self, wf, *args)
+
+        monkeypatch.setattr(MapTask, "_map_items", record)
+        _set(tmp_path, "delay", "a_out_1", 0.3)
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert pulling == [True]
+
     async def test_source_retry_skipped_whole_closes_its_stream(
         self,
         tmp_path: Path,
