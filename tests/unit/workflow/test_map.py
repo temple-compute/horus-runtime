@@ -3587,6 +3587,45 @@ class TestChain:
         assert wf.status.value == "completed"
         assert closed == [True]
 
+    async def test_stream_stays_open_while_a_retry_can_rewrite_it(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        On a releasable machine, B digests A before it closes its stream:
+        a loss there retries B, which may rewrite slots C would digest.
+        """
+        del horus_context
+        digests = HorusWorkflow.source_digests
+        closed: list[bool] = []
+
+        async def record(
+            self: HorusWorkflow, task: BaseTask, *args: Any, **kwargs: Any
+        ) -> Any:
+            if task.id == "b" and kwargs.get("only"):
+                stream = cast(MapTask, task)._stream
+                closed.append(stream is None or stream.closed.done())
+            return await digests(self, task, *args, **kwargs)
+
+        monkeypatch.setattr(HorusWorkflow, "source_digests", record)
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        b = _stage_map(
+            tmp_path,
+            "b",
+            chain=True,
+            target=_Node(working_directory=node_dir.as_posix()),
+        )
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert closed == [False]
+
     async def test_source_retry_skipped_whole_closes_its_stream(
         self,
         tmp_path: Path,

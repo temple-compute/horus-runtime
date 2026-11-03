@@ -870,8 +870,16 @@ class MapTask(HorusTask):
                 await asyncio.get_running_loop().create_future()
         await self._settle(root, labels, clones, results)
         # This map's folder is final: its consumers need not wait for the
-        # digests below.
-        stream.close(ok=True)
+        # digests below, unless a lost machine there can retry this map.
+        if not (
+            streams
+            and self._retry_on_target_loss
+            and any(
+                t is not None and t.releasable
+                for t in (self.target, *(s.target for s in streams.values()))
+            )
+        ):
+            stream.close(ok=True)
         if streams:
             # Fingerprinted again, now that they settled.
             self._streaming_from = frozenset()
