@@ -29,6 +29,7 @@ from horus_builtin.workflow.map import MapConfigurationError, MapTask
 from horus_builtin.workflow.scheduler import run_schedule
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.workflow.base import BaseWorkflow
+from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.i18n import tr as _
 
 
@@ -56,7 +57,7 @@ class HorusWorkflow(BaseWorkflow):
     """
 
     @model_validator(mode="after")
-    def check_map_pairing(self) -> Self:
+    def check_map_pairing(self) -> Self:  # noqa: PLR0915
         """
         Validate what a map's chain and zip need from its edges: a chained
         or paired input must come from a map over the same items, and a
@@ -68,27 +69,44 @@ class HorusWorkflow(BaseWorkflow):
             if edge.transfer and edge.target_input is not None
         }
         maps = {t.id: t for t in self.tasks if isinstance(t, MapTask)}
+        into: dict[str, list[WorkflowEdge]] = {}
+        for edge in self.edges:
+            into.setdefault(edge.target, []).append(edge)
+        spaces: dict[str, tuple[str | None, str] | None] = {}
 
         def map_source(task: MapTask, input_id: str) -> MapTask | None:
             edge = producers.get((task.id, input_id))
             return maps.get(edge.source) if edge is not None else None
 
-        def space(
-            task: MapTask, seen: frozenset[str] = frozenset()
-        ) -> tuple[str | None, str] | None:
-            # Follow `over` while a map feeds it; the head's producer names
-            # the item space. None on a cycle: the cycle check reports it.
-            if task.id in seen:
-                return None
-            source = map_source(task, task.over.input_id)
-            if source is not None:
-                return space(source, seen | {task.id})
+        def head_space(task: MapTask) -> tuple[str | None, str]:
+            # The head's producer names the item space.
             edge = producers.get((task.id, task.over.input_id))
             if edge is None:
                 return task.id, task.over.input_id
             if edge.source.startswith("artifact-"):
                 return None, str(edge.source_output)
             return edge.source, str(edge.source_output)
+
+        def space(task: MapTask) -> tuple[str | None, str] | None:
+            # Follow `over` while a map feeds it, in a loop: a chain can be
+            # deeper than the recursion limit. None on a cycle: the cycle
+            # check reports it.
+            path: list[str] = []
+            current = task
+            while current.id not in spaces:
+                if current.id in path:
+                    spaces[current.id] = None
+                    break
+                path.append(current.id)
+                source = map_source(current, current.over.input_id)
+                if source is None:
+                    spaces[current.id] = head_space(current)
+                    break
+                current = source
+            found = spaces[current.id]
+            for task_id in path:
+                spaces[task_id] = found
+            return found
 
         def over_source(task: MapTask) -> str:
             edge = producers.get((task.id, task.over.input_id))
@@ -141,10 +159,10 @@ class HorusWorkflow(BaseWorkflow):
             # A chained map starts before its source finishes, so a
             # condition on that edge, or one reading that source, would be
             # read too early.
-            for edge in self.edges:
+            for edge in into.get(task.id, []):
                 read = getattr(edge.condition, "source_task", None)
                 early = {edge.source, read} & streamed
-                if edge.target == task.id and edge.condition and early:
+                if edge.condition and early:
                     raise MapConfigurationError(
                         _(
                             "Map task '%(id)s' is chained to '%(source)s', so "
@@ -153,11 +171,11 @@ class HorusWorkflow(BaseWorkflow):
                         % {"id": task.id, "source": min(early)}
                     )
             paired = {task.over.input_id, *(e.input_id for e in task.zip)}
-            for (target, input_id), edge in producers.items():
+            for edge in into.get(task.id, []):
                 if (
-                    target == task.id
+                    edge.transfer
                     and edge.source in streamed
-                    and input_id not in paired
+                    and edge.target_input not in paired
                 ):
                     raise MapConfigurationError(
                         _(

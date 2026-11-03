@@ -1468,6 +1468,26 @@ class TestMapFields:
                 ],
             )
 
+    def test_deep_chain_with_a_zip_loads(self) -> None:
+        """
+        The item space of a map 1200 maps down its ``over`` chain is found
+        without recursing once per map.
+        """
+        maps = [_over_map(f"m{i}") for i in range(1200)]
+        edges = [_edge("split", "out", "m0", "batches")]
+        edges += [
+            _edge(f"m{i}", "scored", f"m{i + 1}", "batches")
+            for i in range(len(maps) - 1)
+        ]
+        last = _consumer(inputs=("a_out", "mates"))
+        last.zip = [MapOver(input_id="mates", item_id="mate")]
+        edges += [
+            _edge(maps[-1].id, "scored", "b", "a_out"),
+            _edge("m0", "scored", "b", "mates"),
+        ]
+
+        _pairing_wf(last, [_plain("split"), *maps], edges)
+
     def test_condition_on_unchained_edge_allowed(self) -> None:
         """Without a chain, the condition is read once A ended, as before."""
         edge = _edge("a", "scored", "b", "a_out")
