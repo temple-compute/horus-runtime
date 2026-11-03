@@ -730,13 +730,14 @@ class MapTask(HorusTask):
         # These hand-offs are not workflow edges, so they emit no
         # TransferEvents (one per clone x input would flood the bus).
         # A streamed item is not here: it comes from its producing clone,
-        # which is a no-op on the same machine too.
+        # a no-op on the same machine too, and reported when it crosses.
         per_item = {
             (clone.id, pair.item_id): EdgeSource(
                 pair_stream.target,
                 producer.outputs[0],
                 task_id=producer.id,
-                report=False,
+                report=pair_stream.target is not None
+                and pair_stream.target.location_id != self.target.location_id,
             )
             for pair in (self.over, *self.zip)
             if (pair_stream := streams.get(pair.input_id)) is not None

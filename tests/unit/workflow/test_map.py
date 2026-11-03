@@ -2828,6 +2828,37 @@ class TestRestage:
         # A's folder is gone, so B records no manifest: a miss next time.
         assert not (tmp_path / ".horus" / "b.json").exists()
 
+    async def test_chained_item_from_another_machine_is_reported(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """B[X] pulling A[X] across machines emits its transfer events."""
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        a = _stage_map(
+            tmp_path, "a", target=_Node(working_directory=node_dir.as_posix())
+        )
+        a.outputs[0].path = node_dir / "a_out"
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        transfers = {
+            (e.task_id, e.source_task_id, e.phase)
+            for c in emit.call_args_list
+            if isinstance(e := c.args[0], TransferEvent)
+            and e.task_id.startswith("b[")
+        }
+        assert transfers == {
+            (f"b[{slot}]", f"a[{slot}]", phase)
+            for slot in "01"
+            for phase in ("started", "progress", "finished")
+        }
+
     async def test_chained_clone_past_its_wait_finds_a_retried_slot_lost(
         self,
         tmp_path: Path,
