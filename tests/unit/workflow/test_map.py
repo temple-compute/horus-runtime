@@ -3528,6 +3528,30 @@ class TestChain:
         assert again is not first["a"]
         assert not again.done()
 
+    def test_runs_on_new_event_loops_reuse_no_stream(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        One workflow run with ``asyncio.run`` three times: A skips whole on
+        the second, and the third (A runs again) opens a new stream, not
+        the one B asked for on the closed second loop.
+        """
+        del horus_context
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        asyncio.run(wf.run(trigger_id="split"))
+        asyncio.run(wf.run(trigger_id="split"))
+        assert a.skip_reason == SkipReason.COMPLETE
+        (tmp_path / "batches" / "y").write_text("Y")
+        _starts(tmp_path)
+        asyncio.run(wf.run(trigger_id="split"))
+
+        assert wf.status.value == "completed"
+        assert a.status == TaskStatus.COMPLETED
+        assert _starts(tmp_path) == {"a_out_1", "b_out_1"}
+
 
 def _zip_map(
     tmp_path: Path, task_id: str, *, chain: bool = False, **kwargs: Any

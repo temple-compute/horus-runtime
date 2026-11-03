@@ -329,6 +329,11 @@ class MapTask(HorusTask):
             for input_id, stream in self._source_streams.items()
         }
 
+    def mark_skipped_complete(self) -> None:
+        """Skipped whole: a stream a consumer asked for will never open."""
+        self._stream = None
+        super().mark_skipped_complete()
+
     def _chain_sources(
         self, source_map: dict[tuple[str, str], EdgeSource]
     ) -> dict[str, "MapTask"]:
