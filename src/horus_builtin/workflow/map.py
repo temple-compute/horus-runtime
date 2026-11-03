@@ -450,20 +450,29 @@ class MapTask(HorusTask):
         """
         Validates that a chained command body reads each streamed input one
         item at a time: the whole folder is not there while it streams.
-        ``${task.resources...}``, ``${task.id}`` and ``${task.name}`` are
-        fine; ``${task.inputs}`` and ``${task.outputs}`` are not.
+        ``${task.inputs}`` and ``${task.inputs.<streamed id>}`` are not
+        fine; other ``${task...}`` names and inputs that do not stream are.
         """
         if not self.chain or not isinstance(self.runtime, CommandRuntime):
             return self
         names = placeholder_names(self._body_text())
         roots = {name.split(".")[0] for name in names}
-        for over in (self.over, *self.zip):
-            if over.input_id in roots:
-                self._raise_chained_read(over.input_id, over.item_id)
+        streamed = {
+            over.input_id: over.item_id for over in (self.over, *self.zip)
+        }
+        for input_id, item_id in streamed.items():
+            if input_id in roots:
+                self._raise_chained_read(input_id, item_id)
         for name in sorted(names):
-            head = ".".join(name.split(".")[:2])
-            if head in ("task.inputs", "task.outputs"):
-                self._raise_chained_read(head, self.over.item_id)
+            if name == "task.inputs":
+                self._raise_chained_read(name, self.over.item_id)
+            if not name.startswith("task.inputs."):
+                continue
+            input_id = name.split(".")[2]
+            if input_id in streamed:
+                self._raise_chained_read(
+                    "task.inputs." + input_id, streamed[input_id]
+                )
         return self
 
     def _raise_chained_read(self, input_id: str, item_id: str) -> None:

@@ -1311,8 +1311,9 @@ class TestMapFields:
         _consumer(command="echo $$a_out > $out/x", chain=True)
 
     def test_v7_task_placeholder(self) -> None:
-        """``${task.inputs}`` reads every folder; ``${task.resources.*}``,
-        ``${task.id}`` and ``${task.name}`` do not.
+        """``${task.inputs}`` reads every folder and
+        ``${task.inputs.<streamed id>}`` a streamed one; other ``task``
+        names, ``task.outputs`` and inputs that do not stream do not.
         """
         with pytest.raises(
             ValidationError,
@@ -1322,9 +1323,25 @@ class TestMapFields:
             ),
         ):
             _consumer(command="ls ${task.inputs}", chain=True)
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of "
+                "'task.inputs.c_out'. Use '$pair' for this item."
+            ),
+        ):
+            _consumer(
+                inputs=("a_out", "c_out"),
+                command="ls ${task.inputs.c_out.path}",
+                chain=True,
+                zip=[MapOver(input_id="c_out", item_id="pair")],
+            )
         _consumer(
+            inputs=("a_out", "idx"),
             command=(
-                "run -t ${task.resources.cpus} ${task.id} ${task.name} $item"
+                "run -t ${task.resources.cpus} ${task.id} ${task.name} "
+                "--genomeDir ${task.inputs.idx} $item "
+                "> ${task.outputs}/x"
             ),
             chain=True,
         )
