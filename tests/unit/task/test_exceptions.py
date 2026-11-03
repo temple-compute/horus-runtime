@@ -80,6 +80,24 @@ def test_command_failed_error_pickles_notes() -> None:
     assert copy.exit_code == 3
 
 
+class _OwnInitError(CommandFailedError):
+    """A subclass whose ``__init__`` takes other arguments."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"{path} failed", 7)
+        self.path = path
+
+
+@pytest.mark.unit
+def test_command_failed_error_subclass_with_own_init_pickles() -> None:
+    """A subclass keeps its type, exit code and fields across pickling."""
+    copy = pickle.loads(pickle.dumps(_OwnInitError("/w/x")))
+    assert type(copy) is _OwnInitError
+    assert copy.exit_code == 7
+    assert copy.path == "/w/x"
+    assert str(copy) == "/w/x failed"
+
+
 @pytest.mark.unit
 def test_drop_skip_reasons_keep_their_values() -> None:
     """The drop reasons are persisted by value, so the values are fixed."""
