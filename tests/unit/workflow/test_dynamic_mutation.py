@@ -294,6 +294,41 @@ class TestExpand:
         # Bumped once for the whole batch, not once per item.
         assert wf._revision == before + 1
 
+    def test_expand_builds_the_produced_paths_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A batch of N tasks reads every task's outputs once, not N times:
+        a map fan-out would be quadratic.
+        """
+        wf = HorusWorkflow(name="wf", tasks=[_task("root")])
+        produced = HorusWorkflow._produced_declared_paths
+        calls: list[int] = []
+
+        def count(self: HorusWorkflow) -> set[Path]:
+            calls.append(1)
+            return produced(self)
+
+        monkeypatch.setattr(HorusWorkflow, "_produced_declared_paths", count)
+
+        wf.expand(
+            tasks=[
+                _task(
+                    f"map[{i}]",
+                    outputs=[
+                        FileArtifact(id="out", path=Path(f"out/{i}.txt"))
+                    ],
+                )
+                for i in range(5)
+            ]
+        )
+
+        assert len(calls) == 1
+        assert (
+            wf.tasks[1].outputs[0].path
+            == (wf.run_directory / "out/0.txt").resolve()
+        )
+
     def test_expand_supersedes_what_it_rederives(self, tmp_path: Path) -> None:
         """
         Re-expanding an id replaces the task and drops the stale edges on it,

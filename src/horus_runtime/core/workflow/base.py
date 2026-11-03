@@ -1075,8 +1075,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         self.tasks[:] = combined_tasks
         self.artifacts[:] = combined_artifacts
         self.edges[:] = combined_edges
+        # Once per batch, not per task: a map fan-out adds thousands.
+        produced = self._produced_declared_paths()
         for task in new_tasks:
-            self._anchor_task(task)
+            self._anchor_task(task, produced)
         # Runs after edges are appended so a new task wired by one of the
         # batch's own edges (e.g. a map/loop clone, or a fan-in join fed by
         # its producers) is recognised as already-ordered and left ungated.
@@ -1644,7 +1646,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         root = run_root if declared in produced else base
         artifact.path = (root / declared).resolve()
 
-    def _anchor_task(self, task: BaseTask) -> None:
+    def _anchor_task(
+        self, task: BaseTask, produced: set[Path] | None = None
+    ) -> None:
         """
         Anchor one task's declared artifact paths, local runtime paths, and
         working directory to this workflow's run layout.
@@ -1679,11 +1683,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
           state.
 
         Every step here only rewrites still-relative/unset state, so calling
-        this more than once for the same task is safe.
+        this more than once for the same task is safe. *produced* is
+        :meth:`_produced_declared_paths`, passed by a caller anchoring many
+        tasks so it is built once.
         """
         base = self._effective_base
         run_root = self.run_directory
-        produced = self._produced_declared_paths()
+        if produced is None:
+            produced = self._produced_declared_paths()
 
         for artifact in (*task.inputs, *task.outputs):
             self._anchor_artifact(
@@ -1728,10 +1735,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self.orchestrator_target is not None:
             self.orchestrator_target.working_directory = run_root.as_posix()
 
-        for task in self.tasks:
-            self._anchor_task(task)
-
         produced = self._produced_declared_paths()
+        for task in self.tasks:
+            self._anchor_task(task, produced)
+
         for artifact in self.artifacts:
             self._anchor_artifact(
                 artifact, base=base, run_root=run_root, produced=produced
@@ -1757,8 +1764,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             return
         if self.orchestrator_target.working_directory is None:
             return
+        produced = self._produced_declared_paths()
         for task in self.tasks:
-            self._anchor_task(task)
+            self._anchor_task(task, produced)
 
     async def run(self, trigger_id: str) -> None:
         """
