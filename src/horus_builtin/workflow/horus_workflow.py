@@ -139,19 +139,18 @@ class HorusWorkflow(BaseWorkflow):
                 if task.chain:
                     streamed.add(source.id)
             # A chained map starts before its source finishes, so a
-            # condition on that edge would be read too early.
+            # condition on that edge, or one reading that source, would be
+            # read too early.
             for edge in self.edges:
-                if (
-                    edge.target == task.id
-                    and edge.source in streamed
-                    and edge.condition is not None
-                ):
+                read = getattr(edge.condition, "source_task", None)
+                early = {edge.source, read} & streamed
+                if edge.target == task.id and edge.condition and early:
                     raise MapConfigurationError(
                         _(
                             "Map task '%(id)s' is chained to '%(source)s', so "
                             "its edge cannot have a condition."
                         )
-                        % {"id": task.id, "source": edge.source}
+                        % {"id": task.id, "source": min(early)}
                     )
             paired = {task.over.input_id, *(e.input_id for e in task.zip)}
             for (target, input_id), edge in producers.items():

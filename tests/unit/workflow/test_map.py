@@ -1443,6 +1443,30 @@ class TestMapFields:
                 edges,
             )
 
+    def test_condition_reading_the_chained_source_rejected(self) -> None:
+        """A condition on another edge that reads A is read too early too."""
+        condition = EdgeCondition(
+            key="ok", op="truthy", source_task="a", source_output="scored"
+        )
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so its edge cannot have a "
+                "condition."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("split"), _over_map("a")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    WorkflowEdge(
+                        source="split", target="b", condition=condition
+                    ),
+                ],
+            )
+
     def test_condition_on_unchained_edge_allowed(self) -> None:
         """Without a chain, the condition is read once A ended, as before."""
         edge = _edge("a", "scored", "b", "a_out")
