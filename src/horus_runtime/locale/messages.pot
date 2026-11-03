@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-10-26 16:17+0100\n"
+"POT-Creation-Date: 2026-11-03 17:58+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -82,48 +82,48 @@ msgid ""
 "%(files)s"
 msgstr ""
 
-#: src/horus_runtime/secrets.py:92
+#: src/horus_runtime/secrets.py:106
 msgid "Enter a name."
 msgstr ""
 
-#: src/horus_runtime/secrets.py:94
+#: src/horus_runtime/secrets.py:108
 msgid "Use 128 characters or fewer."
 msgstr ""
 
-#: src/horus_runtime/secrets.py:96
+#: src/horus_runtime/secrets.py:110
 msgid "Use letters, digits and _. Don't start with a digit."
 msgstr ""
 
-#: src/horus_runtime/secrets.py:98
+#: src/horus_runtime/secrets.py:112
 msgid "Names starting with HORUS_ are reserved."
 msgstr ""
 
-#: src/horus_runtime/secrets.py:100
+#: src/horus_runtime/secrets.py:114
 #, python-format
 msgid "%(name)s is reserved."
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:181
+#: src/horus_runtime/core/lease.py:232
 #, python-format
 msgid "Cannot evacuate '%(out)s': no orchestrator target is set."
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:672
+#: src/horus_runtime/core/lease.py:760
 #, python-format
 msgid "Releasing machine '%(key)s' failed: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:715 src/horus_runtime/core/lease.py:749
+#: src/horus_runtime/core/lease.py:803 src/horus_runtime/core/lease.py:837
 #, python-format
 msgid "Evacuating from machine '%(key)s' failed: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:780
+#: src/horus_runtime/core/lease.py:868
 #, python-format
 msgid "Keepalive of machine '%(key)s' failed: %(e)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:823
+#: src/horus_runtime/core/lease.py:911
 #, python-format
 msgid "Releasing a machine at run end failed: %(error)s"
 msgstr ""
@@ -298,58 +298,58 @@ msgid ""
 " use a target that derives it automatically."
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:94
+#: src/horus_runtime/core/task/base.py:96
 msgid "Horus base task"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:215
+#: src/horus_runtime/core/task/base.py:218
 #, python-format
 msgid "Secret %(name)s: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:377
+#: src/horus_runtime/core/task/base.py:409
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
 "Expected one of: %(expected)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:430
+#: src/horus_runtime/core/task/base.py:462
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:511
+#: src/horus_runtime/core/task/base.py:546
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:514
+#: src/horus_runtime/core/task/base.py:549
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:515
+#: src/horus_runtime/core/task/base.py:550
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:516
+#: src/horus_runtime/core/task/base.py:551
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:583
+#: src/horus_runtime/core/task/base.py:618
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:592
+#: src/horus_runtime/core/task/base.py:627
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:611
+#: src/horus_runtime/core/task/base.py:646
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr ""
@@ -382,34 +382,34 @@ msgid ""
 "'%(target)s.%(target_input)s' would create a cycle."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1354
+#: src/horus_runtime/core/workflow/base.py:1358
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
 "%(strategy)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1785
+#: src/horus_runtime/core/workflow/base.py:1793
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1805
+#: src/horus_runtime/core/workflow/base.py:1813
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1812
+#: src/horus_runtime/core/workflow/base.py:1820
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1819
+#: src/horus_runtime/core/workflow/base.py:1827
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1841
+#: src/horus_runtime/core/workflow/base.py:1849
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr ""

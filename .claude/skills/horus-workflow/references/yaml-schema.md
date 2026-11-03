@@ -14,7 +14,7 @@ targets: {...}             # optional named targets shared by tasks (see below)
 tasks: [...]               # list of tasks (see below)
 artifacts: [...]           # optional root artifacts (no producer task)
 edges: [...]               # optional edges (the DAG; see below)
-max_concurrency: 4         # optional; tasks dispatched at once. unset = 8, 0 = no limit
+max_concurrency: 4         # optional; plain tasks dispatched at once. unset = 8, 0 = no limit
 failure_policy: fail_fast  # optional; fail_fast (default) | continue
 capacity:                  # optional; per-location resource caps (see Resources)
   "local://myhost": {cpus: 16, gpus: 2}
@@ -24,6 +24,10 @@ capacity:                  # optional; per-location resource caps (see Resources
   failure. `continue` lets unrelated branches finish; the failed task's
   descendants end `SKIPPED` (`upstream_failed`) and the workflow still ends
   `FAILED`.
+- `max_concurrency` does not count maps or their clones. Maps start
+  without waiting for a slot, and each caps only its own clones, so six maps
+  can run 48 clones at once. On a laptop or shared host, set `capacity` to
+  bound the total.
 - `orchestrator_target` defaults to `local` for `horus_workflow`; set it only
   when dispatching to remote targets that can't reach local files. It does not
   take a `{ref}`.
@@ -71,6 +75,9 @@ its inputs/outputs like any other task's.
     as: ligand            #   id the per-item artifact is created under
   max_concurrency: 2      # optional; clones at once. unset = 8, 0 = all at once
   on_item_failure: fail   # optional; fail (default) | drop
+  chain: false            # optional; start each item once its source map has it
+  zip: []                 # optional; more inputs paired by item, [{input_id, as}]
+  drop_exit_codes: []     # optional; exit codes that drop the item, 1 to 255
   inputs:
     - {kind: folder, id: ligands, path: ligands_in}   # the `over` collection...
     - {kind: file, id: receptor, path: rec.pdbqt}     # ...plus shared inputs
@@ -102,13 +109,124 @@ of the map's target, so they share the map's machine. The map itself reserves
 no resources while it waits; its clones do.
 
 `on_item_failure: drop` removes a failed clone's slot from the output folder
-and completes the map, unless every clone failed. The clone stays `FAILED`.
+and completes the map, unless every item was dropped. The clone stays `FAILED`.
 Only use it when items are independent. Under `failure_policy: continue` or
 `drop`, one failing clone does not cancel the others.
 
 The map only fans out. Producing the collection is whatever upstream task
 writes the iterable artifact; folding the slots back into one value is
 whatever downstream task consumes the folder output.
+
+### Chained maps (`chain`, `zip`, `drop_exit_codes`)
+
+Items match by slot name. A map over another map's output keeps that map's
+slot names, so every map fed from one head map shares one item space: slot
+`03` is the same item all the way down. The head names its slots by index
+over its sorted items. If the head list changes (an item added or removed,
+or the count crosses 10, 100, ...), the later items get new slot names and
+run again down the chain.
+
+**`chain: true`.** By default a map starts when its source map has finished.
+A chained map starts clone `B[X]` as soon as `A[X]` is done, while A's other
+items still run. Example, the cMD workflow (pantheon
+`workflows/drug-discovery/w04-cmd`): each replica runs equilibrate, then
+produce, then analyze, and no replica waits for the slowest equilibration.
+
+```yaml
+tasks:
+  - kind: horus_map
+    id: equilibrate
+    over: {input_id: replicas_in, as: slot}
+    # ... writes ${equilibrated}, one slot per replica
+  - kind: horus_map
+    id: produce
+    name: Run production MD per replica
+    chain: true
+    over: {input_id: equilibrated_in, as: slot}
+    inputs: [{id: equilibrated_in, kind: folder, path: equilibrated_out/}]
+    outputs: [{id: produced, kind: folder, path: produced_out/}]
+    runtime:
+      kind: command
+      command: "bash ${slot}/production.sh ${slot} ${slot}/preprod ${produced}"
+    executor: {kind: shell}
+  - kind: horus_map
+    id: analyze
+    chain: true
+    over: {input_id: produced_in, as: slot}
+    # ... reads ${slot}, writes ${analyzed}
+edges:
+  - {source: equilibrate, source_output: equilibrated, target: produce, target_input: equilibrated_in}
+  - {source: produce, source_output: produced, target: analyze, target_input: produced_in}
+```
+
+Rules for a chained map (checked at load):
+
+- `over` and every `zip` input must come from a map through a transfer edge.
+- The body reads a streamed input only as `$<as>`: the whole folder is not
+  there yet. A command body that uses `$<input id>`, `${task.inputs}` or
+  `${task.inputs.<streamed id>}` is rejected. Outputs, other inputs and other
+  `${task...}` names are fine.
+- A Python body is not checked. It must read only its `as` parameter, never
+  the streamed folder.
+- An edge from a chained source cannot have a `condition`.
+- A chained source feeds only the `over` or `zip` input; no other input of
+  the map can take all of its output.
+
+**`zip`.** Pairs more inputs by item: slot X of each zip input is bound as
+`$<as>` in clone X. Each zip input must come from a map in the same item
+space. It works with or without `chain`.
+
+```yaml
+- kind: horus_map
+  id: report_qc        # bams from map align, stats from map qc, both over samples
+  name: Report QC per sample
+  over: {input_id: bams, as: bam}
+  zip:
+    - {input_id: stats, as: stat}
+  inputs:
+    - {id: bams, kind: folder, path: bams/}
+    - {id: stats, kind: folder, path: stats/}
+  outputs: [{id: reports, kind: folder, path: reports/}]
+  runtime: {kind: command, command: "qc_report $bam $stat > $reports/report.txt"}
+  executor: {kind: shell}
+```
+
+A zip slot the `over` input lacks was dropped on that side, so it is a gap
+and is ignored. An `over` slot a zip input lacks was dropped on the zip side.
+
+**`drop_exit_codes`.** A clone that exits with one of these codes drops its
+item instead of failing, whatever `on_item_failure` says. It never retries.
+
+```yaml
+- kind: horus_map
+  id: filter
+  drop_exit_codes: [10]
+  runtime: {kind: command, command: "check $sample || exit 10; ..."}
+```
+
+Drops:
+
+- A clone dropped by exit code ends `SKIPPED` with `skip_reason: dropped`
+  and the error `Dropped: exit code N`.
+- Clones downstream of a dropped item never run. They end `SKIPPED` with
+  `upstream_dropped`, and their slot stays a gap.
+- A map completes with its drops removed from its output folder. The run
+  still ends `COMPLETED`. Dropped items run again on the next run.
+- If every item was dropped, the map fails with `All N items were dropped
+  in <map>.` and its consumers do not run.
+
+Exit code caveats:
+
+- Only command bodies match. A Python body that calls `sys.exit(10)` fails
+  the item.
+- Codes depend on the backend. Slurm reports 1 for a timeout, OOM, node
+  failure or cancel. Docker uses 125 to 127 for its own errors. Avoid those
+  codes, and pick one your command does not return for other reasons, such
+  as 10.
+
+An older runtime ignores `chain`, `zip` and `drop_exit_codes`: it runs the
+map as a barrier, leaves a zip's `$<as>` unrendered, and treats a drop code
+as a plain failure.
 
 ## Artifact
 
