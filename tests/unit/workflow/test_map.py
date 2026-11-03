@@ -2745,6 +2745,59 @@ class TestRestage:
         # A's folder is gone, so B records no manifest: a miss next time.
         assert not (tmp_path / ".horus" / "b.json").exists()
 
+    async def test_chained_clone_past_its_wait_finds_a_retried_slot_lost(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A loses its node after its fan-out and runs again. B[1], already
+        past its wait, reads A[1] while A's retry rewrites it: it fails
+        with the lost output, not on a half-written slot, and is dropped.
+        """
+        del horus_context
+        monkeypatch.setattr(_S3Evacuator, "stored", None)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        node = _Node(working_directory=node_dir.as_posix())
+        a = _stage_map(tmp_path, "a", target=node)
+        a.outputs[0].path = node_dir / "a_out"
+        b = _stage_map(tmp_path, "b", chain=True, on_item_failure="drop")
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+        settle = MapTask._settle
+        wait = _ItemStream.wait
+
+        async def lose_once(self: MapTask, *args: Any) -> None:
+            if self.id == "a" and not self._target_loss_retries:
+                await node.lose()
+                raise TargetLostError("node lost")
+            await settle(self, *args)
+
+        async def hold_b1(
+            self: _ItemStream, slot: str, *, owner: str, source: str
+        ) -> Any:
+            item = await wait(self, slot, owner=owner, source=source)
+            if owner == "b" and slot == "1":
+                # Until A's retry is rewriting A[1].
+                log = tmp_path / "log"
+                while log.read_text().count("a_out_1 start") < 2:
+                    await asyncio.sleep(0.01)
+            return item
+
+        monkeypatch.setattr(MapTask, "_settle", lose_once)
+        monkeypatch.setattr(_ItemStream, "wait", hold_b1)
+        _set(tmp_path, "delay", "a_out_1", 0.3)
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        b1 = next(t for t in wf.tasks if t.id == "b[1]")
+        assert b1.status == TaskStatus.FAILED
+        assert "has been released" in str(b1.error)
+        assert _result(tmp_path, "b", "0") == "x>a_out_0\n>b_out_0\n"
+
     async def test_nothing_to_restage_from_fails_loudly(
         self,
         tmp_path: Path,
@@ -3940,6 +3993,41 @@ class TestZip:
             "c[2]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
             "c[3]": TaskStatus.COMPLETED,
         }
+
+    def test_retry_and_rerun_reopen_slots_not_asked_for(self) -> None:
+        """
+        A retried run hands its own clones and machine to the stream; a
+        slot no consumer asked for waits for the retry or a re-run, and a
+        slot a consumer asked for keeps its item.
+        """
+
+        async def check() -> None:
+            stream = _ItemStream()
+            first, retry = MagicMock(), MagicMock()
+            stream.open({"0": "x", "1": "y", "2": "z"}, {"0": first}, first)
+            for slot in "012":
+                stream.ready(slot)
+            assert (await stream.wait("0", owner="b", source="a")).state == (
+                "ready"
+            )
+
+            stream.open({"0": "x", "1": "y", "2": "z"}, {"0": retry}, retry)
+            stream.again("2")
+
+            assert stream.clones == {"0": retry}
+            assert stream.target is retry
+            assert (await stream.wait("0", owner="b", source="a")).state == (
+                "ready"
+            )
+            waiting = asyncio.ensure_future(
+                stream.wait("1", owner="b", source="a")
+            )
+            await asyncio.sleep(0)
+            assert not waiting.done()
+            stream.dropped("1", "a", "exit code 3")
+            assert (await waiting).state == "dropped"
+
+        asyncio.run(check())
 
     def test_configuration_error_is_never_dropped(
         self, tmp_path: Path

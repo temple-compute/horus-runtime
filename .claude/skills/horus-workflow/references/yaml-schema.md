@@ -172,6 +172,10 @@ Rules for a chained map (checked at load):
 - A chained source feeds only the `over` or `zip` input; no other input of
   the map can take all of its output.
 
+If a source map loses its machine and runs an item again, a chained clone
+that already took that item reads the evacuated copy or fails with the lost
+output; `on_item_failure` applies.
+
 **`zip`.** Pairs more inputs by item: slot X of each zip input is bound as
 `$<as>` in clone X. Each zip input must come from a map in the same item
 space. It works with or without `chain`.

@@ -113,6 +113,8 @@ class _ItemStream:
         """Slot to the producing clone."""
         self.target: BaseTarget | None = None
         """The producing map's target while it runs."""
+        self.taken: set[str] = set()
+        """Slots a consumer has asked for."""
         self._items: dict[str, asyncio.Future[_Item]] = {}
 
     def open(
@@ -121,8 +123,15 @@ class _ItemStream:
         clones: dict[str, BaseTask],
         target: BaseTarget,
     ) -> None:
-        """Publish the slot list. A retried run keeps the first one."""
+        """
+        Publish the slot list. A retried run keeps it, with its own clones
+        and machine: a slot no consumer asked for yet waits for that run.
+        """
         if self.opened.done():
+            self.clones = clones
+            self.target = target
+            for slot in slots:
+                self.again(slot)
             return
         loop = asyncio.get_running_loop()
         self.slots = slots
@@ -130,6 +139,12 @@ class _ItemStream:
         self.target = target
         self._items = {slot: loop.create_future() for slot in slots}
         self.opened.set_result(None)
+
+    def again(self, slot: str) -> None:
+        """*slot* runs again: a consumer that has not asked for it waits."""
+        future = self._items.get(slot)
+        if future is not None and future.done() and slot not in self.taken:
+            self._items[slot] = asyncio.get_running_loop().create_future()
 
     def _resolve(self, slot: str, item: _Item) -> None:
         future = self._items.get(slot)
@@ -166,6 +181,7 @@ class _ItemStream:
                 )
                 % {"id": owner, "slot": slot, "source": source}
             )
+        self.taken.add(slot)
         # Shielded: a cancelled waiter must not cancel the shared future.
         return await asyncio.shield(future)
 
@@ -334,8 +350,11 @@ class MapTask(HorusTask):
         Skipped whole: a stream a consumer asked for will never open, and
         one a retry kept open closes, its outputs complete.
         """
-        if self._stream is not None and self._stream.opened.done():
-            self._stream.close(ok=True)
+        stream = self._stream
+        if stream is not None and stream.opened.done():
+            for slot in stream.slots:
+                stream.ready(slot)
+            stream.close(ok=True)
         self._stream = None
         super().mark_skipped_complete()
 
@@ -663,9 +682,12 @@ class MapTask(HorusTask):
             await self.target.mkdir(str(slot_root))
             clones.append(self._clone(slot, item, slot_root, paired[slot]))
         # Clone ids repeat across a map retry: a stale record must not read
-        # as this run's output.
-        for clone in clones:
-            wf.leases.forget(clone)
+        # as this run's output. A slot a consumer took keeps it, so that
+        # consumer finds the slot lost on a new machine instead of reading
+        # it half rewritten.
+        for slot, clone in zip(slots, clones, strict=True):
+            if slot not in stream.taken:
+                wf.leases.forget(clone)
         self._staged_dirs = [str(root), *(str(root / slot) for slot in slots)]
         self._staged_generation = self.target.generation
 
@@ -1006,16 +1028,17 @@ class MapTask(HorusTask):
                     run_clone(clone), context=context.copy()
                 )
 
-    @staticmethod
-    def _take_rerun(clone: BaseTask) -> bool:
+    def _take_rerun(self, clone: BaseTask) -> bool:
         """
         Spend *clone*'s one re-run of a lost slot and say so; ``False`` once
         it is spent. The clone leaves a terminal status, so the event says
-        why.
+        why. A consumer that has not asked for the slot yet waits for it.
         """
         if clone._target_loss_retries >= MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
             return False
         clone._target_loss_retries += 1  # noqa: SLF001
+        if self._stream is not None:
+            self._stream.again(clone.id[len(self.id) + 1 : -1])
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=clone.id,
