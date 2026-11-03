@@ -122,15 +122,18 @@ class TargetPool:
             )
         )
 
-    async def acquire(self, declared_target: BaseTarget) -> BaseTarget:
+    async def acquire(
+        self, declared_target: BaseTarget, *, gated: bool = True
+    ) -> BaseTarget:
         """
         Return an idle target equivalent to *declared_target*.
 
         Blocks on the ``max_concurrency`` semaphore before handing out a
         target, so the cap applies to genuinely concurrent dispatches rather
-        than just to distinct target instances.
+        than just to distinct target instances. ``gated=False`` skips the
+        semaphore and keeps the handout.
         """
-        if self._semaphore is not None:
+        if gated and self._semaphore is not None:
             await self._semaphore.acquire()
 
         idle = self._idle.setdefault(id(declared_target), [declared_target])
@@ -146,13 +149,19 @@ class TargetPool:
         """Whether :meth:`acquire` would wait for a concurrency slot."""
         return self._semaphore is not None and self._semaphore.locked()
 
-    def release(self, declared_target: BaseTarget, target: BaseTarget) -> None:
+    def release(
+        self,
+        declared_target: BaseTarget,
+        target: BaseTarget,
+        *,
+        gated: bool = True,
+    ) -> None:
         """
         Return *target* (previously returned by :meth:`acquire` for
-        *declared_target*) to the idle pool.
+        *declared_target*, with the same *gated*) to the idle pool.
         """
         self._idle[id(declared_target)].append(target)
-        if self._semaphore is not None:
+        if gated and self._semaphore is not None:
             self._semaphore.release()
 
 
@@ -242,12 +251,15 @@ async def _execute_on_target(
     declared_target = task.target
     location_id = declared_target.location_id
     # A map waiting on its clones reserves nothing: they need the room.
+    # Nor does it take a pool slot, so a chain of waiting maps cannot
+    # starve the tasks they wait on.
+    gated = not task.dispatches_children
     resources = None if task.dispatches_children else task.resources
     await placement.acquire(task.name, location_id, resources)
     try:
-        if pool.full:
+        if gated and pool.full:
             workflow.leases.member_queued(task)
-        target = await pool.acquire(declared_target)
+        target = await pool.acquire(declared_target, gated=gated)
         # `transfer_artifacts` and `dispatch` both operate off `task.target`,
         # so point it at the target we actually acquired for the duration of
         # the run and restore it afterwards, leaving the task's declared
@@ -312,7 +324,7 @@ async def _execute_on_target(
         finally:
             task._retry_on_target_loss = False  # noqa: SLF001
             task.target = declared_target
-            pool.release(declared_target, target)
+            pool.release(declared_target, target, gated=gated)
     except Exception as exc:
         _record_failure(task, exc)
         raise
@@ -499,6 +511,23 @@ def _collect_completions(
     return failures
 
 
+async def _cancel_blocked(
+    running: dict[asyncio.Task[None], str], ids: set[str]
+) -> None:
+    """
+    Cancel every running wrapper whose task is in *ids*, wait for it to
+    unwind, and drop it from *running*. Only a task that started on an
+    open stream can be running behind a failure.
+    """
+    futs = [fut for fut, task_id in running.items() if task_id in ids]
+    for fut in futs:
+        fut.cancel()
+    if futs:
+        await asyncio.wait(futs)
+    for fut in futs:
+        del running[fut]
+
+
 async def _cancel_running(running: dict[asyncio.Task[None], str]) -> None:
     """Cancel every still-running wrapper task and wait for it to unwind."""
     for fut in running:
@@ -526,11 +555,58 @@ def _dependencies_with_implicit(
     return deps
 
 
+def _ready(
+    scope: set[str],
+    deps: dict[str, set[str]],
+    *,
+    completed: set[str],
+    dispatched: set[str],
+    blocked: set[str],
+    tasks_by_id: dict[str, "BaseTask"],
+    source_map: dict[tuple[str, str], EdgeSource],
+) -> tuple[list[str], set["asyncio.Future[None]"]]:
+    """
+    The tasks in *scope* that can be dispatched now, in id order, and the
+    stream futures to wait on for more.
+
+    A dependency is met once it completed, or once its stream is open for
+    a task that may start before it finishes (see
+    ``BaseTask.stream_sources``). The futures returned are the unopened
+    streams that are all a task still waits for, once every one of their
+    sources is dispatched or about to be (in the ready list).
+    """
+    ready: list[str] = []
+    on_streams: list[tuple[set[str], dict[str, asyncio.Future[None]]]] = []
+    for task_id in sorted(scope - dispatched - blocked):
+        pending = deps[task_id] - completed
+        if pending:
+            streams = tasks_by_id[task_id].stream_sources(source_map)
+            unopened = {
+                dep
+                for dep in pending
+                if dep not in streams or not streams[dep].done()
+            }
+            if unopened:
+                if unopened <= streams.keys():
+                    on_streams.append((unopened, streams))
+                continue
+        ready.append(task_id)
+    started = dispatched.union(ready)
+    waits = {
+        streams[dep]
+        for unopened, streams in on_streams
+        if unopened <= started
+        for dep in unopened
+    }
+    return ready, waits
+
+
 def _dispatch_ready(
     ready: list[str],
     *,
     workflow: BaseWorkflow,
     tasks_by_id: dict[str, "BaseTask"],
+    deps: dict[str, set[str]],
     initial_task_ids: set[str],
     dispatched: set[str],
     completed: set[str],
@@ -559,6 +635,10 @@ def _dispatch_ready(
         ):
             completed.add(task_id)
             continue
+        # Frozen here, so a source that finishes as the task starts cannot
+        # flip it mid-run. Empty for a normal start, which also resets a
+        # task reused from an earlier run.
+        task._streaming_from = frozenset(deps[task_id] - completed)  # noqa: SLF001
         wrapper = asyncio.create_task(
             _execute_ready_task(
                 workflow,
@@ -660,7 +740,7 @@ async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
         raise
 
 
-async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
+async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # noqa: PLR0915
     """
     Execute *workflow* from *trigger_id* with a concurrent ready-set
     scheduler.
@@ -688,7 +768,8 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
       branch keeps running to completion. Once nothing more can run, if any
       task failed, :exc:`WorkflowExecutionError` is raised naming every
       failed task, so the workflow still ends ``FAILED``. Each blocked task
-      is marked ``SKIPPED`` with ``SkipReason.UPSTREAM_FAILED``.
+      is marked ``SKIPPED`` with ``SkipReason.UPSTREAM_FAILED``; one
+      already running on the failed task's stream is cancelled first.
 
     Raises:
         UnknownTaskError: If trigger_id is not a task in the workflow.
@@ -773,19 +854,20 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
         tasks_by_id = {task.id: task for task in workflow.tasks}
         deps = _dependencies_with_implicit(workflow)
         scope = trigger_scope(trigger_id, deps)
+        source_map_cache = workflow.cached_source_map(source_map_cache)
 
         # Deterministic order when several tasks become ready at once,
         # matching topological_sort's tie-breaking. `blocked` tasks are
         # excluded explicitly for clarity: a blocked task's dependency never
-        # entered `completed` either, so `deps[task_id] <= completed` alone
-        # would already keep it (and everything downstream of it) out of
-        # `ready`.
-        ready = sorted(
-            task_id
-            for task_id in scope
-            if task_id not in dispatched
-            and task_id not in blocked
-            and deps[task_id] <= completed
+        # entered `completed` either, so it would stay out of `ready` anyway.
+        ready, stream_waits = _ready(
+            scope,
+            deps,
+            completed=completed,
+            dispatched=dispatched,
+            blocked=blocked,
+            tasks_by_id=tasks_by_id,
+            source_map=source_map_cache[1],
         )
 
         # Tasks left neither completed, blocked, nor failed, with nothing
@@ -819,11 +901,11 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
             break
 
         if ready:
-            source_map_cache = workflow.cached_source_map(source_map_cache)
             _dispatch_ready(
                 ready,
                 workflow=workflow,
                 tasks_by_id=tasks_by_id,
+                deps=deps,
                 initial_task_ids=initial_task_ids,
                 dispatched=dispatched,
                 completed=completed,
@@ -846,8 +928,9 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
             continue
 
         try:
+            # A stream opening can make a task ready with nothing finished.
             done, _pending = await asyncio.wait(
-                running, return_when=asyncio.FIRST_COMPLETED
+                {*running, *stream_waits}, return_when=asyncio.FIRST_COMPLETED
             )
         except asyncio.CancelledError:
             # Workflow-level cancellation: `asyncio.wait` does not cancel the
@@ -858,7 +941,9 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
             await _cancel_running(running)
             raise
 
-        failures = _collect_completions(done, running, completed)
+        failures = _collect_completions(
+            {fut for fut in done if fut in running}, running, completed
+        )
         if failures and workflow.failure_policy == "fail_fast":
             await _cancel_running(running)
             raise failures[0][1]
@@ -871,6 +956,9 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:
             failed[task_id] = exc
             newly_blocked = descendants(task_id, deps) - blocked
             blocked |= newly_blocked
+            # Cancel first, so a descendant running on the failed task's
+            # stream records CANCELED before it is marked blocked below.
+            await _cancel_blocked(running, newly_blocked)
             _mark_blocked(
                 sorted(newly_blocked - {task_id}),
                 failed_task=tasks_by_id[task_id],
