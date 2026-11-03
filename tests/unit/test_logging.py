@@ -76,3 +76,21 @@ class TestHorusLoggerSettings:
         instance.setup()
 
         mock_logger.remove.assert_called_once()
+
+    @patch("horus_runtime.logging.logger")
+    def test_sinks_leave_out_variable_values(
+        self, mock_logger: MagicMock, tmp_path: Path
+    ) -> None:
+        """
+        Every sink keeps tracebacks but not the values of frame variables,
+        which can be large or hold secrets.
+        """
+        instance = HorusLogger()
+        instance.set_log_directory(tmp_path)
+        instance.setup()
+        instance.redirect_terminal(MagicMock())
+        instance.restore_terminal()
+
+        assert mock_logger.add.call_count == 5
+        for call in mock_logger.add.call_args_list:
+            assert call.kwargs["diagnose"] is False

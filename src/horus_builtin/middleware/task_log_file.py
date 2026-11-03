@@ -100,6 +100,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
             format=horus_logger.format,
             level=horus_logger.level,
             enqueue=False,
+            # Tracebacks without frame variable values (see HorusLogger).
+            diagnose=False,
             filter=lambda record: (
                 current_task_id() == task_id
                 and not record["extra"].get("operator_only")
