@@ -73,12 +73,16 @@ class HorusWorkflow(BaseWorkflow):
             edge = producers.get((task.id, input_id))
             return maps.get(edge.source) if edge is not None else None
 
-        def space(task: MapTask) -> tuple[str | None, str]:
+        def space(
+            task: MapTask, seen: frozenset[str] = frozenset()
+        ) -> tuple[str | None, str] | None:
             # Follow `over` while a map feeds it; the head's producer names
-            # the item space.
+            # the item space. None on a cycle: the cycle check reports it.
+            if task.id in seen:
+                return None
             source = map_source(task, task.over.input_id)
             if source is not None:
-                return space(source)
+                return space(source, seen | {task.id})
             edge = producers.get((task.id, task.over.input_id))
             if edge is None:
                 return task.id, task.over.input_id
@@ -117,7 +121,8 @@ class HorusWorkflow(BaseWorkflow):
                         )
                         % {"id": task.id, "input": entry.input_id}
                     )
-                if space(source) != space(task):
+                spaces = space(source), space(task)
+                if None not in spaces and spaces[0] != spaces[1]:
                     raise MapConfigurationError(
                         _(
                             "Map task '%(id)s' pairs '%(input)s' by item, but "

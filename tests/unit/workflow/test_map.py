@@ -46,6 +46,11 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.dag import (
+    CyclicDependencyError,
+    build_dependencies,
+    topological_sort,
+)
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.map import (
     MapConfigurationError,
@@ -1291,6 +1296,32 @@ class TestMapFields:
             tasks,
             [*edges, _edge("split", "out", "c", "batches")],
         )
+
+    def test_v6_over_cycle_loads(self) -> None:
+        """
+        Maps feeding each other's ``over`` skip the pairing check instead
+        of recursing; the cycle check reports them.
+        """
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+        )
+        wf = _pairing_wf(
+            b,
+            [_plain("split"), _over_map("a"), _over_map("c")],
+            [
+                _edge("b", "out", "a", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+                _edge("split", "out", "c", "batches"),
+                _edge("c", "scored", "b", "c_out"),
+            ],
+        )
+
+        with pytest.raises(CyclicDependencyError):
+            topological_sort(
+                {t.id for t in wf.tasks},
+                build_dependencies(wf.tasks, wf.edges),
+            )
 
     def test_v7_chained_body_reads_whole_folder(self) -> None:
         """A chained command cannot name a streamed folder."""
