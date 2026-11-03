@@ -184,9 +184,17 @@ class HorusTask(BaseTask):
         code = self._local_file_digests()
         if code:
             payload["code"] = code
+        payload.update(self._config_extra())
         config = json.dumps(payload, sort_keys=True)
         config_hash = hashlib.sha256(config.encode()).hexdigest()
         return TaskFingerprint(inputs=inputs, config_hash=config_hash)
+
+    def _config_extra(self) -> dict[str, Any]:
+        """
+        More of the task's configuration to hash, for a subclass whose own
+        fields change its outputs. Empty by default, which keeps the hash.
+        """
+        return {}
 
     def _local_file_digests(self) -> list[list[str]]:
         """

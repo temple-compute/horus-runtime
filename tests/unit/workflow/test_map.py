@@ -22,6 +22,8 @@ fan-out behaviour as an ordinary DAG node.
 
 import asyncio
 import contextvars
+import hashlib
+import json
 import re
 import shutil
 from datetime import UTC, datetime
@@ -54,8 +56,15 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.exceptions import TargetLostError
-from horus_runtime.core.task.status import TERMINAL_STATUSES, TaskStatus
+from horus_runtime.core.task.exceptions import (
+    CommandFailedError,
+    TargetLostError,
+)
+from horus_runtime.core.task.status import (
+    TERMINAL_STATUSES,
+    SkipReason,
+    TaskStatus,
+)
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
@@ -80,6 +89,16 @@ def _fails_long(batch: FileArtifact) -> None:
     """A function body failing with a long error for a "bad" item."""
     if batch.path.read_text() == "bad":
         raise ValueError("x" * 1000)
+
+
+def _exits(batch: FileArtifact) -> None:
+    """A function body that exits with N for an item holding "exit N"."""
+    words = batch.path.read_text().split()
+    if words[0] == "exit":
+        raise CommandFailedError(
+            f"Shell command exited with return code {words[1]}",
+            int(words[1]),
+        )
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
@@ -1531,6 +1550,35 @@ def _dropping_map(**kwargs: object) -> MapTask:
     return map_task
 
 
+def _drop_code_wf(
+    tmp_path: Path, contents: dict[str, str], **kwargs: Any
+) -> tuple[HorusWorkflow, MapTask]:
+    """``split -> score``, the body exiting N for an item holding "exit N",
+    with ``drop_exit_codes: [3]``.
+    """
+    split = _split_task(tmp_path, list(contents))
+    for name, content in contents.items():
+        (tmp_path / "batches" / name).write_text(content)
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+    )
+    map_task.runtime = PythonFunctionRuntime(func=_exits)
+    map_task.executor = PythonFunctionExecutor()
+    map_task.drop_exit_codes = [3]
+    for key, value in kwargs.items():
+        setattr(map_task, key, value)
+    return _wire(tmp_path, split=split, map_task=map_task), map_task
+
+
+def _drop_events(emit: MagicMock) -> list[HorusTaskEvent]:
+    """The drop events among *emit*'s calls."""
+    return [
+        c.args[0]
+        for c in emit.call_args_list
+        if isinstance(c.args[0], HorusTaskEvent) and "map" in c.args[0].data
+    ]
+
+
 def _drop_messages(emit: MagicMock) -> list[str]:
     """The messages of the drop events among *emit*'s calls."""
     return [
@@ -1645,6 +1693,14 @@ class TestDropFailedItems:
         assert (
             lines[1] == "01 (01.txt): " + ("ValueError: " + "x" * 1000)[:500]
         )
+        # The message is capped; `data` lists every drop.
+        (event,) = _drop_events(emit)
+        dropped = event.data["map"]["dropped"]
+        assert [d["slot"] for d in dropped] == [
+            f"{i:02d}" for i in range(1, 25)
+        ]
+        assert dropped[0]["item"] == "01.txt"
+        assert dropped[0]["reason"] == ("ValueError: " + "x" * 1000)[:500]
 
     async def test_every_item_failing_fails_the_map(
         self, tmp_path: Path, horus_context: HorusContext
@@ -1659,7 +1715,180 @@ class TestDropFailedItems:
             await wf.run(trigger_id="split")
 
         assert map_task.status == TaskStatus.FAILED
+        assert map_task.error is not None
+        assert "All 2 items were dropped in score." in map_task.error
         assert wf.status.value == "failed"
+
+    async def test_drop_code_drops_under_fail_policy(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop code drops the item even under ``on_item_failure:
+        fail``: the slot is removed and the map and the run complete.
+        """
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "a", "b.txt": "exit 3", "c.txt": "c"}
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert map_task.on_item_failure == "fail"
+        assert wf.status.value == "completed"
+        assert map_task.status == TaskStatus.COMPLETED
+        assert map_task._dropped_slots == ["1"]
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "2"]
+
+    async def test_other_code_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A code not in the list fails the map, as without drop codes."""
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "a", "b.txt": "exit 4"}
+        )
+
+        with pytest.raises(Exception):  # noqa: B017
+            await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.FAILED
+        assert wf.status.value == "failed"
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.status == TaskStatus.FAILED
+        assert clone.skip_reason is None
+
+    async def test_drop_code_under_fail_fast_keeps_siblings(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Under fail_fast, a drop in the first slot cancels no sibling."""
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "exit 3", "b.txt": "b", "c.txt": "c"}
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.failure_policy == "fail_fast"
+        assert map_task.status == TaskStatus.COMPLETED
+        statuses = {
+            t.id: t.status for t in wf.tasks if t.id.startswith("score[")
+        }
+        assert statuses == {
+            "score[0]": TaskStatus.SKIPPED,
+            "score[1]": TaskStatus.COMPLETED,
+            "score[2]": TaskStatus.COMPLETED,
+        }
+
+    async def test_drop_code_never_retries(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop is final: the clone ran once."""
+        del horus_context
+        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.runs == 1
+        assert clone._target_loss_retries == 0
+
+    async def test_dropped_clone_error_names_the_code(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The clone's error says which code dropped it."""
+        del horus_context
+        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.error == "Dropped: exit code 3"
+
+    async def test_drop_code_clone_is_skipped_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop-code clone ends SKIPPED with ``dropped``; a crash under
+        ``on_item_failure: drop`` stays FAILED.
+        """
+        del horus_context
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3", "c.txt": "exit 4"},
+            on_item_failure="drop",
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        tasks = {t.id: t for t in wf.tasks}
+        assert tasks["score[1]"].status == TaskStatus.SKIPPED
+        assert tasks["score[1]"].skip_reason == SkipReason.DROPPED
+        assert tasks["score[1]"].finished_at is not None
+        assert tasks["score[2]"].status == TaskStatus.FAILED
+        assert tasks["score[2]"].skip_reason is None
+
+    async def test_drop_event_is_warning(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """One WARNING event lists every own drop and its reason."""
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3", "c.txt": "exit 4"},
+            on_item_failure="drop",
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        (event,) = _drop_events(emit)
+        assert event.task_id == "score"
+        assert event.level == "WARNING"
+        assert event.data == {
+            "map": {
+                "dropped": [
+                    {"slot": "1", "item": "b.txt", "reason": "exit code 3"},
+                    {
+                        "slot": "2",
+                        "item": "c.txt",
+                        "reason": "CommandFailedError: Shell command exited "
+                        "with return code 4",
+                    },
+                ],
+                "upstream_dropped": {},
+            }
+        }
+        assert event.message is not None
+        assert "1 (b.txt): Dropped: exit code 3" in event.message
+
+    async def test_config_hash_unchanged_without_new_fields(self) -> None:
+        """A map without zip or drop codes hashes as before; setting either
+        changes the hash.
+        """
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+        )
+        digests = {"batches": "d"}
+        expected = hashlib.sha256(
+            json.dumps(
+                {
+                    "runtime": map_task.runtime.model_dump(mode="json"),
+                    "executor": map_task.executor.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        assert (await map_task._fingerprint(digests)).config_hash == expected
+
+        map_task.drop_exit_codes = [3]
+        with_codes = (await map_task._fingerprint(digests)).config_hash
+        assert with_codes != expected
+        map_task.zip = [MapOver(input_id="batches", item_id="pair")]
+        assert (await map_task._fingerprint(digests)).config_hash not in (
+            expected,
+            with_codes,
+        )
 
     async def test_a_rerun_retries_only_the_dropped_item(
         self, tmp_path: Path, horus_context: HorusContext

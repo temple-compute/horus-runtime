@@ -50,8 +50,12 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
 from horus_runtime.core.task.base import MAX_TARGET_LOSS_RETRIES, BaseTask
-from horus_runtime.core.task.exceptions import TargetLostError
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    TaskExecutionError,
+    exception_leaves,
+)
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
@@ -121,7 +125,7 @@ class MapTask(HorusTask):
     """
     What a failed clone means for the map. ``"fail"`` (the default) fails
     the map. ``"drop"`` removes the clone's slot from the output folder
-    and completes the map, unless every clone failed; the clone stays
+    and completes the map, unless every item was dropped; the clone stays
     FAILED, which is how a dropped item shows in the run. Only meant for
     maps whose items are independent.
     """
@@ -137,11 +141,12 @@ class MapTask(HorusTask):
     drop_exit_codes: list[int] = Field(default_factory=list)
     """
     Exit codes that drop the item instead of failing it, whatever
-    :attr:`on_item_failure` says.
+    :attr:`on_item_failure` says. The clone ends SKIPPED with
+    ``skip_reason: dropped``.
     """
 
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
-    """Slots dropped by the current execution (``on_item_failure="drop"``)."""
+    """Slots dropped by the current execution."""
 
     _staged_dirs: list[str] = PrivateAttr(default_factory=list)
     """The output root and slot dirs of the current execution."""
@@ -412,11 +417,14 @@ class MapTask(HorusTask):
         self.target.on_ready(self._restage)
 
         run_clone = partial(
-            execute_task,
-            wf,
-            source_map=source_map,
-            pool=TargetPool(self.max_concurrency),
-            placement=wf.placement,
+            self._run_item,
+            partial(
+                execute_task,
+                wf,
+                source_map=source_map,
+                pool=TargetPool(self.max_concurrency),
+                placement=wf.placement,
+            ),
         )
         results: list[BaseException | None]
         # Re-runs start from a ready callback; they must not inherit the
@@ -427,6 +435,7 @@ class MapTask(HorusTask):
             if (
                 wf.failure_policy == "continue"
                 or self.on_item_failure == "drop"
+                or self.drop_exit_codes
             ):
                 # Clones are independent: one failing must not cancel the
                 # rest.
@@ -465,6 +474,47 @@ class MapTask(HorusTask):
         horus_logger.log.debug(
             _("Map task '%(id)s' ran %(n)d clone(s).")
             % {"id": self.id, "n": len(clones)}
+        )
+
+    async def _run_item(
+        self,
+        run_task: Callable[[BaseTask], Awaitable[None]],
+        clone: BaseTask,
+    ) -> None:
+        """
+        Run *clone*. When it exits with one of :attr:`drop_exit_codes`, mark
+        it dropped; it still raises, so :meth:`_settle` drops its slot.
+        """
+        try:
+            await run_task(clone)
+        except Exception as exc:
+            code = self._drop_code(exc)
+            if code is not None:
+                # shortcut: set after the run raised, so a snapshot can show
+                # FAILED for one push; mark it inside the run if that matters.
+                clone.status = TaskStatus.SKIPPED
+                clone.skip_reason = SkipReason.DROPPED
+                clone.error = _("Dropped: exit code %(code)d") % {"code": code}
+            raise
+
+    def _drop_code(self, exc: BaseException) -> int | None:
+        """
+        The exit code that drops the item *exc* failed, when every leaf of
+        *exc* exited with one of :attr:`drop_exit_codes`; else ``None``.
+        """
+        codes = [
+            getattr(leaf, "exit_code", None) for leaf in exception_leaves(exc)
+        ]
+        if codes and all(code in self.drop_exit_codes for code in codes):
+            return codes[0]
+        return None
+
+    def _droppable(self, exc: BaseException) -> bool:
+        """Whether a clone failing with *exc* drops its item."""
+        if isinstance(exc, asyncio.CancelledError):
+            return False
+        return (
+            self._drop_code(exc) is not None or self.on_item_failure == "drop"
         )
 
     async def _restage(self) -> None:
@@ -636,9 +686,9 @@ class MapTask(HorusTask):
     ) -> None:
         """
         Turn the finished clones' *results* into the map's outcome: raise
-        if any clone failed, unless the map drops failed items and at least
-        one succeeded. Then remove each failed clone's slot, so nothing
-        downstream sees it, and report the drop.
+        if a clone failed and is not droppable, or if every item was
+        dropped. Then remove each dropped slot, so nothing downstream sees
+        it, and report the drop.
         """
         errors = [r for r in results if isinstance(r, BaseException)]
         # A cancelled clone is a cancel, not a failure: never group it.
@@ -647,40 +697,73 @@ class MapTask(HorusTask):
                 raise error
         if not errors:
             return
-        if self.on_item_failure == "fail" or len(errors) == len(clones):
+        fatal = [error for error in errors if not self._droppable(error)]
+        if fatal:
             raise BaseExceptionGroup(
                 _("%(n)d of %(total)d map clone(s) failed.")
-                % {"n": len(errors), "total": len(clones)},
-                errors,
+                % {"n": len(fatal), "total": len(clones)},
+                fatal,
+            )
+        if len(errors) == len(clones):
+            raise TaskExecutionError(
+                _("All %(n)d items were dropped in %(name)s.")
+                % {"n": len(clones), "name": self.name}
             )
 
-        failed = [
-            (slot, item, clone)
-            for (slot, item), clone, result in zip(
-                slots.items(), clones, results, strict=True
-            )
-            if isinstance(result, BaseException)
-        ]
         lines: list[str] = []
-        for slot, item, clone in failed:
+        dropped: list[dict[str, str]] = []
+        for (slot, item), clone, result in zip(
+            slots.items(), clones, results, strict=True
+        ):
+            if result is None:
+                continue
             await self.target.remove(str(root / slot))
             self._dropped_slots.append(slot)
+            summary = (clone.error or "")[:_ERROR_CHARS]
+            code = self._drop_code(result)
+            dropped.append(
+                {
+                    "slot": slot,
+                    "item": Path(item.path).name,
+                    "reason": summary
+                    if code is None
+                    else _("exit code %(code)d") % {"code": code},
+                }
+            )
             if len(lines) < _DROPS_LISTED:
-                summary = (clone.error or "")[:_ERROR_CHARS]
                 lines.append(f"{slot} ({Path(item.path).name}): {summary}")
-        if len(failed) > _DROPS_LISTED:
-            lines.append(_("+%(n)d more") % {"n": len(failed) - _DROPS_LISTED})
+        if len(dropped) > _DROPS_LISTED:
+            lines.append(
+                _("+%(n)d more") % {"n": len(dropped) - _DROPS_LISTED}
+            )
 
+        # The message is capped; `data` lists every drop for the UI.
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=self.id,
                 task_name=self.name,
+                level="WARNING",
                 message=_("Map %(name)s dropped %(n)d of %(total)d item(s):")
-                % {"name": self.name, "n": len(failed), "total": len(clones)}
+                % {"name": self.name, "n": len(dropped), "total": len(clones)}
                 + "\n"
                 + "\n".join(lines),
+                data={"map": {"dropped": dropped, "upstream_dropped": {}}},
             )
         )
+
+    def _config_extra(self) -> dict[str, Any]:
+        """
+        ``zip`` and ``drop_exit_codes`` change what the map outputs; left
+        out when unset, so the hash of a map without them is unchanged.
+        """
+        extra: dict[str, Any] = {}
+        if self.zip:
+            extra["zip"] = [
+                entry.model_dump(mode="json") for entry in self.zip
+            ]
+        if self.drop_exit_codes:
+            extra["drop_exit_codes"] = self.drop_exit_codes
+        return extra
 
     async def _fingerprint(
         self, input_digests: Mapping[str, str | None] | None = None
