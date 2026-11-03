@@ -37,7 +37,10 @@ from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_runtime.context import HorusContext
 from horus_runtime.core.executor.base import BaseExecutor
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import (
+    CommandFailedError,
+    TaskExecutionError,
+)
 from horus_runtime.settings import runtime_settings
 from tests.conftest import MakeTaskType
 
@@ -195,14 +198,15 @@ class TestShellExecutorIntegration:
         self, make_shell_task: MakeTaskType, horus_context: HorusContext
     ) -> None:
         """
-        Test executing a real command with specific exit code.
+        Test that a non-zero exit raises CommandFailedError with its code.
         """
         del horus_context
         executor = ShellExecutor()
 
-        # Use 'true' command which should always exit with 0
-        task = make_shell_task("true")
-        await executor.execute(task)
+        task = make_shell_task("exit 3")
+        with pytest.raises(CommandFailedError) as exc_info:
+            await executor.execute(task)
+        assert exc_info.value.exit_code == 3
 
 
 @pytest.mark.unit

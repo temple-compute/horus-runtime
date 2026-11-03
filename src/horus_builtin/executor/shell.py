@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from horus_builtin.runtime.command import CommandRuntime
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
-from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.core.task.exceptions import CommandFailedError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.settings import runtime_settings
@@ -55,7 +55,7 @@ class ShellExecutor(BaseExecutor):
                 :class:`~horus_builtin.runtime.command.CommandRuntime`.
 
         Raises:
-            TaskExecutionError: If the command exits with a non-zero status.
+            CommandFailedError: If the command exits with a non-zero status.
         """
         assert isinstance(task.runtime, CommandRuntime)
         prepared_command = await task.runtime.setup_runtime(task)
@@ -104,9 +104,9 @@ class ShellExecutor(BaseExecutor):
             raise
 
         # Wait for the process to finish and check the return code.
-        await proc.wait()
+        returncode = await proc.wait()
 
-        if proc.returncode != 0:
+        if returncode != 0:
             horus_logger.log.error(
                 _(
                     "Command execution failed for task %(task_id)s with "
@@ -114,10 +114,12 @@ class ShellExecutor(BaseExecutor):
                 )
                 % {
                     "task_id": task.id,
-                    "return_code": proc.returncode,
+                    "return_code": returncode,
                 }
             )
-            raise TaskExecutionError(
+            # Passed as-is: negative for a local signal, -1 for a lost job.
+            raise CommandFailedError(
                 _("Shell command exited with return code %(return_code)s")
-                % {"return_code": proc.returncode}
+                % {"return_code": returncode},
+                returncode,
             )
