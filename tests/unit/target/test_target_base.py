@@ -23,7 +23,7 @@ from abc import ABC
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
@@ -241,56 +241,3 @@ class TestBaseTarget:
         await _BytesTarget().get_file_to("/remote/f", local)
 
         assert local.read_bytes() == b"payload"
-
-
-class _ShellRemoveTarget(ConcreteTestTarget):
-    """Records the shell commands it runs; each one succeeds."""
-
-    add_to_registry = False
-    commands: list[str] = Field(default_factory=list)
-
-    async def run_command_sync(
-        self,
-        cmd: str,
-        *,
-        cwd: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> ChannelProcess:
-        """Record *cmd*."""
-        del cwd, env
-        self.commands.append(cmd)
-
-        class _Done:
-            async def wait(self) -> int:
-                return 0
-
-        return _Done()  # type: ignore[return-value]
-
-
-@pytest.mark.unit
-class TestRemoveAll:
-    """``remove_all`` removes many paths in one round trip."""
-
-    async def test_one_shell_command_for_every_path(self) -> None:
-        """The default runs a single quoted ``rm -rf``."""
-        target = _ShellRemoveTarget(commands=[])
-
-        await target.remove_all(["/w/a", "/w/b c"])
-        await target.remove_all([])
-
-        assert target.commands == ["rm -rf /w/a '/w/b c'"]
-
-    async def test_native_remove_is_used_per_path(self) -> None:
-        """A target with its own ``remove`` keeps it."""
-        removed: list[str] = []
-
-        class _Native(_ShellRemoveTarget):
-            async def remove(self, path: str) -> None:
-                removed.append(path)
-
-        target = _Native(commands=[])
-
-        await target.remove_all(["/w/a", "/w/b"])
-
-        assert removed == ["/w/a", "/w/b"]
-        assert target.commands == []

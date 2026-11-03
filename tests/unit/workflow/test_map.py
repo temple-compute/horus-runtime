@@ -58,6 +58,7 @@ from horus_builtin.workflow.map import (
     MapOver,
     MapTask,
     _ItemStream,
+    _remove_slots,
 )
 from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
@@ -68,6 +69,7 @@ from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.resources import ResourceRequest
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import (
@@ -2220,6 +2222,89 @@ class TestDropFailedItems:
         assert map_task.status == TaskStatus.COMPLETED
         statuses = {t.id: t.status for t in wf.tasks}
         assert statuses["score[1]"] == TaskStatus.FAILED
+
+
+class _ShellRemove(LocalTarget):
+    """A local target that removes over its shell, as SSH does."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_shell_remove"
+    remove: ClassVar[Any] = BaseTarget.remove
+
+
+@pytest.mark.unit
+class TestRemoveSlots:
+    """Dropped slots go in commands that fit a command line."""
+
+    async def test_many_long_paths_are_all_removed(
+        self, tmp_path: Path
+    ) -> None:
+        """Past the 128 KiB argument cap, in several checked commands."""
+        root = tmp_path / ("r" * 100)
+        paths = [root / f"{i:04d}" for i in range(1500)]
+        for path in paths:
+            path.mkdir(parents=True)
+        target = _ShellRemove()
+
+        with patch.object(
+            _ShellRemove,
+            "run_command_sync",
+            autospec=True,
+            side_effect=LocalTarget.run_command_sync,
+        ) as run:
+            await _remove_slots(target, [str(p) for p in paths])
+
+        assert sum(len(str(p)) for p in paths) > 128 * 1024
+        assert run.call_count > 1
+        assert all(
+            len(call.args[1]) <= map_module._RM_CHARS
+            for call in run.call_args_list
+        )
+        assert list(root.iterdir()) == []
+
+    async def test_a_failed_command_is_logged(self) -> None:
+        """A non-zero exit is not silent."""
+        target = _ShellRemove()
+        process = MagicMock(wait=AsyncMock(return_value=1))
+
+        with (
+            patch.object(
+                _ShellRemove,
+                "run_command_sync",
+                AsyncMock(return_value=process),
+            ),
+            patch.object(map_module, "horus_logger") as logger,
+        ):
+            await _remove_slots(target, ["/w/a", "/w/b c"])
+
+        (call,) = logger.log.warning.call_args_list
+        assert "exit code 1" in call.args[0]
+        assert "/w/a '/w/b c'" in call.args[0]
+
+    async def test_native_remove_is_used_per_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A target with its own ``remove`` keeps it; a failure is logged."""
+        (tmp_path / "a").mkdir()
+        target = LocalTarget()
+        native = target.remove
+
+        async def remove(path: str) -> None:
+            if path.endswith("b"):
+                raise PermissionError(path)
+            await native(path)
+
+        with (
+            patch.object(LocalTarget, "remove", side_effect=remove),
+            patch.object(LocalTarget, "run_command_sync") as run,
+            patch.object(map_module, "horus_logger") as logger,
+        ):
+            await _remove_slots(target, [str(tmp_path / s) for s in "ab"])
+
+        run.assert_not_called()
+        assert not (tmp_path / "a").exists()
+        (call,) = logger.log.warning.call_args_list
+        assert call.args[0].endswith("b")
 
 
 @pytest.mark.unit

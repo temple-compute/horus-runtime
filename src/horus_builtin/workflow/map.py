@@ -26,6 +26,7 @@ output.
 import asyncio
 import contextvars
 import json
+import shlex
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -80,6 +81,10 @@ _EVENT_ITEMS = 100
 
 # The highest exit code a process can report.
 _MAX_EXIT_CODE = 255
+
+# Characters per `rm -rf` command line. Linux caps one argument at 128 KiB,
+# and sshd passes the whole command as one (`$SHELL -c`).
+_RM_CHARS = 32 * 1024
 
 
 class MapConfigurationError(WorkflowError):
@@ -193,6 +198,43 @@ class _ItemStream:
 async def _gap(origin: str) -> _Item:
     """A slot a paired input does not have: dropped in *origin*."""
     return _Item("dropped", origin)
+
+
+async def _remove_slots(target: BaseTarget, paths: list[str]) -> None:
+    """
+    Remove the dropped slots *paths* on *target*: with its own ``remove``
+    when it has one, else with as few ``rm -rf`` commands as fit a command
+    line. A slot that stays is logged; it is still listed as dropped.
+    """
+    if type(target).remove is not BaseTarget.remove:
+        for path in paths:
+            try:
+                await target.remove(path)
+            except OSError as exc:
+                horus_logger.log.warning(
+                    _("Could not remove dropped slot %(path)s: %(error)s")
+                    % {"path": path, "error": exc}
+                )
+        return
+    chunks: list[list[str]] = []
+    size = _RM_CHARS
+    for path in map(shlex.quote, paths):
+        if size + 1 + len(path) > _RM_CHARS:
+            chunks.append([])
+            size = len("rm -rf --")
+        chunks[-1].append(path)
+        size += 1 + len(path)
+    for chunk in chunks:
+        out = await target.run_command_sync("rm -rf -- " + " ".join(chunk))
+        code = await out.wait()
+        if code != 0:
+            horus_logger.log.warning(
+                _(
+                    "Could not remove %(n)d dropped slot(s) "
+                    "(exit code %(code)d): %(paths)s"
+                )
+                % {"n": len(chunk), "code": code, "paths": " ".join(chunk)}
+            )
 
 
 class MapOver(BaseModel):
@@ -1204,8 +1246,8 @@ class MapTask(HorusTask):
             )
             if len(lines) < _DROPS_LISTED:
                 lines.append(f"{slot} ({label}): {summary}")
-        await self.target.remove_all(
-            [str(root / slot) for slot in self._dropped_slots]
+        await _remove_slots(
+            self.target, [str(root / slot) for slot in self._dropped_slots]
         )
         if len(dropped) > _DROPS_LISTED:
             lines.append(
