@@ -19,7 +19,7 @@
 Exceptions related to task execution in the Horus runtime.
 """
 
-from typing import Self
+from typing import Any, Self
 
 
 class BaseTaskError(Exception):
@@ -44,9 +44,11 @@ class CommandFailedError(TaskExecutionError):
         super().__init__(message)
         self.exit_code = exit_code
 
-    def __reduce__(self) -> tuple[type[Self], tuple[str, int]]:
-        """Keep :attr:`exit_code` across pickling."""
-        return (type(self), (str(self), self.exit_code))
+    def __reduce__(
+        self,
+    ) -> tuple[type[Self], tuple[str, int], dict[str, Any]]:
+        """Keep :attr:`exit_code` and any notes across pickling."""
+        return (type(self), (str(self), self.exit_code), self.__dict__)
 
 
 class TargetLostError(TaskExecutionError):

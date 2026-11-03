@@ -71,6 +71,16 @@ def test_command_failed_error_pickles_exit_code() -> None:
 
 
 @pytest.mark.unit
+def test_command_failed_error_pickles_notes() -> None:
+    """A note added after construction survives a pickle round trip."""
+    exc = CommandFailedError("exited with 3", 3)
+    exc.add_note("on node-1")
+    copy = pickle.loads(pickle.dumps(exc))
+    assert copy.__notes__ == ["on node-1"]
+    assert copy.exit_code == 3
+
+
+@pytest.mark.unit
 def test_drop_skip_reasons_keep_their_values() -> None:
     """The drop reasons are persisted by value, so the values are fixed."""
     assert SkipReason("upstream_dropped") is SkipReason.UPSTREAM_DROPPED
