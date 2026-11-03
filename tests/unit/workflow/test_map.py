@@ -2640,6 +2640,34 @@ class TestRestage:
         )
         assert list(score._early_reruns) == []
 
+    @pytest.mark.parametrize(
+        "reason", [SkipReason.DROPPED, SkipReason.UPSTREAM_DROPPED]
+    )
+    async def test_a_dropped_slot_with_a_stale_record_is_not_run_again(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        reason: SkipReason,
+    ) -> None:
+        """
+        A slot taken in an earlier attempt keeps its lease record; dropped
+        in this one, it has no output to lose.
+        """
+        wf, _node = _on_node(tmp_path, ["a.txt"], produced_on_node=False)
+        horus_context.workflow = wf
+        score = cast(MapTask, wf.tasks[1])
+        clone = MagicMock(id="score[0]", skip_reason=reason)
+        clone.name = "score[0]"
+        clone._target_loss_retries = 0
+        run_clone = AsyncMock(return_value=None)
+        results: list[BaseException | None] = [None]
+
+        with patch.object(type(wf.leases), "output_lost", return_value=True):
+            await score._rerun_lost([clone], results, run_clone)
+
+        run_clone.assert_not_called()
+        assert results == [None]
+
     async def test_early_reruns_do_not_inherit_the_ready_context(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
