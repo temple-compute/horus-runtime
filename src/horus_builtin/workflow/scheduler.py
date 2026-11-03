@@ -517,13 +517,18 @@ async def _cancel_blocked(
     """
     Cancel every running wrapper whose task is in *ids*, wait for it to
     unwind, and drop it from *running*. Only a task that started on an
-    open stream can be running behind a failure.
+    open stream can be running behind a failure. A run cancelled while
+    waiting cancels every running wrapper.
     """
     futs = [fut for fut, task_id in running.items() if task_id in ids]
     for fut in futs:
         fut.cancel()
     if futs:
-        await asyncio.wait(futs)
+        try:
+            await asyncio.wait(futs)
+        except asyncio.CancelledError:
+            await _cancel_running(running)
+            raise
     for fut in futs:
         del running[fut]
 
@@ -974,11 +979,7 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             blocked |= newly_blocked
             # Cancel first, so a descendant running on the failed task's
             # stream records CANCELED before it is marked blocked below.
-            try:
-                await _cancel_blocked(running, newly_blocked)
-            except asyncio.CancelledError:
-                await _cancel_running(running)
-                raise
+            await _cancel_blocked(running, newly_blocked)
             _mark_blocked(
                 sorted(newly_blocked - {task_id}),
                 failed_task=tasks_by_id[task_id],

@@ -2418,15 +2418,15 @@ class TestStreaming:
         """
         del horus_context
         handled = asyncio.Event()
+        late = asyncio.Event()
 
         class LateFail(_StreamSource):
             add_to_registry: ClassVar[bool] = False
-            _late: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
 
             async def _run(self) -> None:
                 try:
                     self.opened().set_result(None)
-                    await self._late.wait()
+                    await late.wait()
                     raise TaskExecutionError("source failed late")
                 finally:
                     self._opened = None
@@ -2436,7 +2436,7 @@ class TestStreaming:
             cancelled: bool = False
 
             async def _run(self) -> None:
-                a._late.set()
+                late.set()
                 try:
                     await handled.wait()
                 except asyncio.CancelledError:
