@@ -1019,6 +1019,9 @@ class MapTask(HorusTask):
             if (
                 index not in self._early_reruns
                 and clone.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+                # A dropped slot has no output to lose.
+                and clone.skip_reason
+                not in (SkipReason.DROPPED, SkipReason.UPSTREAM_DROPPED)
                 and wf.leases.output_lost(
                     clone.id, clone.outputs[0].id, self.target
                 )

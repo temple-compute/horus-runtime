@@ -2490,6 +2490,36 @@ class TestRestage:
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
 
+    async def test_dropped_clone_is_not_run_again(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone dropped on the lost machine stays dropped."""
+        wf, _node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+        (tmp_path / "batches" / "a.txt").write_text("drop")
+        score = cast(MapTask, wf.tasks[1])
+        score.runtime = CommandRuntime(
+            command=f'grep -q drop "$batch" && exit 3; {_BODY}'
+        )
+        score.drop_exit_codes = [3]
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "score")["score[0]"] == (
+            TaskStatus.SKIPPED,
+            SkipReason.DROPPED,
+        )
+        assert not any(
+            "lost with its machine" in m
+            for m in _task_messages(emit, "score[0]")
+        )
+        assert list(score._early_reruns) == []
+
     async def test_early_reruns_do_not_inherit_the_ready_context(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
