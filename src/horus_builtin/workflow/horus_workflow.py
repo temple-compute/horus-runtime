@@ -72,7 +72,7 @@ class HorusWorkflow(BaseWorkflow):
         into: dict[str, list[WorkflowEdge]] = {}
         for edge in self.edges:
             into.setdefault(edge.target, []).append(edge)
-        spaces: dict[str, tuple[str | None, str] | None] = {}
+        item_spaces: dict[str, tuple[str | None, str] | None] = {}
 
         def map_source(task: MapTask, input_id: str) -> MapTask | None:
             edge = producers.get((task.id, input_id))
@@ -93,19 +93,19 @@ class HorusWorkflow(BaseWorkflow):
             # check reports it.
             path: list[str] = []
             current = task
-            while current.id not in spaces:
+            while current.id not in item_spaces:
                 if current.id in path:
-                    spaces[current.id] = None
+                    item_spaces[current.id] = None
                     break
                 path.append(current.id)
                 source = map_source(current, current.over.input_id)
                 if source is None:
-                    spaces[current.id] = head_space(current)
+                    item_spaces[current.id] = head_space(current)
                     break
                 current = source
-            found = spaces[current.id]
+            found = item_spaces[current.id]
             for task_id in path:
-                spaces[task_id] = found
+                item_spaces[task_id] = found
             return found
 
         def over_source(task: MapTask) -> str:
@@ -161,7 +161,7 @@ class HorusWorkflow(BaseWorkflow):
             # read too early.
             for edge in into.get(task.id, []):
                 read = getattr(edge.condition, "source_task", None)
-                early = {edge.source, read} & streamed
+                early = streamed & {edge.source, read}
                 if edge.condition and early:
                     raise MapConfigurationError(
                         _(

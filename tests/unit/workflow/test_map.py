@@ -1471,10 +1471,15 @@ class TestMapFields:
     def test_deep_chain_with_a_zip_loads(self) -> None:
         """
         The item space of a map 1200 maps down its ``over`` chain is found
-        without recursing once per map.
+        without recursing once per map, for each map that zips.
         """
         maps = [_over_map(f"m{i}") for i in range(1200)]
-        edges = [_edge("split", "out", "m0", "batches")]
+        maps[1].inputs.append(FolderArtifact(id="mates", path=Path("mates")))
+        maps[1].zip = [MapOver(input_id="mates", item_id="mate")]
+        edges = [
+            _edge("split", "out", "m0", "batches"),
+            _edge("m0", "scored", "m1", "mates"),
+        ]
         edges += [
             _edge(f"m{i}", "scored", f"m{i + 1}", "batches")
             for i in range(len(maps) - 1)
@@ -3454,10 +3459,8 @@ class TestChain:
             self: HorusWorkflow, task: BaseTask, *args: Any, **kwargs: Any
         ) -> Any:
             if task.id == "b" and kwargs.get("only"):
-                closed.append(
-                    cast(MapTask, task)._stream is None
-                    or (cast(MapTask, task)._stream.closed.done())
-                )
+                stream = cast(MapTask, task)._stream
+                closed.append(stream is None or stream.closed.done())
             return await digests(self, task, *args, **kwargs)
 
         monkeypatch.setattr(HorusWorkflow, "source_digests", record)
