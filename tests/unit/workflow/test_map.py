@@ -1859,7 +1859,8 @@ class TestDropFailedItems:
         dropped = event.data["map"]["dropped"]
         assert [d["slot"] for d in dropped] == ["01", "02", "03"]
         assert event.data["map"]["dropped_count"] == 24
-        assert len(map_task._drops) == 24
+        states = _clone_states(wf, "score").values()
+        assert sum(state != TaskStatus.COMPLETED for state in states) == 24
         assert dropped[0]["item"] == "01.txt"
         assert dropped[0]["reason"] == ("ValueError: " + "x" * 1000)[:500]
 

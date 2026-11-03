@@ -310,9 +310,6 @@ class MapTask(HorusTask):
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
     """Slots dropped by the current execution."""
 
-    _drops: list[dict[str, str]] = PrivateAttr(default_factory=list)
-    """Every own drop of the current execution; the event lists the first."""
-
     _staged_dirs: list[str] = PrivateAttr(default_factory=list)
     """The output root and slot dirs of the current execution."""
 
@@ -616,7 +613,6 @@ class MapTask(HorusTask):
             )
 
         self._dropped_slots = []
-        self._drops = []
         self._upstream_dropped = {}
         self._streamed_digests = None
         streams = {
@@ -1266,7 +1262,6 @@ class MapTask(HorusTask):
             )
 
         # The message and `data` are capped; the clones hold every drop.
-        self._drops = dropped
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=self.id,
