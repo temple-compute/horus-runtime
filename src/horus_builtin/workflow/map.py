@@ -74,6 +74,10 @@ from horus_runtime.logging import horus_logger
 _DROPS_LISTED = 20
 _ERROR_CHARS = 500
 
+# An event's `data` lists at most this many slots per list, with the full
+# count: a map of many items must not send MB-sized events.
+_EVENT_ITEMS = 100
+
 # The highest exit code a process can report.
 _MAX_EXIT_CODE = 255
 
@@ -263,6 +267,9 @@ class MapTask(HorusTask):
 
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
     """Slots dropped by the current execution."""
+
+    _drops: list[dict[str, str]] = PrivateAttr(default_factory=list)
+    """Every own drop of the current execution; the event lists the first."""
 
     _staged_dirs: list[str] = PrivateAttr(default_factory=list)
     """The output root and slot dirs of the current execution."""
@@ -567,6 +574,7 @@ class MapTask(HorusTask):
             )
 
         self._dropped_slots = []
+        self._drops = []
         self._upstream_dropped = {}
         self._streamed_digests = None
         streams = {
@@ -931,7 +939,13 @@ class MapTask(HorusTask):
                     "finishes it."
                 )
                 % {"name": self.name, "sources": ", ".join(chain)},
-                data={"map": {"chain": chain, "slots": labels}},
+                data={
+                    "map": {
+                        "chain": chain,
+                        "slots": dict(list(labels.items())[:_EVENT_ITEMS]),
+                        "slot_count": len(labels),
+                    }
+                },
             )
         )
 
@@ -1206,7 +1220,8 @@ class MapTask(HorusTask):
                 _("%(n)d item(s) dropped upstream.") % {"n": len(upstream)}
             )
 
-        # The message is capped; `data` lists every drop for the UI.
+        # The message and `data` are capped; the clones hold every drop.
+        self._drops = dropped
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=self.id,
@@ -1215,8 +1230,12 @@ class MapTask(HorusTask):
                 message="\n".join(parts),
                 data={
                     "map": {
-                        "dropped": dropped,
-                        "upstream_dropped": dict(sorted(upstream.items())),
+                        "dropped": dropped[:_EVENT_ITEMS],
+                        "dropped_count": len(dropped),
+                        "upstream_dropped": dict(
+                            sorted(upstream.items())[:_EVENT_ITEMS]
+                        ),
+                        "upstream_dropped_count": len(upstream),
                     }
                 },
             )

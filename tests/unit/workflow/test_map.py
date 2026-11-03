@@ -46,6 +46,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow import map as map_module
 from horus_builtin.workflow.dag import (
     CyclicDependencyError,
     build_dependencies,
@@ -1795,9 +1796,16 @@ class TestDropFailedItems:
         assert "1 (b.txt): " in message
 
     async def test_the_drop_event_is_capped(
-        self, tmp_path: Path, horus_context: HorusContext
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A large drop lists 20 items, then "+N more", each error cut."""
+        """
+        A large drop lists 20 items, then "+N more", each error cut; `data`
+        lists the first drops and counts them all.
+        """
+        monkeypatch.setattr(map_module, "_EVENT_ITEMS", 3)
         names = [f"{i:02d}.txt" for i in range(25)]
         split = _split_task(tmp_path, names)
         map_task = _dropping_map()
@@ -1820,12 +1828,11 @@ class TestDropFailedItems:
         assert (
             lines[1] == "01 (01.txt): " + ("ValueError: " + "x" * 1000)[:500]
         )
-        # The message is capped; `data` lists every drop.
         (event,) = _drop_events(emit)
         dropped = event.data["map"]["dropped"]
-        assert [d["slot"] for d in dropped] == [
-            f"{i:02d}" for i in range(1, 25)
-        ]
+        assert [d["slot"] for d in dropped] == ["01", "02", "03"]
+        assert event.data["map"]["dropped_count"] == 24
+        assert len(map_task._drops) == 24
         assert dropped[0]["item"] == "01.txt"
         assert dropped[0]["reason"] == ("ValueError: " + "x" * 1000)[:500]
 
@@ -2025,7 +2032,9 @@ class TestDropFailedItems:
                         "with return code 4",
                     },
                 ],
+                "dropped_count": 2,
                 "upstream_dropped": {},
+                "upstream_dropped_count": 0,
             }
         }
         assert event.message is not None
@@ -3072,16 +3081,25 @@ class TestChain:
         assert events["b"].message == "1 item(s) dropped upstream."
         assert events["b"].data["map"] == {
             "dropped": [],
+            "dropped_count": 0,
             "upstream_dropped": {"1": "a"},
+            "upstream_dropped_count": 1,
         }
         assert events["c"].data["map"]["upstream_dropped"] == {"1": "a"}
         assert [d["slot"] for d in events["a"].data["map"]["dropped"]] == ["1"]
         assert not (tmp_path / "log").read_text().count("b_out_1")
 
     async def test_chained_event_names_the_sources(
-        self, tmp_path: Path, horus_context: HorusContext
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """B says once, at the start, which map it follows per item."""
+        """
+        B says once, at the start, which map it follows per item, listing
+        the first slots and counting them all.
+        """
+        monkeypatch.setattr(map_module, "_EVENT_ITEMS", 1)
         wf = _stages(
             tmp_path,
             ["x", "y"],
@@ -3098,7 +3116,7 @@ class TestChain:
         ]
         assert event.message == "Map b starts each item when a finishes it."
         assert event.data == {
-            "map": {"chain": ["a"], "slots": {"0": "x", "1": "y"}}
+            "map": {"chain": ["a"], "slots": {"0": "x"}, "slot_count": 2}
         }
 
     @pytest.mark.parametrize("policy", ["fail_fast", "continue"])
