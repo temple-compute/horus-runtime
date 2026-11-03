@@ -257,7 +257,7 @@ class MapTask(HorusTask):
     _fan_out: (
         tuple[
             list[BaseTask],
-            Callable[[BaseTask], Coroutine[Any, Any, None]],
+            Callable[[BaseTask], Coroutine[Any, Any, BaseException | None]],
             contextvars.Context,
         ]
         | None
@@ -267,7 +267,7 @@ class MapTask(HorusTask):
     wave runs.
     """
 
-    _early_reruns: dict[int, asyncio.Task[None]] = PrivateAttr(
+    _early_reruns: dict[int, asyncio.Task[BaseException | None]] = PrivateAttr(
         default_factory=dict
     )
     """Re-runs of lost slots :meth:`_restage` started, by clone index."""
@@ -743,18 +743,20 @@ class MapTask(HorusTask):
             if (
                 wf.failure_policy == "continue"
                 or self.on_item_failure == "drop"
-                or self.drop_exit_codes
             ):
                 # Clones are independent: one failing must not cancel the
                 # rest.
-                results = await asyncio.gather(
-                    *map(run_clone, clones), return_exceptions=True
+                results = list(
+                    await asyncio.gather(
+                        *map(run_clone, clones), return_exceptions=True
+                    )
                 )
             else:
+                # A drop returns its error, so only a fatal one cancels
+                # the rest.
                 async with asyncio.TaskGroup() as tg:
-                    for clone in clones:
-                        tg.create_task(run_clone(clone))
-                results = [None] * len(clones)
+                    runs = [tg.create_task(run_clone(c)) for c in clones]
+                results = [run.result() for run in runs]
             self._fan_out = None
             early = await asyncio.gather(
                 *self._early_reruns.values(), return_exceptions=True
@@ -806,13 +808,14 @@ class MapTask(HorusTask):
         waits: Mapping[str, list[Callable[[], Awaitable[_Item]]]],
         run_task: Callable[[BaseTask], Awaitable[None]],
         clone: BaseTask,
-    ) -> None:
+    ) -> BaseException | None:
         """
         Run *clone* once each item it *waits* for is ready, and publish how
         it settled on *stream*. The wait comes first, so a waiting clone
         holds no slot, placement or lease. An item dropped upstream skips
         the clone. When it exits with one of :attr:`drop_exit_codes`, mark
-        it dropped; it still raises, so :meth:`_settle` drops its slot.
+        it dropped. A droppable failure is returned, not raised, so it does
+        not cancel the siblings; :meth:`_settle` drops its slot.
         """
         slot = clone.id[len(self.id) + 1 : -1]
         try:
@@ -821,7 +824,7 @@ class MapTask(HorusTask):
                 if item.state == "dropped":
                     self._mark_upstream_dropped(clone, slot, str(item.origin))
                     stream.dropped(slot, str(item.origin), item.reason)
-                    return
+                    return None
                 if item.state == "failed":
                     stream.failed()
                     # shortcut: parked until the scheduler cancels this map
@@ -840,15 +843,17 @@ class MapTask(HorusTask):
                 stream.dropped(
                     slot, self.id, _("exit code %(code)d") % {"code": code}
                 )
-            elif self.on_item_failure == "drop":
+                return exc
+            if self.on_item_failure == "drop":
                 stream.dropped(
                     slot, self.id, (clone.error or "")[:_ERROR_CHARS]
                 )
-            else:
-                stream.failed()
+                return exc
+            stream.failed()
             raise
         else:
             stream.ready(slot)
+            return None
         finally:
             # Cancelled, or never settled: its consumer must not wait on.
             stream.failed(slot)
@@ -1009,7 +1014,7 @@ class MapTask(HorusTask):
         self,
         clones: list[BaseTask],
         results: list[BaseException | None],
-        run_clone: Callable[[BaseTask], Awaitable[None]],
+        run_clone: Callable[[BaseTask], Awaitable[BaseException | None]],
     ) -> None:
         """
         Run again the succeeded clones whose slot was lost with an earlier

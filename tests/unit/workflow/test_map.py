@@ -1833,6 +1833,42 @@ class TestDropFailedItems:
             "score[2]": TaskStatus.COMPLETED,
         }
 
+    async def test_fatal_failure_under_fail_fast_cancels_siblings(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        With drop codes set, a drop cancels no sibling, but a failure that
+        is not droppable still cancels the rest under fail_fast.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        (tmp_path / "batches" / "a.txt").write_text("drop")
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                'grep -q drop "$batch" && exit 3; '
+                'grep -q bad "$batch" && { sleep 0.5; exit 1; }; '
+                "sleep 30 && cp $batch $scored/result.txt"
+            ),
+        )
+        map_task.drop_exit_codes = [3]
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with pytest.raises(Exception) as exc_info:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=15)
+
+        # Not the timeout: the failure itself cancelled score[2].
+        assert not isinstance(exc_info.value, TimeoutError)
+        clones = {t.id: t for t in wf.tasks if t.id.startswith("score[")}
+        assert clones["score[0]"].status == TaskStatus.SKIPPED
+        assert clones["score[0]"].skip_reason == SkipReason.DROPPED
+        assert clones["score[1]"].status == TaskStatus.FAILED
+        assert clones["score[2]"].status == TaskStatus.CANCELED
+        assert map_task.status == TaskStatus.FAILED
+
     async def test_drop_code_never_retries(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
