@@ -977,7 +977,11 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             # A completed task's outputs stay valid (a chained map can finish
             # before its source fails late), so the walk stops at it.
             open_deps = {t: d for t, d in deps.items() if t not in completed}
+            # A descendant that failed on its own (a consumer of a stream
+            # can fail in the same batch) keeps its FAILED status.
+            failed_too = {f for f, _ in failures} | failed.keys()
             newly_blocked = descendants(task_id, open_deps) - blocked
+            newly_blocked -= failed_too - {task_id}
             blocked |= newly_blocked
             # Cancel first, so a descendant running on the failed task's
             # stream records CANCELED before it is marked blocked below.

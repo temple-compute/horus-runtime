@@ -3130,6 +3130,48 @@ class TestChain:
             )
             assert clones[1].skip_reason == SkipReason.UPSTREAM_FAILED
 
+    async def test_consumer_failing_with_its_source_stays_failed(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Under continue, A and B, chained on A, fail in the same batch: B
+        stays FAILED with its error instead of being marked blocked.
+        """
+        del horus_context
+        go = asyncio.Event()
+        asyncio.get_running_loop().call_later(1.0, go.set)
+        manifest = MapTask._write_manifest
+        settle = MapTask._settle
+
+        async def a_breaks(self: MapTask, *args: Any) -> None:
+            if self.id == "a":
+                await go.wait()
+                raise RuntimeError("a broke")
+            await manifest(self, *args)
+
+        async def b_breaks(self: MapTask, *args: Any) -> None:
+            if self.id == "b":
+                await go.wait()
+                raise RuntimeError("b broke")
+            await settle(self, *args)
+
+        monkeypatch.setattr(MapTask, "_write_manifest", a_breaks)
+        monkeypatch.setattr(MapTask, "_settle", b_breaks)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x"], [a, b], failure_policy="continue")
+
+        with pytest.raises(WorkflowExecutionError) as excinfo:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert "a, b." in str(excinfo.value)
+        assert a.status == TaskStatus.FAILED
+        assert (b.status, b.skip_reason) == (TaskStatus.FAILED, None)
+        assert "b broke" in str(b.error)
+
     async def test_run_cancel_unwinds_waiting_clones(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
