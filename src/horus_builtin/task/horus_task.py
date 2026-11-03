@@ -101,8 +101,11 @@ class HorusTask(BaseTask):
 
         store = ArtifactStore(self.target)
 
-        # Gather inputs
+        # Gather inputs. A streamed input arrives per item while it runs.
+        streamed = self.streamed_inputs
         for artifact in self.inputs:
+            if artifact.id in streamed:
+                continue
             if not await store.exists(artifact):
                 raise ArtifactDoesNotExistError(
                     _("Input artifact '%(input_id)s' does not exist")

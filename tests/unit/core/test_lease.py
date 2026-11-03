@@ -23,6 +23,7 @@ drained and released during a run.
 import asyncio
 from pathlib import Path
 from typing import Any, ClassVar, cast
+from unittest.mock import patch
 
 import pytest
 from pydantic import PrivateAttr
@@ -943,6 +944,89 @@ class TestRelease:
         await wf.run(trigger_id="a")
 
         assert not wf.leases.has_leases
+
+    async def test_streaming_consumer_holds_source_machine_until_settled(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A chained map started on A's stream still reads A's clones after A
+        ends: A's machine waits for it to settle before it goes.
+        """
+        del horus_context, evacuator
+        batches = tmp_path / "batches"
+        batches.mkdir()
+        for name in "xyz":
+            (batches / name).write_text(name)
+        split = HorusTask(
+            id="split",
+            name="split",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FolderArtifact(id="batches", path=batches)],
+        )
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0)
+        released_after: list[int] = []
+
+        def _map(map_id: str, target: BaseTarget, command: str) -> MapTask:
+            return MapTask(
+                id=map_id,
+                name=map_id,
+                over=MapOver(input_id="in", item_id="item"),
+                runtime=CommandRuntime(command=command),
+                executor=ShellExecutor(),
+                target=target,
+                inputs=[FolderArtifact(id="in", path=Path(f"{map_id}_in"))],
+                outputs=[
+                    FolderArtifact(id="out", path=tmp_path / f"{map_id}_out")
+                ],
+                max_concurrency=1,
+            )
+
+        a = _map("a", node, "cp $item $out/")
+        b = _map("b", LocalTarget(), "sleep 0.1; cp -r $item/. $out/")
+        b.chain = True
+        wf = _workflow(
+            tmp_path,
+            [split, a, b],
+            [
+                WorkflowEdge(
+                    source="split",
+                    source_output="batches",
+                    target="a",
+                    target_input="in",
+                ),
+                WorkflowEdge(
+                    source="a",
+                    source_output="out",
+                    target="b",
+                    target_input="in",
+                ),
+            ],
+        )
+        release = FakeNode.release
+
+        async def record(self: FakeNode, reason: str) -> None:
+            released_after.append(
+                sum(
+                    t.status.value == "completed"
+                    for t in wf.tasks
+                    if t.id.startswith("b[")
+                )
+            )
+            await release(self, reason)
+
+        with patch.object(FakeNode, "release", record):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert (tmp_path / "b_out" / "2" / "z").read_text() == "z"
+        # Released once, and only once every B clone was done with it.
+        assert node.released == ["drained"]
+        assert released_after[0] == 3
 
 
 @pytest.mark.unit
