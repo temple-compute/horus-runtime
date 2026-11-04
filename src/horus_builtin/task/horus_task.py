@@ -121,6 +121,16 @@ class HorusTask(BaseTask):
 
         await self._execute()
 
+        # A command can exit 0 without writing what it declared (a wrong path,
+        # a tool that appends its own extension). Fail here, not in whichever
+        # task reads the output next.
+        missing = [a.id for a in self.outputs if not await store.exists(a)]
+        if missing:
+            raise ArtifactDoesNotExistError(
+                _("Task finished without writing output(s): %(ids)s")
+                % {"ids": ", ".join(missing)}
+            )
+
         # Only a run that got this far may claim its outputs match its inputs.
         if fingerprint is not None:
             await self._write_manifest(fingerprint)

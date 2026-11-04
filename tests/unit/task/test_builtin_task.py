@@ -411,6 +411,22 @@ class TestHorusTaskInputFingerprint:
         assert task.runs == 1
         assert task.status == TaskStatus.SKIPPED
 
+    async def test_fails_when_an_output_is_not_written(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A command that exits 0 without writing a declared output fails the
+        task itself, and records no manifest, so the next run retries.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path, cmd="true")
+
+        with pytest.raises(ArtifactDoesNotExistError, match="dest"):
+            await task.run()
+
+        assert task.status == TaskStatus.FAILED
+        assert not (tmp_path / ".horus" / "copy_task.json").exists()
+
     async def test_reruns_after_input_content_changes(
         self, tmp_path: Path
     ) -> None:
