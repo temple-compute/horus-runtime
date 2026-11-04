@@ -22,7 +22,7 @@ folder/directory artifact in the Horus runtime.
 
 import shlex
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import ClassVar
 
 from horus_builtin.artifact.file import FileArtifact
@@ -114,11 +114,38 @@ class FolderArtifact(BaseArtifact[Path], IterableArtifact):
         """
         Extract the gzipped tarball *pkg* into the directory *dest*.
 
-        The destination is recreated fresh so a re-materialized folder never
-        mixes with stale contents.
+        Several consumers of one folder input unpack it onto the same *dest*
+        while earlier consumers still read it, so *dest* is never emptied in
+        place:
+
+        - The package's sha256 is kept in a marker next to *dest*. When
+          *dest* exists and the marker matches, nothing is touched.
+        - Otherwise the package is extracted into a temporary sibling, the
+          old *dest* is renamed aside, the new tree renamed in, and the old
+          one removed. A re-materialized folder never mixes with stale
+          contents.
         """
-        q_dest = shlex.quote(dest)
+        d = PurePosixPath(dest)
+        q_dest, q_pkg = shlex.quote(dest), shlex.quote(pkg)
+        q_parent = shlex.quote(str(d.parent))
+        q_mark = shlex.quote(str(d.parent / f".{d.name}.horus-sha256"))
+        q_tmp = shlex.quote(f"{dest}.horus-tmp") + "$$"
+        q_old = shlex.quote(f"{dest}.horus-old") + "$$"
+        q_nested = shlex.quote(f"{dest}/{d.name}.horus-tmp") + "$$"
+        # shortcut: the marker trusts that tasks do not edit their input
+        # folders in place; a consumer that does would keep the edited copy.
+        # ponytail: between the two renames *dest* is briefly absent; only a
+        # changed package swaps, so readers of the same content never see it.
         return (
-            f"rm -rf {q_dest} && mkdir -p {q_dest} && "
-            f"tar xzf {shlex.quote(pkg)} -C {q_dest}"
+            "h=sha256sum; command -v sha256sum >/dev/null || h='shasum -a 256'"
+            f"; s=$($h {q_pkg} 2>/dev/null | cut -d' ' -f1)"
+            f'; if [ -d {q_dest} ] && [ -n "$s" ] '
+            f'&& [ "$(cat {q_mark} 2>/dev/null)" = "$s" ]; then :; else '
+            f"mkdir -p {q_parent} && rm -rf {q_tmp} && mkdir {q_tmp} "
+            f"&& tar xzf {q_pkg} -C {q_tmp} "
+            f"&& {{ [ ! -e {q_dest} ] || mv {q_dest} {q_old}; }} "
+            # A dest made by a concurrent unpack in between makes mv nest
+            # the temp tree inside it; drop that copy and keep the other.
+            f"&& mv {q_tmp} {q_dest} && rm -rf {q_nested} {q_old} "
+            f'&& {{ [ -z "$s" ] || echo "$s" > {q_mark}; }}; fi'
         )
