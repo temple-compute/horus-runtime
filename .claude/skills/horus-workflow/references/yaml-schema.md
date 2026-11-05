@@ -16,6 +16,7 @@ artifacts: [...]           # optional root artifacts (no producer task)
 edges: [...]               # optional edges (the DAG; see below)
 max_concurrency: 4         # optional; plain tasks dispatched at once. unset = 8, 0 = no limit
 failure_policy: fail_fast  # optional; fail_fast (default) | continue
+cache: deep                # optional; deep (default) | fast. How tasks check their inputs
 capacity:                  # optional; per-location resource caps (see Resources)
   "local://myhost": {cpus: 16, gpus: 2}
 ```
@@ -30,6 +31,8 @@ capacity:                  # optional; per-location resource caps (see Resources
   bound the total.
 - A chained map keeps each source map's machine until its own last item has
   read from it, so a slow consumer keeps a fast source's machine running.
+- `cache` is the default input check for every task; a task's own `cache:`
+  wins. See [Cache modes](#cache-modes-deep-and-fast).
 - `orchestrator_target` defaults to `local` for `horus_workflow`; set it only
   when dispatching to remote targets that can't reach local files. It does not
   take a `{ref}`.
@@ -43,6 +46,7 @@ capacity:                  # optional; per-location resource caps (see Resources
   kind: horus_task        # required; concrete task plugin
   description: ""          # optional
   skip_if_complete: true  # optional (default true): skip if outputs exist and the manifest matches
+  cache: fast             # optional; deep | fast. Unset = the workflow's cache
   runtime:                # required; WHAT to run
     kind: command
     command: "echo hello > $result"
@@ -249,6 +253,36 @@ Artifacts appear in a task's `inputs`/`outputs` or as workflow-level root
 
 Output existence plus the task manifest (input digests + config hash) decides
 completion.
+
+### Cache modes (`deep` and `fast`)
+
+`cache` sets how input digests are taken. It is read from the task, then the
+workflow, then defaults to `deep`. Map clones use the map's `cache`.
+
+- `deep` hashes every byte of every input. Safe, but a large input is read
+  again on each run.
+- `fast` hashes each file's path, size and mtime in whole seconds, plus the
+  content of files under 1 MiB. Large files are not read.
+
+`fast` caveats:
+
+- A rewrite with the same size in the same second is not seen (false hit).
+- A `touch`, or a copy that drops mtime, re-runs the task (false miss). Copy
+  inputs with their mtime (`cp -p`, `rsync -t`). Local and tar copies made
+  by the runtime keep it.
+- On a network filesystem (NFS), attribute caching can show a stale mtime
+  for a short time after another host writes the file.
+
+Each input is digested once per run and mode. A task forgets the digests of
+its outputs when it is dispatched, so a program that writes to a path it does
+not declare as an output can leave a stale digest for the rest of the run.
+
+`cache` is not part of the config hash, but the digest records its mode, so
+switching a task's mode re-runs it once.
+
+**Upgrading to 0.9.0:** folder digests changed format. Every task with a
+folder input (chained maps too) re-runs once after the upgrade. Tasks with only
+file inputs do not.
 
 ### Paths
 
@@ -470,6 +504,11 @@ edges:
   - {source: clean, source_output: clean_text, target: final, target_input: txt}
 ```
 
+`cache` precedence for an inner task: its own `cache:`, then the body's
+(`sub.cache`), then the workflow's. A `cache:` next to `sub:` is dropped; the
+long form `kind: subworkflow` with a `body:` block keeps it and ranks it
+between the body and the workflow.
+
 ## Loop (`loop:`)
 
 Repeats a body task while it says to continue, one iteration at a time. The
@@ -494,6 +533,8 @@ are `<id>#1`, `<id>#2`, ...; controller checks run as `<id>~1`, `<id>~2`, ...
     max_iterations: 10      # required hard cap, > 0
     index_input: idx
 ```
+
+Set `cache:` inside `loop.body`; a `cache:` on the outer loop entry is dropped.
 
 ## Command substitution
 

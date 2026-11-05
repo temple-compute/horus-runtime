@@ -65,6 +65,9 @@ and executor config and of their local files (scripts, environment files). The
 manifest is written only after a successful run. Consequences:
 
 - Editing an input, the command, or a script re-runs the task.
+- Input digests follow the task's `cache` mode: `deep` (default) hashes every
+  byte, `fast` checks path, size and whole-second mtime (content only for
+  files under 1 MiB). Each input is digested once per run.
 - A task with no outputs always runs. A missing or unreadable manifest means
   run.
 - `workflow.reset()` / `task.reset()` deletes outputs and the manifest.
