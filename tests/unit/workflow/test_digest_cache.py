@@ -358,7 +358,9 @@ class TestRunCache:
         def task(
             task_id: str, command: str, out: Path, *, reads: bool = False
         ) -> HorusTask:
-            inputs = [FolderArtifact(id="inp", path=Path("data"))]
+            inputs: list[BaseArtifact] = [
+                FolderArtifact(id="inp", path=Path("data"))
+            ]
             return HorusTask(
                 id=task_id,
                 name=task_id,
@@ -380,8 +382,8 @@ class TestRunCache:
             ),
             # Holds r1 back until w runs, past w's dispatch.
             task("d", wait.format(started), work / "d.txt"),
-            task("r1", f"touch {go} {work}/r1.txt", work / "r1.txt", reads=True),
-            task("r2", f"touch {work}/r2.txt", work / "r2.txt", reads=True),
+            task("r1", f"touch {go} {work}/r1", work / "r1", reads=True),
+            task("r2", f"touch {work}/r2", work / "r2", reads=True),
         ]
         order = [("start", "w"), ("start", "d"), ("d", "r1")]
         order += [("w", "r2"), ("r1", "r2")]
