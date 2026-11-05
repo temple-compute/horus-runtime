@@ -645,12 +645,14 @@ class TestYamlLowering:
             "id": "sub",
             "sub": {"kind": "horus_workflow", "name": "child", "tasks": []},
             "port_overrides": {"a": "b"},
+            "cache": "deep",
         }
         lowered = lower_subworkflow_entry(entry)
         assert lowered["kind"] == "subworkflow"
         assert lowered["id"] == "sub"
         assert lowered["body"]["name"] == "child"
         assert lowered["port_overrides"] == {"a": "b"}
+        assert lowered["cache"] == "deep"
 
     def test_lower_entry_missing_sub_raises(self) -> None:
         """A ``sub:`` entry missing the ``sub`` key raises a typed error

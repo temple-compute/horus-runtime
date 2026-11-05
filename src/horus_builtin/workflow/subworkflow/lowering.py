@@ -67,4 +67,6 @@ def lower_subworkflow_entry(entry: dict[str, Any]) -> dict[str, Any]:
         data["max_depth"] = entry["max_depth"]
     if entry.get("target") is not None:
         data["target"] = entry["target"]
+    if entry.get("cache") is not None:
+        data["cache"] = entry["cache"]
     return data

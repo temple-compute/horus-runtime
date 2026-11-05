@@ -505,9 +505,9 @@ edges:
 ```
 
 `cache` precedence for an inner task: its own `cache:`, then the body's
-(`sub.cache`), then the workflow's. A `cache:` next to `sub:` is dropped; the
-long form `kind: subworkflow` with a `body:` block keeps it and ranks it
-between the body and the workflow.
+(`sub.cache`), then the subworkflow task's own `cache:` (next to `sub:`, or
+on the long form `kind: subworkflow` with a `body:` block), then the
+workflow's.
 
 ## Loop (`loop:`)
 
