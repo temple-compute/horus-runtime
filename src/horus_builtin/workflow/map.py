@@ -1355,6 +1355,8 @@ class MapTask(HorusTask):
         removed = [str(root / slot) for slot in self._dropped_slots]
         wf.forget_digests(self.target, removed)
         await _remove_slots(self.target, removed)
+        # Again: a reader may have digested a slot or an ancestor meanwhile.
+        wf.forget_digests(self.target, removed)
         if len(dropped) > _DROPS_LISTED:
             lines.append(
                 _("+%(n)d more") % {"n": len(dropped) - _DROPS_LISTED}

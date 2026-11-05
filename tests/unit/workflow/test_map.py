@@ -4702,6 +4702,45 @@ class TestSlotDigests:
         assert spy.seeded == {(str(root), mode): await _fresh(root, mode)}
         assert spy.on(root) == []
 
+    async def test_digest_taken_during_the_drop_removal_is_forgotten(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A reader that digests a dropped slot while it is being removed
+        leaves no stale digest behind for the readers after the map.
+        """
+        del horus_context
+        wf = _read_map(
+            tmp_path, ["a.txt", "b.txt"], _KEEP_BAD, on_item_failure="drop"
+        )
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        remove = map_module._remove_slots
+
+        async def racing_remove(target: BaseTarget, paths: list[str]) -> None:
+            for path in paths:
+                artifact = FolderArtifact(id="slot", path=Path(path))
+                await wf.digest(target, artifact, "deep")
+            await remove(target, paths)
+
+        monkeypatch.setattr(map_module, "_remove_slots", racing_remove)
+        slot = str(tmp_path / "scored_out" / "1")
+        cached_at_seed: list[str] = []
+        seed = BaseWorkflow.seed_digest
+
+        def spy_seed(wf_: BaseWorkflow, *args: Any) -> None:
+            cached_at_seed.extend(k[2] for k in wf_._digests if k[2] == slot)
+            seed(wf_, *args)
+
+        with patch.object(BaseWorkflow, "seed_digest", spy_seed):
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert not (tmp_path / "scored_out" / "1").exists()
+        assert cached_at_seed == []
+
     async def test_upstream_dropped_slot_and_chained_settle_read_nothing(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
