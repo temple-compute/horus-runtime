@@ -130,3 +130,21 @@ Nothing relies on the cache for correctness outside a run.
   - `cache` stays out of the config hash.
 
 Not checked: other targets' `list_dir` symlink handling, and `generation` on releasable plugin targets after `idle_copy`. I did not run the tests.
+
+## Fix round 1
+
+The findings are numbered in review order: C1 = H1, C2 = H2, C3 = M1, C4 = L1, C5 = L2, C6 = L3, C7 = L4, C8 = L5, C9 = L6.
+
+| Finding | Outcome |
+|---|---|
+| C1 (H1, horus-ssh `preserve`) | Fixed in the horus-ssh repo, not here. |
+| C2 (H2, digest taken while the writer runs) | `f605638`: the scheduler `finally` forgets the task's outputs again. Test: `test_digest_taken_while_writer_runs_is_dropped`. `48c1e42`: a map is exempt, because its clones forget their own slots and the map then seeds its folder digest, which the second forget would drop. |
+| C3 (M1, `cache:` next to `sub:`) | `9519e5d`: `lower_subworkflow_entry` keeps `cache`, and `yaml-schema.md` no longer says it is dropped. |
+| C4 (L1, `_fingerprint` without a context) | `53467a9`: falls back to the uncached `ArtifactStore` path. `test_config_hash_unchanged_without_new_fields` no longer boots a context, so it covers this. The second effect (a booted context with no running workflow ignores the workflow's `cache`) is unchanged: it can only cause a false miss. |
+| C5 (L2, loop inside a subworkflow) | `a54ff71`: each body clone without its own `cache` takes the controller's, and the next controller check carries it. The YAML `loop:` lowering still drops an outer `cache:`, as decided. |
+| C6 (L3, `list_dir` in `_seed_folder_digest`) | `77e2143`: a failed listing seeds nothing, and the readers digest the folder themselves. |
+| C7 (L4, `assert` in `_tree_digest`) | `9dc7104`: raises `ValueError`, which `digest` turns into `None`. |
+| C8 (L5, two location ids share a filesystem) | Rejected: the fix is not trivial. It needs a filesystem identity across location ids (user, SSH vs Slurm, `local://` vs SSH to localhost), and nothing defines whether such mixed targets are supported in one run. |
+| C9 (L6, `os.utime` after the copy) | `cc538d3`: setting the mtime is best-effort (`contextlib.suppress(OSError)`). |
+
+Also in this round: `cb3b520` (performance P1) makes each consumer take its source digests before the transfer. That made `test_chained_clone_recovers_lost_source_item` racy, because its node loss could now land during B[0]'s copy. `b504b74` makes the loss wait until B[0] is done.

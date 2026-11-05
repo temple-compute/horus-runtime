@@ -175,3 +175,26 @@ What the measurement misses:
 | Whole run (rough) | ~940 GB | ~170-200 GB (60 GB of it is M2) | ~0.1-0.5 GB |
 | Cross-location consumers, first run (not the measured setup) | 18 x 108 GB staged | 1x to 18x 108 GB until H1 is fixed | ~0 |
 | tc-os only: `output_digests` | +108 GB+ | +108 GB+ (open) | +108 GB+ (always deep) |
+
+## Fix round 1
+
+The findings are numbered in review order: P1 = H1, P2 = M1, P3 = M2, P4 = M3, P5 = M4, P6 = L1.
+
+| Finding | Outcome |
+|---|---|
+| P1 (H1, first-run consumers digest their staged copy) | `cb3b520`: `_transfer_and_run` awaits `input_digests()` before `transfer_artifacts` for every task with outputs. It does not use `leases.pulling(task)`: the task is already counted as pulling since `member_started`, and that context manager would drop it from the pulling set on exit. Test: `test_first_run_never_digests_a_staged_copy`, with three consumers on three `_FarLocalTarget` locations. Its only digest is the one at the source. `test_run_reuses_resolved_digests[False]` now expects no staged read either. |
+| P2 (M1, `forget_digests` cost) | `5623adf`: an ancestor set plus a `startswith` on a tuple of prefixes. `_nested` is gone. Same semantics, and the forget test now also covers `/`. |
+| P3 (M2, map input read twice) | Rejected for now: not small. It needs `ArtifactStore.digest` (public, also called by tc-plugins) or a sibling method to return the top-level child digests from the Merkle walk, plus seeding in `BaseWorkflow.digest`. It would also need a check that clone item keys equal `root/<name>` for file items, folder items and zip inputs. |
+| P4 (M3, no `-z`/`-printf` fallback) | Known, not in scope. |
+| P5 (M4, fast mode reads every small file) | Known, not in scope. |
+| P6 (L1, parsing on the event loop) | `6901113`: `asyncio.to_thread(_parse_digest, mode, out)` at the call site. |
+| Risk 8: package hash on every unpack | Known, not in scope. |
+| Risk 8: tc-plugins `output_digests` | Known, not in scope (other repo). |
+| Risk 8: horus-ssh perf digests at both ends | Known, not in scope (other repo). |
+
+The bytes-read benchmarks are unchanged, with the same assertions:
+
+- Plain, deep: 6 commands and 48 MiB before; 1 command and 8 MiB after, for the run and for the skip.
+- Plain, fast: 6 commands before; 1 command after; 0 bytes in every case.
+- Map, deep: 4 commands, 8 MiB, 0 on the map root. Without slot digests: 1 command, 8 MiB, 1 on the root. Without the run cache: 3 commands, 24 MiB, 3 on the root.
+- Map, fast: 4 commands, 0 MiB.
