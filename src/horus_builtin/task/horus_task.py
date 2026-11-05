@@ -168,7 +168,10 @@ class HorusTask(BaseTask):
         unless *input_digests* already holds them (digested at their source,
         before any transfer: a digest does not depend on the path).
         """
-        wf = self.workflow
+        try:
+            wf = self.workflow
+        except RuntimeError:  # no booted HorusContext: read uncached
+            wf = None
         digests = dict(input_digests or {})
         for artifact in self.fingerprinted_inputs:
             if artifact.id not in digests:

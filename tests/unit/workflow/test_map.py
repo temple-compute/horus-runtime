@@ -2074,13 +2074,10 @@ class TestDropFailedItems:
         assert event.message is not None
         assert "1 (b.txt): Dropped: exit code 3" in event.message
 
-    async def test_config_hash_unchanged_without_new_fields(
-        self, horus_context: HorusContext
-    ) -> None:
+    async def test_config_hash_unchanged_without_new_fields(self) -> None:
         """A map without zip or drop codes hashes as before; setting either
-        changes the hash.
+        changes the hash. No context is booted: `_fingerprint` works without.
         """
-        del horus_context  # `_fingerprint` reads the context's workflow
         map_task = _map_task(
             over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
         )
