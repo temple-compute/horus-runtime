@@ -479,6 +479,25 @@ class TestHorusTaskInputFingerprint:
         assert task.runs == 1
         assert await task.is_complete() is True
 
+    async def test_is_complete_reuses_staged_digests(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        With the scheduler's source digests staged, the check after
+        dispatch does not read the inputs again.
+        """
+        (tmp_path / "in.txt").write_text("one")
+        task = self._make_copy_task(tmp_path)
+        await task.run()
+        digest = await ArtifactStore(task.target).digest(task.inputs[0])
+        assert digest is not None
+        task._staged_digests = {"src": digest}
+
+        with patch.object(
+            ArtifactStore, "digest", side_effect=AssertionError("read")
+        ):
+            assert await task.is_complete() is True
+
     async def test_manifest_matches_without_reading_the_target(
         self, tmp_path: Path
     ) -> None:

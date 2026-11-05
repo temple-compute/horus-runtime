@@ -427,6 +427,11 @@ async def _transfer_and_run(
 
     # Execute the task on its target and wait for it to finish.
     try:
+        # The task writes its outputs from here: digests of them, or of
+        # folders around them, are stale.
+        workflow.forget_digests(
+            target, [target.path_on_target(o) for o in task.outputs]
+        )
         await target.dispatch(task)
         await target.wait()
     except asyncio.CancelledError:

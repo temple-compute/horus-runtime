@@ -168,11 +168,17 @@ class HorusTask(BaseTask):
         unless *input_digests* already holds them (digested at their source,
         before any transfer: a digest does not depend on the path).
         """
-        store = ArtifactStore(self.target)
+        wf = self.workflow
         digests = dict(input_digests or {})
         for artifact in self.fingerprinted_inputs:
             if artifact.id not in digests:
-                digests[artifact.id] = await store.digest(artifact)
+                digests[artifact.id] = (
+                    await wf.digest(self.target, artifact, wf.cache_mode(self))
+                    if wf is not None
+                    else await ArtifactStore(self.target).digest(
+                        artifact, self.cache or "deep"
+                    )
+                )
         inputs = {
             artifact.id: digests.get(artifact.id) or _UNHASHABLE
             for artifact in self.fingerprinted_inputs
@@ -285,7 +291,8 @@ class HorusTask(BaseTask):
         if recorded is None:
             return False
 
-        digests = None
+        # Inside the scheduler the run's source digests; else staged ones.
+        digests: Mapping[str, str | None] | None = self._staged_digests
         if input_digests is not None:
             digests = await input_digests()
             if None in digests.values():

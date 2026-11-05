@@ -49,7 +49,7 @@ from horus_builtin.workflow.scheduler import (
 )
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.lease import LeaseManager, _FairSlots
 from horus_runtime.core.placement import (
     InsufficientCapacityError,
@@ -1697,11 +1697,11 @@ class TestTaskSkipMiddleware:
         dst = (tmp_path / "dst").as_posix()
 
         async def recording(
-            store: ArtifactStore, artifact: BaseArtifact
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
         ) -> str | None:
             if store.target.working_directory == dst:
                 staged.append(artifact.id)
-            return await digest(store, artifact)
+            return await digest(store, artifact, mode)
 
         wf, consumer = self._build(tmp_path)
         with patch.object(ArtifactStore, "digest", recording):

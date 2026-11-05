@@ -65,7 +65,7 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
-from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.resources import ResourceRequest
@@ -556,10 +556,10 @@ class TestSharedInput:
         original = ArtifactStore.digest
 
         async def spy(
-            self: ArtifactStore, artifact: BaseArtifact
+            self: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
         ) -> str | None:
             hashed.append(artifact.id)
-            return await original(self, artifact)
+            return await original(self, artifact, mode)
 
         wf = _build()
         with patch.object(ArtifactStore, "digest", spy):

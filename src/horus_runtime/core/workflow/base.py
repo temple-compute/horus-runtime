@@ -34,7 +34,7 @@ import asyncio
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from contextlib import nullcontext
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -77,6 +77,7 @@ from horus_runtime.core.artifact.store import (
     CACHE_MODES,
     ArtifactStore,
     CacheMode,
+    digest_mode,
 )
 from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
@@ -136,7 +137,9 @@ class EdgeSource(NamedTuple):
     :class:`TransferEvent`. ``digest`` is the output's content digest, as
     :meth:`ArtifactStore.digest` would compute it, when it is known without
     reading the bytes (e.g. a cached output kept in storage);
-    :meth:`BaseWorkflow.source_digests` then uses it as is. ``into`` is
+    :meth:`BaseWorkflow.source_digests` uses it as is when it was taken in
+    the consumer's cache mode (its prefix says which, see
+    :func:`digest_mode`), and reads the source otherwise. ``into`` is
     the folder a copy from another machine lands in, instead of the
     consumer target's working directory: a copy lands at
     ``<folder>/<name>``, so two inputs that share a name need two folders.
@@ -371,6 +374,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     :meth:`relocate_output`). Consulted by :meth:`_build_source_map`.
     """
 
+    _digests: dict[
+        tuple[str, int, str, CacheMode], "asyncio.Future[str | None]"
+    ] = PrivateAttr(default_factory=dict)
+    """
+    This run's input digests by (location id, machine generation, path on
+    target, mode); see :meth:`digest`.
+    """
+
     _leases: LeaseManager | None = PrivateAttr(default=None)
     """Backing store for :attr:`leases`."""
 
@@ -422,6 +433,87 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self._relocations:
             self._relocations.clear()
             self._revision += 1
+
+    def cache_mode(self, task: BaseTask) -> CacheMode:
+        """*task*'s cache mode: its own, else this workflow's."""
+        return task.cache or self.cache
+
+    @staticmethod
+    def _digest_key(
+        target: BaseTarget, artifact: BaseArtifact, mode: CacheMode
+    ) -> tuple[str, int, str, CacheMode]:
+        """The :attr:`_digests` key of *artifact* on *target* in *mode*."""
+        path = PurePosixPath(target.path_on_target(artifact))
+        return (target.location_id, target.generation, str(path), mode)
+
+    async def digest(
+        self, target: BaseTarget, artifact: BaseArtifact, mode: CacheMode
+    ) -> str | None:
+        """
+        ``ArtifactStore(target).digest(artifact, mode)``, taken once per run:
+        concurrent callers share one, and a ``None`` or an error is never
+        kept. Outside a run nothing is cached.
+        """
+        if self.status is not WorkflowStatus.RUNNING:
+            return await ArtifactStore(target).digest(artifact, mode)
+        key = self._digest_key(target, artifact, mode)
+        while (pending := self._digests.get(key)) is not None:
+            try:
+                return await asyncio.shield(pending)
+            except CancelledError:
+                # The digest we waited on failed: take our own unless we
+                # were the one cancelled.
+                task = asyncio.current_task()
+                if task is None or task.cancelling():
+                    raise
+        pending = asyncio.get_running_loop().create_future()
+        self._digests[key] = pending
+        value = None
+        try:
+            value = await ArtifactStore(target).digest(artifact, mode)
+            pending.set_result(value)
+            return value
+        finally:
+            # No-op once done; after an error it wakes waiters to retry.
+            pending.cancel()
+            if value is None and self._digests.get(key) is pending:
+                del self._digests[key]
+
+    def seed_digest(
+        self,
+        target: BaseTarget,
+        artifact: BaseArtifact,
+        mode: CacheMode,
+        digest: str,
+    ) -> None:
+        """
+        Record *digest* as this run's digest of *artifact* on *target* in
+        *mode*, without reading it. A no-op outside a run.
+        """
+        if self.status is not WorkflowStatus.RUNNING:
+            return
+        future: asyncio.Future[str | None]
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(digest)
+        self._digests[self._digest_key(target, artifact, mode)] = future
+
+    def forget_digests(self, target: BaseTarget, paths: Iterable[str]) -> None:
+        """
+        Drop the digests at, under or above *paths* at *target*'s location,
+        in every machine generation and mode: something is about to write
+        there.
+        """
+        drop = [str(PurePosixPath(p)) for p in paths]
+        location = target.location_id
+        # shortcut: a linear scan per dispatch (~1 ms at 10k entries), index
+        # by location and sorted path if runs grow past that.
+        stale = [
+            key
+            for key in self._digests
+            if key[0] == location and any(_nested(key[2], p) for p in drop)
+        ]
+        for key in stale:
+            del self._digests[key]
 
     # Defined before the lowering hooks below so it runs after them (pydantic
     # runs "before" validators in reverse definition order): every entry is
@@ -1438,6 +1530,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         with scope:
             await strategy.transfer(transfer_art, source_target, destination)
         artifact.path = transfer_art.path
+        if source_target.location_id != task.target.location_id:
+            # A real copy rewrote the destination (an unpack can swap a
+            # folder in place).
+            self.forget_digests(
+                task.target, [task.target.path_on_target(artifact)]
+            )
 
     def _relocated(self, source: EdgeSource | None) -> EdgeSource | None:
         """
@@ -1565,31 +1663,42 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         sha256, a directory's lists relative paths), so it equals the digest
         of the staged copy. A pinned input is digested in place on the task's
         target. A source that carries its digest (:attr:`EdgeSource.digest`)
-        is not read. ``None`` marks an input that could not be digested.
+        in the task's cache mode is not read. ``None`` marks an input that
+        could not be digested. Digests go through :meth:`digest`, so a run
+        reads each input once.
         """
         if source_map is None:
             source_map = self._build_source_map()
 
+        mode = self.cache_mode(task)
+        horus_logger.log.debug(
+            _(
+                "Task %(task_name)s fingerprints its inputs in %(mode)s"
+                " cache mode."
+            )
+            % {"task_name": task.name, "mode": mode}
+        )
         digests: dict[str, str | None] = {}
         for artifact in task.fingerprinted_inputs:
             if only is not None and artifact.id not in only:
                 continue
             if artifact.pinned:
-                digests[artifact.id] = await ArtifactStore(task.target).digest(
-                    artifact
+                digests[artifact.id] = await self.digest(
+                    task.target, artifact, mode
                 )
                 continue
             source = self._relocated(source_map.get((task.id, artifact.id)))
             if source is not None and source.digest is not None:
-                digests[artifact.id] = source.digest
-                continue
+                if digest_mode(source.digest) == mode:
+                    digests[artifact.id] = source.digest
+                    continue
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source
             )
             try:
-                digests[artifact.id] = await ArtifactStore(
-                    source_target
-                ).digest(src_artifact or artifact)
+                digests[artifact.id] = await self.digest(
+                    source_target, src_artifact or artifact, mode
+                )
             except NotImplementedError:
                 # A storage-only source (e.g. an evacuated output) has no
                 # shell to hash with: a miss, so the task just runs.
@@ -1880,6 +1989,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         finally:
             # Clear the context workflow on exit
             ctx.workflow = None
+            self._digests.clear()
 
     @abstractmethod
     async def _run(self, trigger_id: str) -> None:
@@ -1908,3 +2018,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         additional state must be cleared on reset. Do not set ``self.status``
         here; ``reset()`` manages it.
         """
+
+
+def _nested(a: str, b: str) -> bool:
+    """Whether path *a* equals *b* or one of them lies under the other."""
+    return (
+        a == b
+        or a.startswith(b.rstrip("/") + "/")
+        or b.startswith(a.rstrip("/") + "/")
+    )
