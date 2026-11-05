@@ -145,7 +145,8 @@ def _tree_digest(mode: CacheMode, leaves: Mapping[bytes, str]) -> str:
         node = tree
         for part in dirs:
             child = node.setdefault(part, {})
-            assert isinstance(child, dict)  # a file name is never a dir
+            if not isinstance(child, dict):  # changed while it was walked
+                raise ValueError(path)
             node = child
         node[name] = digest
 

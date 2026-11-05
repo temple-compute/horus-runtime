@@ -37,6 +37,7 @@ from horus_runtime.core.artifact.store import (
     SMALL_FILE,
     ArtifactStore,
     CacheMode,
+    _tree_digest,
     compose_folder_digest,
 )
 from horus_runtime.core.transfer.generic import GenericTransfer
@@ -359,6 +360,15 @@ class TestDigestFormat:
         assert await store.digest(_artifact(empty), mode) == (
             compose_folder_digest(mode, {})
         )
+
+    def test_a_name_both_file_and_folder_is_a_miss(self) -> None:
+        """
+        A folder changed while it was walked can list a name as a file and
+        a folder: a ``ValueError``, which ``digest`` turns into ``None``.
+        """
+        leaves = {b"./a": "0" * 64, b"./a/b": "1" * 64}
+        with pytest.raises(ValueError, match="a/b"):
+            _tree_digest("deep", leaves)
 
     async def test_fallbacks_give_the_same_digests(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
