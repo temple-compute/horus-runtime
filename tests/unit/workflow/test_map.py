@@ -4756,6 +4756,38 @@ class TestSlotDigests:
         assert sum(c[2] for c in spy.under(root)) == 0
         assert spy.seeded == {(str(root), "fast"): await _fresh(root, "fast")}
 
+    async def test_a_failed_listing_seeds_nothing(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The folder cannot be listed for the seed: the map still completes,
+        and its reader digests the folder itself.
+        """
+        del horus_context
+        root = tmp_path / "scored_out"
+        list_dir = LocalTarget.list_dir
+        listings: list[str] = []
+
+        async def failing(target: LocalTarget, path: str) -> Any:
+            listings.append(path)
+            # The first listing prunes old slots; the second is the seed's.
+            if listings.count(str(root)) == 2:
+                raise OSError("listing lost")
+            return await list_dir(target, path)
+
+        monkeypatch.setattr(LocalTarget, "list_dir", failing)
+        wf = _read_map(tmp_path, ["a.txt", "b.txt"], _BODY)
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert spy.seeded == {}
+        assert [c[:2] for c in spy.on(root)] == [(str(root), "deep")]
+
     async def test_no_consumer_no_slot_digest(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

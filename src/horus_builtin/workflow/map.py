@@ -1023,12 +1023,13 @@ class MapTask(HorusTask):
             return
         output = self.outputs[0]
         by_slot = {clone.id[len(self.id) + 1 : -1]: clone for clone in clones}
-        listed = [
-            entry.name
-            for entry in await self.target.list_dir(
+        try:
+            entries = await self.target.list_dir(
                 self.target.path_on_target(output)
             )
-        ]
+        except Exception:
+            return  # only a saving: its readers digest the folder themselves
+        listed = [entry.name for entry in entries]
         # Anything but a slot in the folder: its readers digest it whole.
         if not listed or any(name not in by_slot for name in listed):
             return
