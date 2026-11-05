@@ -408,6 +408,9 @@ class LoopController(HorusTask):
         clone_id = f"{self.loop_id}#{iteration}"
         data["id"] = clone_id
         data["name"] = clone_id
+        # The controller's mode, set when a subworkflow inlines the loop.
+        if data.get("cache") is None:
+            data["cache"] = self.cache
         clone = BaseTask.model_validate(data)
         clone.target = clone.target.model_copy(deep=True)
 
@@ -479,6 +482,7 @@ class LoopController(HorusTask):
             signal_output=self.signal_output,
             max_iterations=self.max_iterations,
             index_input=self.index_input,
+            cache=self.cache,
         )
 
     @staticmethod

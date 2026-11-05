@@ -178,6 +178,36 @@ class TestConditionalLoopEndToEnd:
         for task in wf.tasks:
             assert task.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
 
+    async def test_iterations_keep_the_controller_cache(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A controller's ``cache`` (set by a subworkflow it is inlined in)
+        reaches every body iteration and the next controller check.
+        """
+        del horus_context
+        wf = HorusWorkflow(
+            name="wf",
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        controller = wf.loop(
+            id="loop",
+            body=_body_task(_STOP_AT_BODY % {"stop": 1}),
+            until="signal",
+            max_iterations=10,
+            index_input="idx",
+        )
+        controller.cache = "fast"
+
+        await wf.run(trigger_id="loop")
+
+        assert wf.status.value == "completed"
+        loop_tasks = [t for t in wf.tasks if t.id.startswith("loop")]
+        assert len(loop_tasks) > 3
+        assert all(t.cache == "fast" for t in loop_tasks)
+
     async def test_loop_stops_immediately_when_first_body_signals_stop(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
