@@ -2938,7 +2938,11 @@ class TestRestage:
             item = await wait(self, slot, owner=owner, source=source)
             if owner == "b" and slot == "1" and not lost:
                 lost.append(slot)
-                while a.status != TaskStatus.COMPLETED:
+                # Not while B[0] still copies A[0] off the node.
+                while a.status != TaskStatus.COMPLETED or not any(
+                    t.id == "b[0]" and t.status in TERMINAL_STATUSES
+                    for t in wf.tasks
+                ):
                     await asyncio.sleep(0.01)
                 await node.lose()
             return item
