@@ -312,6 +312,19 @@ class TestLocalTargetFileCopy:
             assert os.access(copy, os.W_OK)
         await target.put_file(src, put.as_posix())
 
+    async def test_copy_survives_a_failed_utime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keeping the mtime is best-effort: the copy itself succeeds."""
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"data")
+        dest = tmp_path / "dest.bin"
+        monkeypatch.setattr(os, "utime", Mock(side_effect=PermissionError))
+
+        await LocalTarget().put_file(src, dest.as_posix())
+
+        assert dest.read_bytes() == b"data"
+
 
 @pytest.mark.unit
 class TestLocalTargetStream:

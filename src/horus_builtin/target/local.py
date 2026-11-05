@@ -21,6 +21,7 @@ Local target: executes tasks in the current process, running commands via
 """
 
 import asyncio
+import contextlib
 import os
 import shlex
 import shutil
@@ -53,8 +54,11 @@ def _copy_keeping_mtime(src: Path, dst: Path) -> None:
     the copy read-only.
     """
     shutil.copyfile(src, dst)
-    stat = src.stat()
-    os.utime(dst, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    # Best-effort (e.g. *dst* owned by another user): a lost mtime only
+    # costs a fast-mode miss.
+    with contextlib.suppress(OSError):
+        stat = src.stat()
+        os.utime(dst, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 class LocalChannelProcess(ChannelProcess):
