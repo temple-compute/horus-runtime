@@ -24,6 +24,7 @@ target and performs those operations through the target's artifact-agnostic
 filesystem primitives.
 """
 
+import asyncio
 import hashlib
 import os
 import re
@@ -262,7 +263,8 @@ class ArtifactStore:
         if await proc.wait() != 0:
             return None
         try:
-            return _parse_digest(mode, out)
+            # Off the event loop: ~3-5 us per file, seconds at 1M files.
+            return await asyncio.to_thread(_parse_digest, mode, out)
         except (ValueError, IndexError):
             return None
 
