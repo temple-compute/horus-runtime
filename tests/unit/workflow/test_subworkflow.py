@@ -877,3 +877,56 @@ class TestSubworkflowReset:
 
         assert sub.runs == 0
         assert [a.id for a in sub.outputs] == ["report_out"]
+
+
+@pytest.mark.unit
+class TestCacheModePropagation:
+    """An inner task's ``cache``: its own, else the body's, else the
+    subworkflow task's; unset falls to the parent workflow's.
+    """
+
+    @pytest.mark.parametrize(
+        ("inner", "body", "sub", "expected"),
+        [
+            ("deep", "fast", "fast", "deep"),
+            (None, "fast", "deep", "fast"),
+            (None, None, "fast", "fast"),
+            (None, None, None, None),
+        ],
+    )
+    def test_precedence(
+        self,
+        tmp_path: Path,
+        inner: str | None,
+        body: str | None,
+        sub: str | None,
+        expected: str | None,
+    ) -> None:
+        """A body without ``cache:`` does not force deep over its parent."""
+        child = _child_workflow(_seed_file(tmp_path))
+        child.tasks[0].cache = inner  # type: ignore[assignment]
+        if body is not None:
+            child = HorusWorkflow.model_validate(
+                {**child.model_dump(), "cache": body}
+            )
+        expander = _parent(tmp_path).subworkflow(id="sub", body=child)
+        expander.cache = sub  # type: ignore[assignment]
+
+        tasks = expander._build_inner_tasks(tmp_path)
+
+        assert tasks[0].cache == expected
+        assert all(t.cache == expected for t in tasks if inner is None)
+
+    def test_unset_body_mode_survives_a_round_trip(
+        self, tmp_path: Path
+    ) -> None:
+        """A dumped and reloaded body still sets no ``cache``, so it keeps
+        inheriting instead of forcing the default.
+        """
+        wf = _parent(tmp_path)
+        wf.subworkflow(id="sub", body=_child_workflow(_seed_file(tmp_path)))
+
+        reloaded = HorusWorkflow.model_validate(wf.model_dump(mode="json"))
+
+        expander = _inner(reloaded, "sub")
+        assert "cache" not in expander.body.model_fields_set

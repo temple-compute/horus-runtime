@@ -42,6 +42,7 @@ from pydantic import (
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext, running_task, task_env
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.store import CACHE_MODES, CacheMode
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.executor.exceptions import IncompatibleRuntimeError
 from horus_runtime.core.interaction.transport import BaseInteractionTransport
@@ -54,6 +55,7 @@ from horus_runtime.core.task.exceptions import (
     summarize_exception,
 )
 from horus_runtime.core.task.status import SkipReason, TaskStatus
+from horus_runtime.core.workflow.exceptions import CacheModeError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
@@ -270,6 +272,22 @@ class BaseTask(AutoRegistry, entry_point="task"):
     """
     Whether to skip execution of this task if it is already complete.
     """
+
+    cache: CacheMode | None = None
+    """
+    How this task fingerprints its inputs to decide whether it is complete:
+    ``"deep"`` hashes every byte, ``"fast"`` checks path, size and
+    whole-second mtime (and hashes files under 1 MiB). ``None`` (the
+    default) inherits the workflow's ``cache``.
+    """
+
+    @field_validator("cache", mode="before")
+    @classmethod
+    def _check_cache(cls, value: object) -> object:
+        """Reject an unknown mode with a translated message."""
+        if value is not None and value not in CACHE_MODES:
+            raise CacheModeError(value)
+        return value
 
     interaction: BaseInteractionTransport | None = None
     """

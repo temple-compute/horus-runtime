@@ -34,6 +34,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python_script import PythonScriptRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.task.base import BaseTask
@@ -658,3 +659,30 @@ class TestLocalFilesHooks:
         """
         runtime = PythonScriptRuntime(script=Path("${my_script}"))
         assert runtime.local_files() == []
+
+
+@pytest.mark.unit
+class TestCacheField:
+    """The ``cache`` field on tasks and workflows."""
+
+    def test_unknown_mode_is_rejected_on_task_and_workflow(self) -> None:
+        """Both name the valid modes in the error."""
+        with pytest.raises(ValidationError, match="deep, fast"):
+            HorusTask(
+                id="t",
+                name="t",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                cache="quick",  # type: ignore[arg-type]
+            )
+        with pytest.raises(ValidationError, match="deep, fast"):
+            HorusWorkflow(name="wf", cache="quick")  # type: ignore[arg-type]
+
+    async def test_cache_is_not_in_the_config_hash(
+        self, make_shell_task: MakeTaskType
+    ) -> None:
+        """The digest prefix carries the mode, not the config hash."""
+        task = make_shell_task(cmd="echo hello")
+        before = (await task._fingerprint()).config_hash
+        task.cache = "fast"
+        assert (await task._fingerprint()).config_hash == before

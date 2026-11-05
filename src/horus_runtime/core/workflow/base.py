@@ -50,7 +50,13 @@ from typing import (
 from uuid import UUID, uuid4
 
 import yaml
-from pydantic import Field, PrivateAttr, ValidationInfo, model_validator
+from pydantic import (
+    Field,
+    PrivateAttr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from horus_builtin.workflow.branch import BranchRouter, branch_task
 from horus_builtin.workflow.dag import (
@@ -67,7 +73,11 @@ from horus_builtin.workflow.loop import (
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
 from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.artifact.store import (
+    CACHE_MODES,
+    ArtifactStore,
+    CacheMode,
+)
 from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
@@ -82,6 +92,7 @@ from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import (
     ArtifactIdsAreNotUniqueError,
     ArtifactLostError,
+    CacheModeError,
     DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
     SharedTargetError,
@@ -287,6 +298,28 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     Either way a task failure always results in a ``FAILED`` workflow; the
     policy only controls how much of the DAG gets to run first.
     """
+
+    cache: CacheMode = "deep"
+    """
+    How tasks fingerprint their inputs to decide whether they are complete,
+    unless a task sets its own ``cache``.
+
+    - ``"deep"`` (the default): hash every byte of every input.
+    - ``"fast"``: hash each file's path, size and whole-second mtime, and the
+      content of files under 1 MiB, so big inputs are never read. A same-size
+      rewrite within the same second is missed (a false hit); a ``touch`` or
+      a copy that drops mtimes re-runs the task (a false miss).
+
+    Switching a task's mode re-runs it once.
+    """
+
+    @field_validator("cache", mode="before")
+    @classmethod
+    def _check_cache(cls, value: object) -> object:
+        """Reject an unknown mode with a translated message."""
+        if value is not None and value not in CACHE_MODES:
+            raise CacheModeError(value)
+        return value
 
     _base_directory: Path | None = PrivateAttr(default=None)
     """

@@ -289,6 +289,29 @@ class TestLocalTargetFileCopy:
 
         assert local.read_bytes() == b"data"
 
+    async def test_copies_keep_mtime_but_not_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A copy keeps its source's mtime, so a ``fast`` digest of it matches,
+        but not a read-only mode, so a later copy over it still works.
+        """
+        src = tmp_path / "src.bin"
+        src.write_bytes(b"data")
+        os.utime(src, ns=(1_000_000_000_123, 1_500_000_000_123_456_789))
+        src.chmod(0o444)
+        target = LocalTarget()
+        put = tmp_path / "put.bin"
+        got = tmp_path / "got.bin"
+
+        await target.put_file(src, put.as_posix())
+        await target.get_file_to(src.as_posix(), got)
+
+        for copy in (put, got):
+            assert copy.stat().st_mtime_ns == src.stat().st_mtime_ns
+            assert os.access(copy, os.W_OK)
+        await target.put_file(src, put.as_posix())
+
 
 @pytest.mark.unit
 class TestLocalTargetStream:
