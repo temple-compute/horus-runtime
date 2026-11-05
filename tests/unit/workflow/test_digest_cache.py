@@ -540,3 +540,168 @@ class TestBytesRead:
         n = self.N
         assert before == [(n, n * folder if deep else 0, n)] * 2
         assert after == [(1, folder if deep else 0, 1)] * 2
+
+
+# Every output gets the same mtime, so a rewrite of the same size lands in
+# the same second as the last one (fast sees no change in its stat).
+_SAME_SECOND = "touch -t 202301011200 $out"
+
+_PRODUCER_YAML = """
+name: producer_ran
+kind: horus_workflow
+cache: {mode}
+artifacts: [{{id: seed, kind: file, path: seed.txt}}]
+tasks:
+  - id: p
+    name: p
+    kind: horus_task
+    runtime: {{kind: command, command: "{body} > $out && {touch}"}}
+    executor: {{kind: shell}}
+    inputs: [{{kind: file, id: seed_in, path: seed.txt}}]
+    outputs: [{{kind: file, id: out, path: p.bin}}]
+  - id: c
+    name: c
+    kind: horus_task
+    runtime: {{kind: command, command: "head -c 1 $inp > $out"}}
+    executor: {{kind: shell}}
+    inputs: [{{kind: file, id: inp, path: p.bin}}]
+    outputs: [{{kind: file, id: out, path: c.txt}}]
+edges:
+  - {{source: artifact-seed, source_output: seed,
+     target: p, target_input: seed_in}}
+  - {{source: p, source_output: out, target: c, target_input: inp}}
+"""
+
+_MAP_YAML = """
+name: producer_ran_map
+kind: horus_workflow
+cache: fast
+artifacts: [{id: raw, kind: folder, path: raw}]
+tasks:
+  - kind: horus_map
+    id: proc
+    name: proc
+    over: {input_id: raw_in, as: sample}
+    inputs: [{kind: folder, id: raw_in, path: raw}]
+    outputs: [{kind: folder, id: processed, path: processed}]
+    runtime:
+      kind: command
+      command: >-
+        out=$processed/d.bin && { head -c 1 $sample; head -c 1048576
+        /dev/zero; } > $out && touch -t 202301011200 $out
+    executor: {kind: shell}
+  - kind: horus_map
+    id: post
+    name: post
+    chain: true
+    over: {input_id: proc_in, as: item}
+    inputs: [{kind: folder, id: proc_in, path: processed}]
+    outputs: [{kind: folder, id: sizes, path: sizes}]
+    runtime: {kind: command, command: "head -c 1 $item/d.bin > $sizes/x"}
+    executor: {kind: shell}
+  - id: c
+    name: c
+    kind: horus_task
+    runtime: {kind: command, command: "ls $proc_in > $out"}
+    executor: {kind: shell}
+    inputs: [{kind: folder, id: proc_in, path: processed}]
+    outputs: [{kind: file, id: out, path: c.txt}]
+edges:
+  - {source: artifact-raw, source_output: raw,
+     target: proc, target_input: raw_in}
+  - {source: proc, source_output: processed,
+     target: post, target_input: proc_in}
+  - {source: proc, source_output: processed, target: c, target_input: proc_in}
+"""
+
+
+async def _run_yaml(path: Path, trigger: str) -> dict[str, TaskStatus]:
+    wf = BaseWorkflow.from_yaml(path)
+    await asyncio.wait_for(wf.run(trigger_id=trigger), timeout=30)
+    assert wf.status == WorkflowStatus.COMPLETED
+    return {t.id: t.status for t in wf.tasks}
+
+
+@pytest.mark.unit
+class TestProducerRan:
+    """
+    In ``fast``, an input whose producer ran in this run counts as changed:
+    a rewrite of the same size in the same second keeps its fast digest.
+    """
+
+    @pytest.mark.parametrize(
+        ("mode", "body", "consumer"),
+        [
+            # New content, same size and mtime: deep reads it, fast trusts
+            # that the producer ran.
+            ("deep", "{ cat $seed_in; head -c 1048576 /dev/zero; }", "ran"),
+            ("fast", "{ cat $seed_in; head -c 1048576 /dev/zero; }", "ran"),
+            # The same bytes again: only deep can tell nothing changed.
+            ("deep", "head -c 1048577 /dev/zero", "skipped"),
+            ("fast", "head -c 1048577 /dev/zero", "ran"),
+        ],
+    )
+    async def test_consumer_of_a_rerun_producer(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        mode: CacheMode,
+        body: str,
+        consumer: str,
+    ) -> None:
+        """The producer re-runs on a new seed; its consumer follows in fast."""
+        del horus_context
+        workflow = tmp_path / "wf.yaml"
+        workflow.write_text(
+            _PRODUCER_YAML.format(mode=mode, body=body, touch=_SAME_SECOND)
+        )
+        seed = tmp_path / "seed.txt"
+        seed.write_text("a")
+        done, skipped = TaskStatus.COMPLETED, TaskStatus.SKIPPED
+        assert await _run_yaml(workflow, "p") == {"p": done, "c": done}
+        assert await _run_yaml(workflow, "p") == {"p": skipped, "c": skipped}
+
+        before = (tmp_path / "p.bin").stat()
+        seed.write_text("b")
+        statuses = await _run_yaml(workflow, "p")
+
+        after = (tmp_path / "p.bin").stat()
+        assert (after.st_size, after.st_mtime) == (
+            before.st_size,
+            before.st_mtime,
+        )
+        expected = done if consumer == "ran" else skipped
+        assert statuses == {"p": done, "c": expected}
+
+    async def test_chained_clone_and_map_consumer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A clone that rewrites its slot in the same second re-runs the
+        chained clone of that slot and the map folder's consumer only.
+        """
+        del horus_context
+        workflow = tmp_path / "wf.yaml"
+        workflow.write_text(_MAP_YAML)
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        for name in ("s0", "s1"):
+            (raw / name).write_text(name)
+        assert all(
+            s is TaskStatus.COMPLETED
+            for s in (await _run_yaml(workflow, "proc")).values()
+        )
+
+        # A new first byte: fast reads a small item by content.
+        (raw / "s1").write_text("t1")
+        statuses = await _run_yaml(workflow, "proc")
+
+        done, skipped = TaskStatus.COMPLETED, TaskStatus.SKIPPED
+        clones = {k: v for k, v in statuses.items() if "[" in k}
+        assert clones == {
+            "proc[0]": skipped,
+            "proc[1]": done,
+            "post[0]": skipped,
+            "post[1]": done,
+        }
+        assert statuses["c"] is done

@@ -266,7 +266,10 @@ workflow, then defaults to `deep`. Map clones use the map's `cache`.
 
 `fast` caveats:
 
-- A rewrite with the same size in the same second is not seen (false hit).
+- A rewrite with the same size in the same second is not seen (false hit),
+  unless a task of this run wrote it: an input whose producer ran in this
+  run always counts as changed, so its consumers re-run even if the producer
+  wrote the same bytes. Map clones follow per slot.
 - A `touch`, or a copy that drops mtime, re-runs the task (false miss). Copy
   inputs with their mtime (`cp -p`, `rsync -t`). Local and tar copies made
   by the runtime keep it.

@@ -13,8 +13,9 @@ Set it on the workflow for every task, or on a task to override. Map clones
 use the map's value. For a subworkflow, set it inside `sub:`; for a loop,
 inside `loop.body`.
 
-`fast` misses a same-size rewrite within the same second, and re-runs a task
-when a copy or `touch` changes the mtime. Local copies made by the runtime now
+`fast` misses a same-size rewrite within the same second made outside the run,
+and re-runs a task when a copy or `touch` changes the mtime. An input whose
+producer task ran in this run always counts as changed in `fast`. Local copies made by the runtime now
 keep mtime.
 
 Each input is now digested once per run instead of once per consumer, and a

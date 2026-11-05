@@ -151,6 +151,8 @@ Parsing: split on `\0` (drop only a trailing empty element). `horus-file` deep: 
 | Clone success or skip-complete | slot digested per consumer mode (seeds the slot key) |
 | Map settled | root digest composed and seeded |
 | Run ends, or workflow not `RUNNING` | cache cleared / bypassed |
+| Task executes (`HorusTask._run`) | recorded as ran; a map only once a clone ran |
+| `fast` skip check | an input whose producer ran in this run is a miss (E2E F1); deep unchanged |
 
 ## Work packages
 
@@ -226,6 +228,12 @@ Run WP1, WP2, WP3, WP4 sequentially in this worktree (each builds on the previou
 12. `LocalTarget` copies use `copyfile` + `os.utime`, not `copy2` (PRD allowed either). Reason: `copy2` copies mode bits.
 13. Deferred: seeding on `relocate_output` (PRD Should 1). Reason: optional; without it a consumer of an evacuated copy reads it once per run (cached), and tar keeps whole-second mtimes so fast agrees. See question 6.
 14. Map `stream.close(ok=True)` at `:897` is conditional (deferred when the map can be retried on target loss), so the seed goes right after `_settle`, not "before close" only.
+
+## Follow-ups
+
+- **P3, map items read twice in deep:** a map's collection is digested whole for the map's fingerprint, then each clone digests its item again. Compose the collection digest from the item digests, or seed item digests from the collection read. E2E: 16 of 52 MiB on a first run.
+- **Skipped clones re-digest on re-expansion:** when a map re-expands, every clone digests its item and its slot, even the ones that skip. Reuse the slot digests recorded in each clone's manifest, or skip the slot digest for a skipped clone whose item is unchanged. E2E: 32 MiB in a one-edit deep run.
+- **In-place writers in fast:** the producer rule covers inputs fed by an edge from a task. A task that rewrites a root input in place, same size in the same second, is still a fast false hit.
 
 ## Open questions
 

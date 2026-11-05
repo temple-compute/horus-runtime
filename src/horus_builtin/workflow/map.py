@@ -728,6 +728,25 @@ class MapTask(HorusTask):
             slot_root = root / slot
             await self.target.mkdir(str(slot_root))
             clones.append(self._clone(slot, item, slot_root, paired[slot]))
+        # Who writes each clone input, for the fast skip check: clones have
+        # no edges, and an item of another map is that map's clone's output.
+        maps = {t.id for t in wf.tasks if isinstance(t, MapTask)}
+        writers = {
+            artifact.id: (
+                source.task_id
+                if (source := sources.get((self.id, artifact.id)))
+                else None
+            )
+            for artifact in self.inputs
+        }
+        for slot, clone in zip(slots, clones, strict=True):
+            producers = dict(writers)
+            for pair in (self.over, *self.zip):
+                writer = writers.get(pair.input_id)
+                producers[pair.item_id] = (
+                    f"{writer}[{slot}]" if writer in maps else writer
+                )
+            clone._input_producers = producers  # noqa: SLF001
         # Clone ids repeat across a map retry: a stale record must not read
         # as this run's output. A slot a consumer took keeps it, so that
         # consumer finds the slot lost on a new machine instead of reading
@@ -887,6 +906,9 @@ class MapTask(HorusTask):
                 # source failed); revisit if a source can fail without raising.
                 await asyncio.get_running_loop().create_future()
         await self._settle(wf, root, labels, clones, results)
+        # Ran only if a clone did: one that skipped rewrote nothing.
+        if any(clone.runs for clone in clones):
+            wf.mark_ran(self)
         # Before any close: a chained consumer then finds the root seeded.
         await self._seed_folder_digest(wf, clones, modes)
         # This map's folder is final: its consumers need not wait for the

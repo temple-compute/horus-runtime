@@ -382,6 +382,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     target, mode); see :meth:`digest`.
     """
 
+    _ran: set[str] = PrivateAttr(default_factory=set)
+    """Ids of the tasks that executed in this run; see :meth:`producer_ran`."""
+
+    _ran_sources: tuple[int, dict[tuple[str, str], EdgeSource]] | None = (
+        PrivateAttr(default=None)
+    )
+    """The source map :meth:`producer_ran` reads, rebuilt on a revision."""
+
     _leases: LeaseManager | None = PrivateAttr(default=None)
     """Backing store for :attr:`leases`."""
 
@@ -520,6 +528,35 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         ]
         for key in stale:
             del self._digests[key]
+
+    def mark_ran(self, task: BaseTask) -> None:
+        """Record that *task* executes in this run. A no-op outside a run."""
+        if self.status is WorkflowStatus.RUNNING:
+            self._ran.add(task.id)
+
+    def producer_ran(self, task: BaseTask) -> bool:
+        """
+        Whether *task* is in ``fast`` mode and reads an input whose producer
+        executed in this run. A rewrite of the same size in the same second
+        keeps the fast digest, so such an input counts as changed. Always
+        ``False`` in ``deep``, which reads the content.
+        """
+        if not self._ran or self.cache_mode(task) != "fast":
+            return False
+        producers = task._input_producers  # noqa: SLF001
+        if producers is None:
+            self._ran_sources = self.cached_source_map(self._ran_sources)
+            sources = self._ran_sources[1]
+            producers = {}
+            for artifact in task.fingerprinted_inputs:
+                source = sources.get((task.id, artifact.id))
+                producers[artifact.id] = (
+                    source.task_id if source is not None else None
+                )
+        return any(
+            producers.get(artifact.id) in self._ran
+            for artifact in task.fingerprinted_inputs
+        )
 
     # Defined before the lowering hooks below so it runs after them (pydantic
     # runs "before" validators in reverse definition order): every entry is
@@ -2016,6 +2053,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             # Clear the context workflow on exit
             ctx.workflow = None
             self._digests.clear()
+            self._ran.clear()
 
     @abstractmethod
     async def _run(self, trigger_id: str) -> None:

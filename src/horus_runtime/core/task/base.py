@@ -323,6 +323,12 @@ class BaseTask(AutoRegistry, entry_point="task"):
     staged copies again.
     """
 
+    _input_producers: dict[str, str | None] | None = PrivateAttr(default=None)
+    """
+    Set by a map on its clones, which have no edges: the id of the task that
+    writes each input, ``None`` for a root one. Otherwise the edges tell.
+    """
+
     _retry_on_target_loss: bool = PrivateAttr(default=False)
     """
     Set by the scheduler before dispatch: a :class:`TargetLostError` from

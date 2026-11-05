@@ -23,7 +23,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,9 @@ from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
 from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.i18n import tr as _
+
+if TYPE_CHECKING:
+    from horus_runtime.core.workflow.base import BaseWorkflow
 
 _UNHASHABLE = "unhashable"
 
@@ -98,6 +101,10 @@ class HorusTask(BaseTask):
         )
 
         self.runs += 1
+        # A map counts once a clone of it ran (see MapTask).
+        wf = self._workflow_or_none()
+        if wf is not None and not self.dispatches_children:
+            wf.mark_ran(self)
 
         store = ArtifactStore(self.target)
 
@@ -168,10 +175,7 @@ class HorusTask(BaseTask):
         unless *input_digests* already holds them (digested at their source,
         before any transfer: a digest does not depend on the path).
         """
-        try:
-            wf = self.workflow
-        except RuntimeError:  # no booted HorusContext: read uncached
-            wf = None
+        wf = self._workflow_or_none()  # None: read uncached
         digests = dict(input_digests or {})
         for artifact in self.fingerprinted_inputs:
             if artifact.id not in digests:
@@ -200,6 +204,18 @@ class HorusTask(BaseTask):
         config = json.dumps(payload, sort_keys=True)
         config_hash = hashlib.sha256(config.encode()).hexdigest()
         return TaskFingerprint(inputs=inputs, config_hash=config_hash)
+
+    def _workflow_or_none(self) -> "BaseWorkflow | None":
+        """The running workflow, or ``None`` without a booted context."""
+        try:
+            return self.workflow
+        except RuntimeError:
+            return None
+
+    def _producer_ran(self) -> bool:
+        """See :meth:`BaseWorkflow.producer_ran`; a miss when it did."""
+        wf = self._workflow_or_none()
+        return wf is not None and wf.producer_ran(self)
 
     def _config_extra(self) -> dict[str, Any]:
         """
@@ -290,6 +306,9 @@ class HorusTask(BaseTask):
             if not await store.exists(artifact):
                 return False
 
+        if self._producer_ran():
+            return False
+
         recorded = await self._read_manifest()
         if recorded is None:
             return False
@@ -318,7 +337,7 @@ class HorusTask(BaseTask):
         :meth:`is_complete` would accept with *input_digests*, without
         reading the outputs or the manifest on the target.
         """
-        if not self.outputs:
+        if not self.outputs or self._producer_ran():
             return False
         try:
             recorded = TaskFingerprint.model_validate_json(manifest)
