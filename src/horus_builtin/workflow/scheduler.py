@@ -448,9 +448,12 @@ async def _transfer_and_run(
     finally:
         task._staged_digests = None  # noqa: SLF001
         # A digest taken around the outputs while the task ran is stale too.
-        workflow.forget_digests(
-            target, [target.path_on_target(o) for o in task.outputs]
-        )
+        # Not a map's: each clone forgets its slot as it finishes, and the
+        # map then seeds its folder digest, which this would drop.
+        if not task.dispatches_children:
+            workflow.forget_digests(
+                target, [target.path_on_target(o) for o in task.outputs]
+            )
 
 
 async def _execute_ready_task(
