@@ -1568,13 +1568,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 not the machine's live one and the evacuator recovers
                 nothing.
         """
-        if (
-            not source_target.releasable
-            or source_target.keeps_data_on_release
-            or source.artifact is None
-            or not self.leases.output_lost(
-                str(source.task_id), source.artifact.id, source_target
-            )
+        if source.artifact is None or not self._source_lost(
+            source, source_target
         ):
             return source
         recovered = await self.leases.recover(source)
@@ -1587,6 +1582,22 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self.leases.produced_generation(
                 str(source.task_id), source.artifact.id
             ),
+        )
+
+    def _source_lost(
+        self, source: EdgeSource, source_target: BaseTarget
+    ) -> bool:
+        """
+        Whether *source*'s output went away with a released machine and was
+        not kept: :meth:`_recover_if_lost` must then recover it.
+        """
+        return (
+            source_target.releasable
+            and not source_target.keeps_data_on_release
+            and source.artifact is not None
+            and self.leases.output_lost(
+                str(source.task_id), source.artifact.id, source_target
+            )
         )
 
     def _resolve_source(
@@ -1701,6 +1712,15 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source
             )
+            if (
+                source is not None
+                and source.task_id is not None
+                and self._source_lost(source, source_target)
+            ):
+                # Never touch a lost machine: a miss, so the transfer
+                # recovers the output and the run digests the staged copy.
+                digests[artifact.id] = None
+                continue
             try:
                 digests[artifact.id] = await self.digest(
                     source_target, src_artifact or artifact, mode
