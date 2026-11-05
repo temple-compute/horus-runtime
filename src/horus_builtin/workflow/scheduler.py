@@ -447,6 +447,10 @@ async def _transfer_and_run(
         raise
     finally:
         task._staged_digests = None  # noqa: SLF001
+        # A digest taken around the outputs while the task ran is stale too.
+        workflow.forget_digests(
+            target, [target.path_on_target(o) for o in task.outputs]
+        )
 
 
 async def _execute_ready_task(

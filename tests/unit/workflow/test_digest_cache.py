@@ -339,6 +339,77 @@ class TestRunCache:
             FolderArtifact(id="data", path=data)
         )
 
+    async def test_digest_taken_while_writer_runs_is_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        ``r1`` digests the folder while ``w`` is still running, before it
+        writes; ``r2``, after ``w``, must not reuse that digest.
+        """
+        del horus_context
+        data, work = tmp_path / "data", tmp_path / "work"
+        data.mkdir()
+        work.mkdir()
+        (data / "f.txt").write_text("x")
+        started, go = tmp_path / "started", tmp_path / "go"
+        target = LocalTarget(working_directory=work.as_posix())
+
+        def task(
+            task_id: str, command: str, out: Path, *, reads: bool = False
+        ) -> HorusTask:
+            inputs = [FolderArtifact(id="inp", path=Path("data"))]
+            return HorusTask(
+                id=task_id,
+                name=task_id,
+                inputs=inputs if reads else [],
+                outputs=[FileArtifact(id="out", path=out)],
+                runtime=CommandRuntime(command=command),
+                executor=ShellExecutor(),
+                target=target,
+            )
+
+        wait = "while [ ! -f {0} ]; do sleep 0.05; done"
+        tasks: list[BaseTask] = [
+            task("start", "true", work / "start.txt"),
+            # Writes only once r1 has digested the folder and run.
+            task(
+                "w",
+                f"touch {started}; {wait.format(go)}; echo n > {data}/n.txt",
+                data / "n.txt",
+            ),
+            # Holds r1 back until w runs, past w's dispatch.
+            task("d", wait.format(started), work / "d.txt"),
+            task("r1", f"touch {go} {work}/r1.txt", work / "r1.txt", reads=True),
+            task("r2", f"touch {work}/r2.txt", work / "r2.txt", reads=True),
+        ]
+        order = [("start", "w"), ("start", "d"), ("d", "r1")]
+        order += [("w", "r2"), ("r1", "r2")]
+        edges = [WorkflowEdge(source=a, target=b) for a, b in order] + [
+            WorkflowEdge(
+                source="artifact-data",
+                source_output="data",
+                target=reader,
+                target_input="inp",
+            )
+            for reader in ("r1", "r2")
+        ]
+        wf = HorusWorkflow(
+            name="writer_running",
+            tasks=tasks,
+            edges=edges,
+            artifacts=[FolderArtifact(id="data", path=data)],
+            orchestrator_target=target,
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="start"), timeout=30)
+
+        assert wf.status == WorkflowStatus.COMPLETED
+        before, after = (_manifest_digest(work, r) for r in ("r1", "r2"))
+        assert before != after
+        assert after == await ArtifactStore(LocalTarget()).digest(
+            FolderArtifact(id="data", path=data)
+        )
+
     async def test_deep_and_fast_consumers_invalidate_differently(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
