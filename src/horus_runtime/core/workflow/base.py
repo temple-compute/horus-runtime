@@ -503,14 +503,20 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         in every machine generation and mode: something is about to write
         there.
         """
-        drop = [str(PurePosixPath(p)) for p in paths]
+        drop = [PurePosixPath(p) for p in paths]
+        if not drop:
+            return
         location = target.location_id
-        # shortcut: a linear scan per dispatch (~1 ms at 10k entries), index
-        # by location and sorted path if runs grow past that.
+        # At or above a dropped path, else under one.
+        above = {str(a) for p in drop for a in (p, *p.parents)}
+        under = tuple(str(p).rstrip("/") + "/" for p in drop)
+        # shortcut: a linear scan per dispatch (~1-2 ms at 10k entries),
+        # index by location and sorted path if maps pass 10k slots.
         stale = [
             key
             for key in self._digests
-            if key[0] == location and any(_nested(key[2], p) for p in drop)
+            if key[0] == location
+            and (key[2] in above or key[2].startswith(under))
         ]
         for key in stale:
             del self._digests[key]
@@ -2018,12 +2024,3 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         additional state must be cleared on reset. Do not set ``self.status``
         here; ``reset()`` manages it.
         """
-
-
-def _nested(a: str, b: str) -> bool:
-    """Whether path *a* equals *b* or one of them lies under the other."""
-    return (
-        a == b
-        or a.startswith(b.rstrip("/") + "/")
-        or b.startswith(a.rstrip("/") + "/")
-    )

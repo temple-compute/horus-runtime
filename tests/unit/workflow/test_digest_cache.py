@@ -157,6 +157,7 @@ class TestDigestCache:
             ("elsewhere", 0, "/a/b", "deep"),
         ]
         dropped = [
+            (here, 0, "/", "deep"),
             (here, 0, "/a", "deep"),
             (here, 0, "/a/b", "fast"),
             (here, 3, "/a/b", "deep"),
