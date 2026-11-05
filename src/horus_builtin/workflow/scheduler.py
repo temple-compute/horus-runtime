@@ -407,6 +407,12 @@ async def _transfer_and_run(
     input_digests: "_Once",
 ) -> None:
     """Transfer *task*'s inputs, then dispatch it on *target* and wait."""
+    # A task that fingerprints (it has outputs) digests its inputs at their
+    # source before the transfer, while a releasable source is still there
+    # (it counts as pulling since `member_started`): the source keys are
+    # shared and seeded, so the run never reads a staged copy.
+    if task.outputs:
+        await input_digests()
     # Transfer input artifacts to the task's target as needed.
     await workflow.transfer_artifacts(task, source_map)
     # A streaming map still reads its sources per item: it says when done.

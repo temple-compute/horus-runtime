@@ -31,6 +31,7 @@ import pytest
 from pydantic import Field, PrivateAttr
 
 from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -1166,6 +1167,65 @@ class TestSkipBeforeTransfer:
         assert (phases[0], phases[-1]) == ("started", "finished")
         assert (tmp_path / "dst" / "result.txt").read_text() == "changed\n"
 
+    async def test_first_run_never_digests_a_staged_copy(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Consumers on other locations fingerprint from the source digest
+        (one read, shared), never from their staged copies.
+        """
+        del horus_context
+        src = tmp_path / "src"
+        src.mkdir()
+        producer = HorusTask(
+            id="producer",
+            name="producer",
+            outputs=[FolderArtifact(id="data", path=Path("data"))],
+            runtime=CommandRuntime(
+                command=f"mkdir -p {src}/data && echo hi > {src}/data/f"
+            ),
+            executor=ShellExecutor(),
+            target=_FarLocalTarget(working_directory=src.as_posix()),
+        )
+        consumers: list[BaseTask] = []
+        for i in range(3):
+            dst = tmp_path / f"dst{i}"
+            dst.mkdir()
+            consumers.append(
+                HorusTask(
+                    id=f"c{i}",
+                    name=f"c{i}",
+                    inputs=[FolderArtifact(id="inp", path=Path("data"))],
+                    outputs=[FileArtifact(id="out", path=Path("out.txt"))],
+                    runtime=CommandRuntime(
+                        command=f"ls {dst}/data > {dst}/out.txt"
+                    ),
+                    executor=ShellExecutor(),
+                    target=_FarLocalTarget(working_directory=dst.as_posix()),
+                )
+            )
+        wf = HorusWorkflow(
+            name="far_consumers",
+            tasks=[producer, *consumers],
+            edges=[_edge("producer", "data", c.id, "inp") for c in consumers],
+        )
+        digested: list[str] = []
+        digest = ArtifactStore.digest
+
+        async def spy(
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
+        ) -> str | None:
+            digested.append(store.target.path_on_target(artifact))
+            return await digest(store, artifact, mode)
+
+        with patch.object(ArtifactStore, "digest", spy):
+            await asyncio.wait_for(wf.run(trigger_id="producer"), timeout=30)
+
+        assert wf.status == WorkflowStatus.COMPLETED
+        for i in range(3):
+            assert (tmp_path / f"dst{i}" / "data" / "f").exists()
+        assert digested == [f"{src}/data"]
+
 
 @pytest.mark.unit
 class TestBoundTaskMiddleware:
@@ -1682,8 +1742,9 @@ class TestTaskSkipMiddleware:
         resolved: bool,
     ) -> None:
         """
-        Once the digests were taken at the source, the run fingerprints
-        from them and does not hash its staged inputs again.
+        The run fingerprints from the digests taken at the source, by the
+        middleware or else before the transfer, and never hashes its staged
+        inputs.
         """
         del horus_context, restore_task_skip_registry
 
@@ -1708,7 +1769,7 @@ class TestTaskSkipMiddleware:
             await asyncio.wait_for(wf.run(trigger_id="consumer"), timeout=10)
 
         assert consumer.status == TaskStatus.COMPLETED
-        assert staged == ([] if resolved else ["inp"])
+        assert staged == []
         assert consumer._staged_digests is None
         manifest = json.loads(
             (tmp_path / "dst" / ".horus" / "consumer.json").read_text()
