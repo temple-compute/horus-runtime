@@ -52,6 +52,7 @@ from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
+from horus_runtime.core.artifact.store import CacheMode, compose_folder_digest
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import (
     MAX_TARGET_LOSS_RETRIES,
@@ -824,10 +825,12 @@ class MapTask(HorusTask):
         # pending clones run on it.
         self.target.on_ready(self._restage)
 
+        modes = self._consumer_modes(wf)
         run_clone = partial(
             self._run_item,
             stream,
             waits,
+            modes,
             partial(
                 execute_task,
                 wf,
@@ -883,7 +886,9 @@ class MapTask(HorusTask):
                 # shortcut: parked until the scheduler cancels this map (its
                 # source failed); revisit if a source can fail without raising.
                 await asyncio.get_running_loop().create_future()
-        await self._settle(root, labels, clones, results)
+        await self._settle(wf, root, labels, clones, results)
+        # Before any close: a chained consumer then finds the root seeded.
+        await self._seed_folder_digest(wf, clones, modes)
         # This map's folder is final: its consumers need not wait for the
         # digests below, unless a lost machine there can retry this map.
         if not (
@@ -919,16 +924,18 @@ class MapTask(HorusTask):
         self,
         stream: _ItemStream,
         waits: Mapping[str, list[Callable[[], Awaitable[_Item]]]],
+        modes: set[CacheMode],
         run_task: Callable[[BaseTask], Awaitable[None]],
         clone: BaseTask,
     ) -> BaseException | None:
         """
-        Run *clone* once each item it *waits* for is ready, and publish how
-        it settled on *stream*. The wait comes first, so a waiting clone
-        holds no slot, placement or lease. An item dropped upstream skips
-        the clone. When it exits with one of :attr:`drop_exit_codes`, mark
-        it dropped. A droppable failure is returned, not raised, so it does
-        not cancel the siblings; :meth:`_settle` drops its slot.
+        Run *clone* once each item it *waits* for is ready, digest its slot
+        in the consumers' cache *modes*, and publish how it settled on
+        *stream*. The wait comes first, so a waiting clone holds no slot,
+        placement or lease. An item dropped upstream skips the clone. When it
+        exits with one of :attr:`drop_exit_codes`, mark it dropped. A
+        droppable failure is returned, not raised, so it does not cancel the
+        siblings; :meth:`_settle` drops its slot.
         """
         slot = clone.id[len(self.id) + 1 : -1]
         try:
@@ -965,11 +972,86 @@ class MapTask(HorusTask):
             stream.failed()
             raise
         else:
+            # Before ready: a chained clone reading the slot shares it.
+            await self._digest_slot(clone, modes)
             stream.ready(slot)
             return None
         finally:
             # Cancelled, or never settled: its consumer must not wait on.
             stream.failed(slot)
+
+    def _consumer_modes(self, wf: BaseWorkflow) -> set[CacheMode]:
+        """The cache modes this map's output is read in by its consumers."""
+        tasks = {task.id: task for task in wf.tasks}
+        return {
+            wf.cache_mode(tasks[edge.target])
+            for edge in wf.edges
+            if edge.source == self.id
+            and edge.transfer
+            and edge.target in tasks
+        }
+
+    async def _digest_slot(
+        self, clone: BaseTask, modes: set[CacheMode]
+    ) -> None:
+        """
+        Digest *clone*'s slot on its own machine, once per run and mode, for
+        the folder digest and the slot's readers.
+        """
+        wf = self.workflow
+        if wf is None:
+            return
+        for mode in sorted(modes):
+            try:
+                await wf.digest(clone.target, clone.outputs[0], mode)
+            except Exception as exc:
+                # Only a saving: a reader digests the slot itself.
+                horus_logger.log.debug(
+                    _("Could not digest the slot of %(task_name)s: %(error)s")
+                    % {"task_name": clone.name, "error": exc}
+                )
+
+    async def _seed_folder_digest(
+        self, wf: BaseWorkflow, clones: list[BaseTask], modes: set[CacheMode]
+    ) -> None:
+        """
+        Record this map's folder digest in each of *modes*, composed from its
+        slots' digests instead of reading the folder again: equal to a
+        recompute, as a folder digest is its entries' digests composed.
+        """
+        if not modes:
+            return
+        output = self.outputs[0]
+        by_slot = {clone.id[len(self.id) + 1 : -1]: clone for clone in clones}
+        listed = [
+            entry.name
+            for entry in await self.target.list_dir(
+                self.target.path_on_target(output)
+            )
+        ]
+        # Anything but a slot in the folder: its readers digest it whole.
+        if not listed or any(name not in by_slot for name in listed):
+            return
+        for mode in sorted(modes):
+            children: dict[str | bytes, str] = {}
+            for name in listed:
+                clone = by_slot[name]
+                try:
+                    digest = await wf.digest(
+                        clone.target, clone.outputs[0], mode
+                    )
+                except Exception:
+                    digest = None  # its readers digest the folder themselves
+                if digest is None:
+                    break
+                children[name] = digest
+            else:
+                wf.seed_digest(
+                    self.target,
+                    output,
+                    mode,
+                    compose_folder_digest(mode, children),
+                )
 
     def _mark_upstream_dropped(
         self, clone: BaseTask, slot: str, origin: str
@@ -1203,6 +1285,7 @@ class MapTask(HorusTask):
 
     async def _settle(
         self,
+        wf: BaseWorkflow,
         root: Path,
         labels: dict[str, str],
         clones: list[BaseTask],
@@ -1268,9 +1351,9 @@ class MapTask(HorusTask):
             )
             if len(lines) < _DROPS_LISTED:
                 lines.append(f"{slot} ({label}): {summary}")
-        await _remove_slots(
-            self.target, [str(root / slot) for slot in self._dropped_slots]
-        )
+        removed = [str(root / slot) for slot in self._dropped_slots]
+        wf.forget_digests(self.target, removed)
+        await _remove_slots(self.target, removed)
         if len(dropped) > _DROPS_LISTED:
             lines.append(
                 _("+%(n)d more") % {"n": len(dropped) - _DROPS_LISTED}
