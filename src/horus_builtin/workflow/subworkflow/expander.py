@@ -186,6 +186,14 @@ class SubworkflowExpander(HorusTask):
         del input_digests
         return False
 
+    @property
+    def fingerprinted_inputs(self) -> list[BaseArtifact]:
+        """
+        None: the expander never fingerprints, so the scheduler must not
+        digest its inputs before the transfer.
+        """
+        return []
+
     async def _reset(self) -> None:
         """
         Delete the (never-written) port placeholders, mirroring

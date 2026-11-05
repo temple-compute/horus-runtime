@@ -357,6 +357,19 @@ class TestSubworkflowInliningEndToEnd:
 
         assert await sub.is_complete() is False
 
+    def test_expander_inputs_are_never_fingerprinted(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        The expander never fingerprints, so the scheduler must not digest
+        what feeds its ports before the transfer.
+        """
+        sub = SubworkflowExpander(
+            id="sub", name="sub", body=_child_workflow(_seed_file(tmp_path))
+        )
+        assert sub.inputs
+        assert sub.fingerprinted_inputs == []
+
 
 @pytest.mark.unit
 class TestBoundaryWiring:

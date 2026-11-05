@@ -112,6 +112,23 @@ class TestLoopControllerValidation:
         )
         assert any(a.id == "loop~1.loop_in" for a in checker.inputs)
 
+    def test_inputs_are_never_fingerprinted(self) -> None:
+        """
+        A controller never fingerprints, so the scheduler must not digest
+        its inputs at their source before the transfer.
+        """
+        checker = LoopController(
+            id="loop~1",
+            name="loop~1",
+            loop_id="loop",
+            iteration=1,
+            body_template={"kind": "horus_task"},
+            signal_output="signal",
+            max_iterations=3,
+        )
+        assert checker.inputs
+        assert checker.fingerprinted_inputs == []
+
     def test_markers_not_duplicated_on_reload(self) -> None:
         """Re-validating an already-marked controller does not duplicate
         markers (idempotent).
