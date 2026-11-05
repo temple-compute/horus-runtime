@@ -7,8 +7,8 @@ findutils, local SSD. horus-ssh: branch `cache-modes` at dce1760.
 Result: pass. Second runs skip everything in both modes, and an edit re-runs
 only the affected chain. Deep reads 2.5x to 4x fewer bytes than the
 baseline, fast reads 39 bytes per run, and the SSH round trip keeps mtimes.
-One finding (F1): fast misses a change when a producer re-runs inside the
-same second as its previous write.
+One finding (F1): fast missed a change when a producer re-ran inside the
+same second as its previous write. Fixed; see [F1 fix](#f1-fix).
 
 ## Workflow
 
@@ -167,13 +167,45 @@ targets with different location ids.
       producer ran in this run;
     - or compare sub-second mtimes for outputs that stay on the producer's
       machine (copies made with tar or scp keep whole seconds only).
-  - Not fixed here.
+  - Fixed: see [F1 fix](#f1-fix).
 - **F2 (known, P3): map items are read twice in deep mode,** once in the
   folder digest and once per clone. That is 16 of the 52 MiB in run 1.
 - **F3: a re-expanded map re-digests every item and slot,** even for clones
   that skip (32 MiB in deep run 3).
 - **F4 (known): folder unpack hashes the package** on every transfer
   (8 MiB per SSH run 1).
+
+## F1 fix
+
+In `fast`, an input whose producer task ran in this run counts as changed for
+its consumer's skip check. `deep` is unchanged.
+
+- `HorusTask._run` records the task as ran. A map counts only once one of its
+  clones ran.
+- `HorusTask.is_complete` and `manifest_matches` return `False` when
+  `BaseWorkflow.producer_ran` says so. That covers the pre-transfer check,
+  `run()`'s own check and skip middleware.
+- Clones have no edges, so the map records each clone input's producer. An
+  item of another map comes from that map's clone of the same slot. Other
+  slots still skip.
+- Unit tests in `TestProducerRan` (`test_digest_cache.py`) force a same-size,
+  same-second rewrite with `touch -t`. Without the fix the fast cases and the
+  chained map case fail.
+
+E2E fast case re-run on a fresh directory, same sequence as above:
+
+| Run | Digest commands | Bytes | Ran |
+|---|---|---|---|
+| 1 | 14 | 39 B | all |
+| 2 | 4 | 39 B | `start` only |
+| 3, edit `raw/s1.bin` | 14 | 39 B | `proc[1]`, `post[1]`, `c1`-`c3`, `report`, `rawlist` |
+| 4 | 4 | 39 B | `start` only |
+
+- Run 3 met the F1 conditions again: `proc[1]` rewrote
+  `out/processed/1/data.bin` in the same second as run 1's write (19:25:40).
+  Its consumers now re-run.
+- `report` also re-runs in fast, because its producer `post` ran. Deep skips
+  it, since the sizes did not change.
 
 ## Reproduce
 
