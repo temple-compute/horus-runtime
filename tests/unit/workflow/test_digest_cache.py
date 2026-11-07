@@ -373,7 +373,7 @@ class TestRunCache:
 
         wait = "while [ ! -f {0} ]; do sleep 0.05; done"
         tasks: list[BaseTask] = [
-            task("start", "true", work / "start.txt"),
+            task("start", f"touch {work}/start.txt", work / "start.txt"),
             # Writes only once r1 has digested the folder and run.
             task(
                 "w",
@@ -381,7 +381,11 @@ class TestRunCache:
                 data / "n.txt",
             ),
             # Holds r1 back until w runs, past w's dispatch.
-            task("d", wait.format(started), work / "d.txt"),
+            task(
+                "d",
+                f"{wait.format(started)}; touch {work}/d.txt",
+                work / "d.txt",
+            ),
             task("r1", f"touch {go} {work}/r1", work / "r1", reads=True),
             task("r2", f"touch {work}/r2", work / "r2", reads=True),
         ]
