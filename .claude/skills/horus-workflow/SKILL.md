@@ -35,7 +35,8 @@ companion `horus-plugin` skill.
   `.horus/<task_id>.json` (in the target's working directory) still matches:
   input digests, runtime and executor config, and local code files (scripts,
   env files). Change an input or the command and the task runs again. A task
-  with **no** outputs always runs.
+  with **no** outputs always runs. `cache: fast` (workflow or task) checks
+  inputs by path, size and mtime, so large files are not read.
 - A **trigger** task starts a run. Scope = the trigger, its descendants, and
   the ancestors of every descendant (so a join's other parents run too).
   Complete tasks in scope are skipped; unrelated branches never run.

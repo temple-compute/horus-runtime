@@ -1305,6 +1305,25 @@ class TestLostArtifacts:
         assert relocated.artifact is not None
         assert Path(relocated.artifact.path) == evacuator.recovered
 
+    async def test_source_digest_skips_a_lost_machine(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The digest before the transfer never touches a lost machine: a
+        miss, so the transfer recovers the output as before.
+        """
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _step("a", node, tmp_path)
+        b = _step("b", LocalTarget(), tmp_path, inputs=["x"])
+        wf = _workflow(tmp_path, [a, b], [_edge("a", "b", "x")])
+        wf.leases._produced[("a", "out")] = 1
+        node._node.update(live=True, gen=2)
+
+        with patch.object(type(wf), "digest") as digest:
+            assert await wf.source_digests(b) == {"x": None}
+        digest.assert_not_called()
+
     async def test_nothing_recovered_raises(
         self,
         tmp_path: Path,

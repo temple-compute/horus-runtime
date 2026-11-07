@@ -24,11 +24,15 @@ target and performs those operations through the target's artifact-agnostic
 filesystem primitives.
 """
 
+import asyncio
 import hashlib
+import os
+import re
 import secrets
 import shlex
+from collections.abc import Mapping
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
 from horus_runtime.core.target.base import BaseTarget
@@ -37,14 +41,201 @@ from horus_runtime.i18n import tr as _
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
 
-_SHA256_HEX_LEN = 64
-"""Length of a hex-encoded sha256, used to sanity-check command output."""
+CacheMode = Literal["deep", "fast"]
+"""How an input is fingerprinted: ``deep`` hashes every byte, ``fast`` hashes
+path, size and whole-second mtime, plus the content of small files."""
 
-_DIR_MARKER = "horus-dir"
-"""First line of a directory's digest listing, telling it from a file's."""
+CACHE_MODES: tuple[CacheMode, ...] = ("deep", "fast")
+"""Every cache mode, in the order error messages list them."""
+
+SMALL_FILE = 1 << 20
+"""``fast`` hashes files with a size below this by content."""
+
+_PREFIX: dict[CacheMode, str] = {"deep": "deep:", "fast": "fast:"}
+_TREE_TAG = b"horus-tree\n"
+_STAT_TAG = b"horus-stat\n"
+_HEX = re.compile(rb"[0-9a-f]{64}")
+
+_DIGEST_PRELUDE = r"""export LC_ALL=C
+h=sha256sum; command -v sha256sum >/dev/null || h='shasum -a 256'
+st='stat -L -c %s:%Y'; stat -L -c %s / >/dev/null 2>&1 || st='stat -L -f %z:%m'
+export h st
+z=; printf '' | $h -z >/dev/null 2>&1 && z=1
+hashes() {
+  if [ -n "$z" ]; then find . -type f "$@" -print0 | xargs -0 -r sh -c \
+    'printf "horus-names\0%s\0" $#; printf "%s\0" "$@"; $h -z "$@"' sh
+  else find . -type f "$@" -exec sh -c \
+    'for f; do printf "%s  %s\0" "$($h < "$f" | cut -c1-64)" "$f"; done' \
+    sh {} +
+  fi
+}
+stats() {
+  if find . -maxdepth 0 -printf '' 2>/dev/null; then
+    find . -type f -printf '%s:%T@ %p\0'
+  else find . -type f -exec sh -c \
+    'for f; do printf "%s %s\0" "$($st "$f")" "$f"; done' sh {} +
+  fi
+}
+"""
+"""Shell helpers of the digest command: ``hashes`` prints ``<hex>  <path>``
+records and ``stats`` prints ``<size>:<mtime> <path>`` records, each ending in
+NUL, through GNU tools or a fork-per-file fallback (busybox, macOS). A file's
+size and mtime come from ``find -printf`` too where it exists, since uutils
+``stat`` rounds ``%Y`` where GNU truncates. With
+``-z``, each batch of ``hashes`` first prints ``horus-names``, its count and
+the names as ``find`` gave them: uutils ``sha256sum`` rewrites non-UTF-8
+names in its output."""
+
+_DIGEST_BODY: dict[CacheMode, str] = {
+    "deep": r"""if [ -d "$p" ]; then
+  cd "$p" || exit 1; printf 'horus-tree\0'; hashes
+elif [ -f "$p" ]; then
+  printf 'horus-file\0'; $h < "$p"
+else exit 1; fi""",
+    "fast": r"""if [ -d "$p" ]; then
+  cd "$p" || exit 1; printf 'horus-tree\0'
+  stats && printf 'horus-content\0' && hashes -size -1048576c
+elif [ -f "$p" ]; then
+  printf 'horus-file\0'
+  s=$(find -L "$p" -maxdepth 0 -printf '%s:%T@' 2>/dev/null) && [ -n "$s" ] ||
+    s=$($st "$p") || exit 1
+  printf '%s\0' "$s"
+  if [ "${s%%:*}" -lt 1048576 ]; then $h < "$p"; fi
+else exit 1; fi""",
+}
+"""Per-mode part of the digest command, run on the path in ``$p``."""
 
 _STDERR_TAIL = 2000
 """Max characters of a failed command's stderr kept in the error message."""
+
+
+def digest_mode(digest: str) -> CacheMode:
+    """The cache mode *digest* was taken in."""
+    return "fast" if digest.startswith(_PREFIX["fast"]) else "deep"
+
+
+def compose_folder_digest(
+    mode: CacheMode, children: Mapping[str | bytes, str]
+) -> str:
+    """
+    Digest of a folder whose entries digest to *children* (name -> digest),
+    equal to :meth:`ArtifactStore.digest` of that folder. A child with the
+    empty-folder digest is left out, so a subtree with no file never counts.
+    """
+    empty = _PREFIX[mode] + hashlib.sha256(_TREE_TAG).hexdigest()
+    entries = sorted(
+        (os.fsencode(name), digest)
+        for name, digest in children.items()
+        if digest != empty
+    )
+    body = b"".join(name + b"\0" + d.encode() + b"\0" for name, d in entries)
+    return _PREFIX[mode] + hashlib.sha256(_TREE_TAG + body).hexdigest()
+
+
+def _leaf(
+    mode: CacheMode, size: int, mtime: int, content: str | None
+) -> str | None:
+    """A file's public digest from its size, whole-second mtime and hash."""
+    if mode == "deep":
+        return content
+    if size < SMALL_FILE:
+        return None if content is None else _PREFIX["fast"] + content
+    stat = _STAT_TAG + b"%d:%d" % (size, mtime)
+    return _PREFIX["fast"] + hashlib.sha256(stat).hexdigest()
+
+
+_Tree = dict[bytes, "_Tree | str"]
+
+
+def _tree_digest(mode: CacheMode, leaves: Mapping[bytes, str]) -> str:
+    """Fold relative paths (``b"./a/b"``) -> leaf digest into folders."""
+    tree: _Tree = {}
+    for path, digest in leaves.items():
+        *dirs, name = path.removeprefix(b"./").split(b"/")
+        node = tree
+        for part in dirs:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):  # changed while it was walked
+                raise ValueError(path)
+            node = child
+        node[name] = digest
+
+    def walk(node: _Tree) -> str:
+        return compose_folder_digest(
+            mode,
+            {n: c if isinstance(c, str) else walk(c) for n, c in node.items()},
+        )
+
+    return walk(tree)
+
+
+def _hex(record: bytes) -> str | None:
+    """The sha256 hex at the start of a hasher's output record."""
+    head = record[:64]
+    return head.decode() if _HEX.fullmatch(head) else None
+
+
+def _hash_record(record: bytes) -> str:
+    """The hex of a ``<hex>  <path>`` record; :class:`ValueError` if not."""
+    hexd = _hex(record)
+    if hexd is None or record[64:66] not in (b"  ", b" *"):
+        raise ValueError(record)
+    return hexd
+
+
+def _parse_digest(mode: CacheMode, out: bytes) -> str | None:
+    """
+    Public digest from the digest command's NUL-separated output. Raises
+    :class:`ValueError` (or :class:`IndexError`) on a malformed record.
+    """
+    records = out.split(b"\0")
+    if records[-1] == b"":
+        records.pop()
+    head, *rest = records
+    if head == b"horus-file":
+        if mode == "deep":
+            (record,) = rest
+            return _hex(record)
+        size, mtime = rest[0].split(b":")
+        (content,) = [_hex(r) for r in rest[1:]] or [None]
+        return _leaf(mode, int(size), int(mtime.split(b".")[0]), content)
+    if head != b"horus-tree":
+        raise ValueError(head)
+
+    stats: list[bytes] = []
+    if mode == "fast":
+        split = rest.index(b"horus-content")
+        stats, rest = rest[:split], rest[split + 1 :]
+    contents: dict[bytes, str] = {}
+    i = 0
+    while i < len(rest):
+        if rest[i] != b"horus-names":
+            contents[rest[i][66:]] = _hash_record(rest[i])
+            i += 1
+            continue
+        n = int(rest[i + 1])
+        names = rest[i + 2 : i + 2 + n]
+        hashed = rest[i + 2 + n : i + 2 + 2 * n]
+        if len(hashed) != n:  # a short batch also leaves names short
+            raise ValueError(rest[i:])
+        for name, record in zip(names, hashed, strict=True):
+            contents[name] = _hash_record(record)
+        i += 2 + 2 * n
+    if mode == "deep":
+        return _tree_digest(mode, contents)
+
+    leaves: dict[bytes, str] = {}
+    for record in stats:
+        stat, path = record.split(b" ", 1)
+        size, mtime = stat.split(b":")
+        # %T@ carries fractions; whole seconds survive tar, scp and SFTP.
+        leaf = _leaf(
+            mode, int(size), int(mtime.split(b".")[0]), contents.get(path)
+        )
+        if leaf is None:
+            return None
+        leaves[path] = leaf
+    return _tree_digest(mode, leaves)
 
 
 class ArtifactStore:
@@ -64,42 +255,44 @@ class ArtifactStore:
             self.target.path_on_target(artifact)
         )
 
-    async def digest(self, artifact: "BaseArtifact") -> str | None:
+    async def digest(
+        self, artifact: "BaseArtifact", mode: CacheMode = "deep"
+    ) -> str | None:
         """
-        sha256 of *artifact*'s bytes as they are on the target, or ``None``
-        when it cannot be hashed (missing, unreadable, no hashing tool).
+        Digest of *artifact* as it is on the target in cache *mode*, or
+        ``None`` when it cannot be taken (missing, unreadable, no hashing
+        tool, unexpected output).
 
-        A directory digests to the sha256 of its sorted ``<sha256>  <relative
-        path>`` listing, so editing, adding, removing or renaming any file in
-        it changes the digest. Without that a folder input could never
-        invalidate a fingerprint, and a task fed a changed folder skipped as
-        already complete.
+        - ``deep``: a file digests to the sha256 of its bytes; a folder to
+          ``deep:`` plus a Merkle hash of its regular files' contents and
+          relative paths, so editing, adding, removing or renaming any file
+          in it changes the digest.
+        - ``fast``: ``fast:`` plus the same Merkle shape over each file's
+          size and whole-second mtime, or its content when it is smaller than
+          :data:`SMALL_FILE`, so big files are never read.
 
-        Hashing happens target-side through the shell channel, like
+        A folder's digest equals :func:`compose_folder_digest` of its
+        entries' digests, and never depends on its own path. Hashing happens
+        target-side through the shell channel in one command, like
         :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
-        works for any target without a new primitive. ``shasum`` is the
-        fallback because macOS ships no ``sha256sum``.
+        works for any target without a new primitive. ``shasum``, BSD
+        ``stat`` and a per-file loop are the fallbacks for macOS and busybox.
         """
         path = shlex.quote(self.target.path_on_target(artifact))
-        # ponytail: empty directories and file modes are not part of a
-        # folder's digest, only regular files' contents and relative paths.
+        # ponytail: empty directories, symlinks inside a folder and file
+        # modes are not part of a folder's digest, only regular files.
+        script = f"p={path}\n{_DIGEST_PRELUDE}{_DIGEST_BODY[mode]}"
         proc = await self.target.run_command_sync(
-            "h=sha256sum; command -v sha256sum >/dev/null || h='shasum -a 256'"
-            f"; if [ -d {path} ]; then printf '{_DIR_MARKER}\\n' && cd {path}"
-            " && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r $h"
-            f"; else $h {path}; fi 2>/dev/null"
+            f"{{ {script}\n}} 2>/dev/null"
         )
         out, _stderr = await proc.communicate()
         if await proc.wait() != 0:
             return None
-
-        if out.startswith(f"{_DIR_MARKER}\n".encode()):
-            return hashlib.sha256(out).hexdigest()
-
-        fields = out.decode(errors="replace").split()
-        if not fields or len(fields[0]) != _SHA256_HEX_LEN:
+        try:
+            # Off the event loop: ~3-5 us per file, seconds at 1M files.
+            return await asyncio.to_thread(_parse_digest, mode, out)
+        except (ValueError, IndexError):
             return None
-        return fields[0]
 
     async def delete(self, artifact: "BaseArtifact") -> None:
         """

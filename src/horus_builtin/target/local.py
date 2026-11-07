@@ -21,6 +21,7 @@ Local target: executes tasks in the current process, running commands via
 """
 
 import asyncio
+import contextlib
 import os
 import shlex
 import shutil
@@ -44,6 +45,20 @@ from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
 
 _READ_CHUNK = 8 * 1024 * 1024
+
+
+def _copy_keeping_mtime(src: Path, dst: Path) -> None:
+    """
+    Copy *src* to *dst* with its times, so a ``fast`` digest of the copy
+    matches the source's, but not its mode: a read-only source must not make
+    the copy read-only.
+    """
+    shutil.copyfile(src, dst)
+    # Best-effort (e.g. *dst* owned by another user): a lost mtime only
+    # costs a fast-mode miss.
+    with contextlib.suppress(OSError):
+        stat = src.stat()
+        os.utime(dst, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 class LocalChannelProcess(ChannelProcess):
@@ -292,7 +307,7 @@ class LocalTarget(BaseTarget):
         if isinstance(content, (bytes, bytearray)):
             dest.write_bytes(content)
         else:
-            shutil.copyfile(content, dest)
+            _copy_keeping_mtime(content, dest)
 
     async def get_file(self, remote_path: str) -> bytes:
         """
@@ -314,7 +329,7 @@ class LocalTarget(BaseTarget):
             remote_path: Source path (mapped to a local ``Path``).
             local_path: Destination file.
         """
-        shutil.copyfile(Path(remote_path), local_path)
+        _copy_keeping_mtime(Path(remote_path), local_path)
 
     async def read_range(
         self, remote_path: str, offset: int, length: int

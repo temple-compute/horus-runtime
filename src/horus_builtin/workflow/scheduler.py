@@ -407,6 +407,12 @@ async def _transfer_and_run(
     input_digests: "_Once",
 ) -> None:
     """Transfer *task*'s inputs, then dispatch it on *target* and wait."""
+    # A task that fingerprints (it has outputs) digests its inputs at their
+    # source before the transfer, while a releasable source is still there
+    # (it counts as pulling since `member_started`): the source keys are
+    # shared and seeded, so the run never reads a staged copy.
+    if task.outputs:
+        await input_digests()
     # Transfer input artifacts to the task's target as needed.
     await workflow.transfer_artifacts(task, source_map)
     # A streaming map still reads its sources per item: it says when done.
@@ -427,6 +433,11 @@ async def _transfer_and_run(
 
     # Execute the task on its target and wait for it to finish.
     try:
+        # The task writes its outputs from here: digests of them, or of
+        # folders around them, are stale.
+        workflow.forget_digests(
+            target, [target.path_on_target(o) for o in task.outputs]
+        )
         await target.dispatch(task)
         await target.wait()
     except asyncio.CancelledError:
@@ -442,6 +453,13 @@ async def _transfer_and_run(
         raise
     finally:
         task._staged_digests = None  # noqa: SLF001
+        # A digest taken around the outputs while the task ran is stale too.
+        # Not a map's: each clone forgets its slot as it finishes, and the
+        # map then seeds its folder digest, which this would drop.
+        if not task.dispatches_children:
+            workflow.forget_digests(
+                target, [target.path_on_target(o) for o in task.outputs]
+            )
 
 
 async def _execute_ready_task(

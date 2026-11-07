@@ -42,7 +42,9 @@ from horus_builtin.workflow.dag import (
     execution_plan,
 )
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.exceptions import TargetLostError
@@ -52,6 +54,7 @@ from horus_runtime.core.workflow.base import (
     EdgeSource,
 )
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.status import WorkflowStatus
 
 
 def _task(
@@ -812,6 +815,91 @@ class TestSourceDigests:
         )
 
         assert await wf.source_digests(consumer) == {"inp": "ab"}
+
+    @pytest.mark.parametrize(
+        ("carried", "mode", "used"),
+        [
+            ("ab", "deep", True),
+            ("deep:ab", "deep", True),
+            ("ab", "fast", False),
+            ("deep:ab", "fast", False),
+            ("fast:ab", "fast", True),
+            ("fast:ab", "deep", False),
+        ],
+    )
+    async def test_known_digest_is_used_only_in_its_mode(
+        self, tmp_path: Path, carried: str, mode: CacheMode, used: bool
+    ) -> None:
+        """A carried digest taken in another cache mode is read again."""
+        source = _NoShellTarget()
+        producer = _task(
+            task_id="producer",
+            inputs=[],
+            outputs=[FileArtifact(id="out", path=tmp_path / "p.txt")],
+        )
+        consumer = _task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="inp", path=tmp_path / "c.txt")],
+            outputs=[],
+        )
+        wf = HorusWorkflow(
+            name="known_digest_mode",
+            tasks=[producer, consumer],
+            edges=[_edge("producer", "out", "consumer", "inp")],
+            cache=mode,
+        )
+        wf.relocate_output(
+            "producer",
+            "out",
+            EdgeSource(
+                source, producer.outputs[0], "producer", digest=carried
+            ),
+        )
+        reads: list[CacheMode] = []
+
+        async def reading(
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
+        ) -> str | None:
+            del artifact
+            assert store.target is source
+            reads.append(mode)
+            return "read"
+
+        with patch.object(ArtifactStore, "digest", reading):
+            digests = await wf.source_digests(consumer)
+
+        assert digests == {"inp": carried if used else "read"}
+        assert reads == ([] if used else [mode])
+
+    async def test_pinned_input_is_digested_once_per_run(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``source_digests`` and ``_fingerprint`` share one read."""
+        (tmp_path / "pin.txt").write_text("pinned")
+        consumer = _task(
+            task_id="consumer",
+            inputs=[FileArtifact(id="pin", path=tmp_path / "pin.txt")],
+            outputs=[],
+        )
+        consumer.inputs[0].pinned = True
+        wf = HorusWorkflow(name="pinned_once", tasks=[consumer])
+        wf.status = WorkflowStatus.RUNNING
+        horus_context.workflow = wf
+        reads: list[str] = []
+        digest = ArtifactStore.digest
+
+        async def counting(
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
+        ) -> str | None:
+            reads.append(artifact.id)
+            return await digest(store, artifact, mode)
+
+        with patch.object(ArtifactStore, "digest", counting):
+            digests = await wf.source_digests(consumer)
+            fingerprint = await consumer._fingerprint()
+
+        assert fingerprint.inputs == digests
+        assert reads == ["pin"]
 
     async def test_source_digests_only(self, tmp_path: Path) -> None:
         """With ``only``, just the named inputs are digested."""

@@ -20,6 +20,9 @@ Unit tests for ArtifactStore and the target filesystem primitives it uses.
 """
 
 import asyncio
+import hashlib
+import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -31,7 +34,12 @@ from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import (
+    SMALL_FILE,
     ArtifactStore,
+    CacheMode,
+    _parse_digest,
+    _tree_digest,
+    compose_folder_digest,
 )
 from horus_runtime.core.transfer.generic import GenericTransfer
 
@@ -151,7 +159,7 @@ class TestArtifactStore:
         artifact = FolderArtifact(id="f", path=folder)
 
         first = await store.digest(artifact)
-        assert first is not None
+        assert first is not None and first.startswith("deep:")
         assert await store.digest(artifact) == first
 
         (folder / "sub" / "b.txt").write_text("B")
@@ -252,6 +260,258 @@ class TestArtifactStore:
 
             assert (dest / "a.txt").read_text() == "A"
             assert (dest / "nested" / "b.txt").read_text() == "B"
+
+
+_MODES: tuple[CacheMode, ...] = ("deep", "fast")
+_BIG = 2 * SMALL_FILE
+
+
+def _odd_tree(root: Path) -> Path:
+    """
+    A folder with nested and empty dirs, symlinks, a big file and names a
+    line-based listing would break on.
+    """
+    (root / "sub" / "deeper").mkdir(parents=True)
+    (root / "sub" / "hollow").mkdir()
+    (root / "empty").mkdir()
+    (root / "top.txt").write_text("top")
+    (root / "big.bin").write_bytes(b"b" * _BIG)
+    (root / "sub" / "deeper" / "x").write_text("x")
+    (root / "sub" / "line\nbreak").write_text("n")
+    (root / "sub" / "back\\slash and space").write_text("s")
+    (root / os.fsdecode(b"raw\xff")).write_text("r")
+    (root / "sub" / "link_dir").symlink_to(root / "sub" / "deeper")
+    (root / "sub" / "link_file").symlink_to(root / "top.txt")
+    (root / "top_link").symlink_to(root / "top.txt")
+    return root
+
+
+def _artifact(path: Path) -> BaseArtifact:
+    """The artifact kind *path* is on disk."""
+    if path.is_dir():
+        return FolderArtifact(id="a", path=path)
+    return FileArtifact(id="a", path=path)
+
+
+async def _composed(store: ArtifactStore, root: Path, mode: CacheMode) -> str:
+    """*root*'s digest composed from its entries', skipping symlinks as
+    ``list_dir`` does.
+    """
+    children: dict[str | bytes, str] = {}
+    for entry in os.scandir(root):
+        if not entry.is_symlink():
+            digest = await store.digest(_artifact(Path(entry.path)), mode)
+            assert digest is not None
+            children[entry.name] = digest
+    return compose_folder_digest(mode, children)
+
+
+def _shim(bin_dir: Path, name: str, flag: str) -> None:
+    """A *name* on ``PATH`` that fails on *flag* and runs the real one."""
+    real = shutil.which(name)
+    assert real is not None
+    shim = bin_dir / name
+    shim.write_text(
+        f'#!/bin/sh\nfor a; do [ "$a" = {flag} ] && exit 1; done\n'
+        f'exec {real} "$@"\n'
+    )
+    shim.chmod(0o755)
+
+
+@pytest.mark.unit
+class TestDigestFormat:
+    """Digest values in both cache modes: shape, Merkle composition, the
+    fallback tool paths and what ``fast`` does and does not notice.
+    """
+
+    async def test_file_deep_digest_is_plain_sha256(
+        self, tmp_path: Path
+    ) -> None:
+        """Deep file digests keep their old format, so records stay valid."""
+        path = tmp_path / "f"
+        path.write_bytes(b"content")
+        store = ArtifactStore(LocalTarget())
+        assert await store.digest(_artifact(path)) == (
+            hashlib.sha256(b"content").hexdigest()
+        )
+        assert (await store.digest(_artifact(path), "fast")) == (
+            "fast:" + hashlib.sha256(b"content").hexdigest()
+        )
+
+    @pytest.mark.parametrize("mode", _MODES)
+    async def test_composed_equals_recomputed(
+        self, tmp_path: Path, mode: CacheMode
+    ) -> None:
+        """What a map composes from its slots equals a fresh read of the
+        folder, so either can stand for the other.
+        """
+        store = ArtifactStore(LocalTarget())
+        root = _odd_tree(tmp_path / "root")
+        whole = await store.digest(_artifact(root), mode)
+        assert whole is not None and whole.startswith(f"{mode}:")
+        assert await _composed(store, root, mode) == whole
+
+        sub = root / "sub"
+        assert await _composed(store, sub, mode) == (
+            await store.digest(_artifact(sub), mode)
+        )
+
+        empty = tmp_path / "empty_root"
+        empty.mkdir()
+        assert await store.digest(_artifact(empty), mode) == (
+            compose_folder_digest(mode, {})
+        )
+
+    def test_a_name_both_file_and_folder_is_a_miss(self) -> None:
+        """
+        A folder changed while it was walked can list a name as a file and
+        a folder: a ``ValueError``, which ``digest`` turns into ``None``.
+        """
+        leaves = {b"./a": "0" * 64, b"./a/b": "1" * 64}
+        with pytest.raises(ValueError, match="a/b"):
+            _tree_digest("deep", leaves)
+
+    def test_names_come_from_find_not_the_hasher(self) -> None:
+        """
+        The uutils ``sha256sum -z`` prints a non-UTF-8 name with U+FFFD in
+        it; the batch's own name list keeps the real bytes.
+        """
+        hexd = "a" * 64
+        record = hexd.encode() + b"  ./raw\xef\xbf\xbd"
+        out = b"\0".join(
+            [b"horus-tree", b"horus-names", b"1", b"./raw\xff", record, b""]
+        )
+        assert _parse_digest("deep", out) == (
+            compose_folder_digest("deep", {b"raw\xff": hexd})
+        )
+        short = out.replace(b"\x001\x00", b"\x002\x00")
+        with pytest.raises(ValueError):
+            _parse_digest("deep", short)
+
+    async def test_fallbacks_give_the_same_digests(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ``sha256sum -z`` and ``find -printf`` (old coreutils,
+        busybox, macOS) the per-file loops give the same digests.
+        """
+        store = ArtifactStore(LocalTarget())
+        root = _odd_tree(tmp_path / "root")
+        big = _artifact(root / "big.bin")
+        targets = [_artifact(root), big, _artifact(root / "top.txt")]
+        expected = [await store.digest(a, m) for a in targets for m in _MODES]
+        assert None not in expected
+
+        shims = tmp_path / "shims"
+        shims.mkdir()
+        _shim(shims, "sha256sum", "-z")
+        _shim(shims, "find", "-printf")
+        path = os.environ["PATH"]
+        monkeypatch.setenv("PATH", f"{shims}{os.pathsep}{path}")
+        got = [await store.digest(a, m) for a in targets for m in _MODES]
+        assert got == expected
+
+        busybox = shutil.which("busybox")
+        if busybox is None:
+            return
+        applets = tmp_path / "busybox"
+        applets.mkdir()
+        for name in ("sha256sum", "find", "xargs", "stat", "cut", "sh"):
+            (applets / name).symlink_to(busybox)
+        monkeypatch.setenv("PATH", f"{applets}{os.pathsep}{path}")
+        got = [await store.digest(a, m) for a in targets for m in _MODES]
+        assert got == expected
+
+    @pytest.mark.parametrize("in_folder", [False, True])
+    async def test_fast_trades_content_for_size_and_mtime(
+        self, tmp_path: Path, in_folder: bool
+    ) -> None:
+        """``fast`` sees size and whole-second mtime of big files, and the
+        content of small ones; ``deep`` sees content only.
+        """
+        store = ArtifactStore(LocalTarget())
+        big = tmp_path / "d" / "big.bin"
+        small = tmp_path / "d" / "small.txt"
+        big.parent.mkdir()
+        big.write_bytes(b"a" * _BIG)
+        small.write_text("one")
+        second = 1_700_000_000 * 10**9
+        for path in (big, small):
+            os.utime(path, ns=(second, second + 1))
+        artifact = _artifact(big.parent if in_folder else big)
+
+        async def both() -> tuple[str | None, str | None]:
+            return (
+                await store.digest(artifact, "deep"),
+                await store.digest(artifact, "fast"),
+            )
+
+        deep, fast = await both()
+
+        big.write_bytes(b"z" * _BIG)
+        os.utime(big, ns=(second, second + 1))
+        deep2, fast2 = await both()
+        assert deep2 != deep
+        assert fast2 == fast
+
+        os.utime(big, ns=(second, second + 999_999_999))
+        assert await both() == (deep2, fast2)
+
+        os.utime(big, ns=(second, second + 10**9))
+        deep3, fast3 = await both()
+        assert deep3 == deep2
+        assert fast3 != fast2
+
+        if in_folder:
+            small.write_text("two")
+            os.utime(small, ns=(second, second + 1))
+            assert (await store.digest(artifact, "fast")) != fast3
+
+    @pytest.mark.skipif(
+        os.name != "posix" or os.geteuid() == 0, reason="root reads anyway"
+    )
+    @pytest.mark.parametrize("in_folder", [False, True])
+    async def test_fast_never_reads_big_files(
+        self, tmp_path: Path, in_folder: bool
+    ) -> None:
+        """An unreadable big file still digests in ``fast``: it is only
+        stat'ed. ``deep`` has to read it, so it fails.
+        """
+        store = ArtifactStore(LocalTarget())
+        big = tmp_path / "d" / "big.bin"
+        big.parent.mkdir()
+        big.write_bytes(b"a" * _BIG)
+        big.chmod(0)
+        artifact = _artifact(big.parent if in_folder else big)
+        try:
+            assert await store.digest(artifact, "fast") is not None
+            assert await store.digest(artifact, "deep") is None
+        finally:
+            big.chmod(0o644)
+
+    async def test_pack_unpack_keeps_the_fast_digest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A folder transfer keeps whole-second mtimes, so a ``fast``
+        consumer of the copy matches the source.
+        """
+        del horus_context
+        src = tmp_path / "src" / "data"
+        src.mkdir(parents=True)
+        (src / "big.bin").write_bytes(b"a" * _BIG)
+        (src / "small.txt").write_text("s")
+        os.utime(src / "big.bin", ns=(1_700_000_000_123_456_789,) * 2)
+        store = ArtifactStore(LocalTarget(working_directory=str(tmp_path)))
+        src_art = FolderArtifact(id="data", path=src)
+        dest_art = FolderArtifact(id="data", path=tmp_path / "out" / "data")
+
+        await store.unpackage(dest_art, await store.package(src_art))
+
+        for name in ("big.bin", "small.txt"):
+            copied = (tmp_path / "out" / "data" / name).stat().st_mtime
+            assert int(copied) == int((src / name).stat().st_mtime)
+        assert await store.digest(dest_art, "fast") == (
+            await store.digest(src_art, "fast")
+        )
 
 
 @pytest.mark.unit

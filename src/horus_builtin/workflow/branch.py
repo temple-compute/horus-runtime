@@ -74,6 +74,7 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.condition import _resolve_ref
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.executor.base import BaseExecutor
 from horus_runtime.core.runtime.base import BaseRuntime
@@ -214,6 +215,14 @@ class BranchRouter(HorusTask):
         """
         del input_digests
         return False
+
+    @property
+    def fingerprinted_inputs(self) -> list[BaseArtifact]:
+        """
+        None: the router never fingerprints, so the scheduler must not
+        digest its inputs before the transfer.
+        """
+        return []
 
     async def _reset(self) -> None:
         """

@@ -21,6 +21,7 @@ Workflow exceptions.
 
 from typing import TYPE_CHECKING
 
+from horus_runtime.core.artifact.store import CACHE_MODES
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
@@ -135,6 +136,16 @@ class DuplicateEdgeTargetError(WorkflowError):
                 "Each consumer input may be fed by at most one edge."
             )
             % {"input": target_input, "target": target}
+        )
+
+
+class CacheModeError(WorkflowError):
+    """Raised when ``cache`` is not one of the cache modes."""
+
+    def __init__(self, value: object):
+        super().__init__(
+            _("Unknown cache mode %(value)s. Use one of: %(modes)s.")
+            % {"value": repr(value), "modes": ", ".join(CACHE_MODES)}
         )
 
 

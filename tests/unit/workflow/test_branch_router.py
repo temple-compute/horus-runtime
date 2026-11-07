@@ -164,6 +164,20 @@ class TestBranchRouterModel:
         router = BranchRouter(id="r", name="r", func=_pick_b, routes=["b"])
         assert await router.is_complete() is False
 
+    def test_inputs_are_never_fingerprinted(self) -> None:
+        """
+        The router never fingerprints, so the scheduler must not digest
+        its inputs at their source before the transfer.
+        """
+        router = BranchRouter(
+            id="r",
+            name="r",
+            func=_pick_b,
+            routes=["b"],
+            inputs=[FileArtifact(id="big", path=Path("big"))],
+        )
+        assert router.fingerprinted_inputs == []
+
 
 @pytest.mark.unit
 class TestLowersToDeclarative:

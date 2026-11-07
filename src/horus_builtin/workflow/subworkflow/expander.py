@@ -111,6 +111,10 @@ class SubworkflowExpander(HorusTask):
         _restore_declared_paths`.
         """
         document = handler(body)
+        # An unset ``cache`` must reload unset, or it would override this
+        # task's and the workflow's mode (see :meth:`_build_inner_tasks`).
+        if "cache" not in body.model_fields_set:
+            document.pop("cache", None)
         _restore_declared_paths(
             document.get("artifacts") or [], body.artifacts
         )
@@ -181,6 +185,14 @@ class SubworkflowExpander(HorusTask):
         """
         del input_digests
         return False
+
+    @property
+    def fingerprinted_inputs(self) -> list[BaseArtifact]:
+        """
+        None: the expander never fingerprints, so the scheduler must not
+        digest its inputs before the transfer.
+        """
+        return []
 
     async def _reset(self) -> None:
         """
@@ -297,6 +309,14 @@ class SubworkflowExpander(HorusTask):
             # must reach the tasks it inlines.
             if not self.skip_if_complete:
                 task.skip_if_complete = False
+            # The inner task's own mode, else the body's, else this task's;
+            # unset falls to the workflow's.
+            if task.cache is None:
+                task.cache = (
+                    self.body.cache
+                    if "cache" in self.body.model_fields_set
+                    else self.cache
+                )
             self._localize_paths(task, run_root)
             tasks.append(task)
         return tasks

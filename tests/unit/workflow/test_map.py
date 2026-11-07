@@ -21,10 +21,12 @@ fan-out behaviour as an ordinary DAG node.
 """
 
 import asyncio
+import contextlib
 import contextvars
 import hashlib
 import itertools
 import json
+import os
 import re
 import shutil
 from datetime import UTC, datetime
@@ -65,7 +67,11 @@ from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
-from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.artifact.store import (
+    SMALL_FILE,
+    ArtifactStore,
+    CacheMode,
+)
 from horus_runtime.core.lease import BaseEvacuator
 from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.resources import ResourceRequest
@@ -556,10 +562,10 @@ class TestSharedInput:
         original = ArtifactStore.digest
 
         async def spy(
-            self: ArtifactStore, artifact: BaseArtifact
+            self: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
         ) -> str | None:
             hashed.append(artifact.id)
-            return await original(self, artifact)
+            return await original(self, artifact, mode)
 
         wf = _build()
         with patch.object(ArtifactStore, "digest", spy):
@@ -2070,7 +2076,7 @@ class TestDropFailedItems:
 
     async def test_config_hash_unchanged_without_new_fields(self) -> None:
         """A map without zip or drop codes hashes as before; setting either
-        changes the hash.
+        changes the hash. No context is booted: `_fingerprint` works without.
         """
         map_task = _map_task(
             over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
@@ -2932,7 +2938,11 @@ class TestRestage:
             item = await wait(self, slot, owner=owner, source=source)
             if owner == "b" and slot == "1" and not lost:
                 lost.append(slot)
-                while a.status != TaskStatus.COMPLETED:
+                # Not while B[0] still copies A[0] off the node.
+                while a.status != TaskStatus.COMPLETED or not any(
+                    t.id == "b[0]" and t.status in TERMINAL_STATUSES
+                    for t in wf.tasks
+                ):
                     await asyncio.sleep(0.01)
                 await node.lose()
             return item
@@ -4503,3 +4513,450 @@ class _Cluster(LocalTarget):
     def location_id(self) -> str:
         """One location for every task on it."""
         return "fake://cluster"
+
+
+def _bytes_read(path: Path, mode: CacheMode) -> int:
+    """
+    Bytes the digest command reads at *path* in *mode*: every regular file
+    in ``deep``, those under :data:`SMALL_FILE` in ``fast``.
+    """
+    files = (
+        [path]
+        if path.is_file()
+        else [Path(d) / f for d, _, names in os.walk(path) for f in names]
+    )
+    sizes = [f.stat().st_size for f in files if not f.is_symlink()]
+    return sum(size for size in sizes if mode == "deep" or size < SMALL_FILE)
+
+
+class _DigestSpy:
+    """
+    Every :meth:`ArtifactStore.digest` call (one target command each) as
+    ``(path, mode, bytes read)``, and every seeded digest by path and mode.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, CacheMode, int]] = []
+        self.seeded: dict[tuple[str, CacheMode], str] = {}
+
+    @contextlib.contextmanager
+    def watch(self) -> Any:
+        """Record while inside."""
+        digest = ArtifactStore.digest
+        seed = BaseWorkflow.seed_digest
+
+        async def spy_digest(
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
+        ) -> str | None:
+            path = store.target.path_on_target(artifact)
+            self.calls.append((path, mode, _bytes_read(Path(path), mode)))
+            return await digest(store, artifact, mode)
+
+        def spy_seed(
+            wf: BaseWorkflow,
+            target: BaseTarget,
+            artifact: BaseArtifact,
+            mode: CacheMode,
+            value: str,
+        ) -> None:
+            self.seeded[(target.path_on_target(artifact), mode)] = value
+            seed(wf, target, artifact, mode, value)
+
+        with (
+            patch.object(ArtifactStore, "digest", spy_digest),
+            patch.object(BaseWorkflow, "seed_digest", spy_seed),
+        ):
+            yield self
+
+    def on(self, path: Path) -> list[tuple[str, CacheMode, int]]:
+        """The calls on *path* itself."""
+        return [call for call in self.calls if call[0] == str(path)]
+
+    def under(self, path: Path) -> list[tuple[str, CacheMode, int]]:
+        """The calls on *path* or below it."""
+        return [
+            call
+            for call in self.calls
+            if Path(call[0]) == path or Path(call[0]).is_relative_to(path)
+        ]
+
+
+def _reader(index: int, folder: str = "scored") -> HorusTask:
+    """A task reading the map folder *folder*, with an output (a manifest)."""
+    return HorusTask(
+        id=f"read{index}",
+        name=f"read{index}",
+        runtime=CommandRuntime(command=f"ls ${folder} > $listing"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id=folder, path=Path(f"read{index}_in"))],
+        outputs=[FileArtifact(id="listing", path=Path(f"read{index}.txt"))],
+    )
+
+
+def _read_map(
+    tmp_path: Path,
+    names: list[str],
+    command: str,
+    *,
+    readers: int = 1,
+    mode: CacheMode = "deep",
+    **map_fields: Any,
+) -> HorusWorkflow:
+    """``split -> score -> read0..`` with *command* as the map body."""
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in")),
+        command=command,
+        output_path=(tmp_path / "scored_out").as_posix(),
+        max_concurrency=0,
+    )
+    for field, value in map_fields.items():
+        setattr(map_task, field, value)
+    wf = _wire(
+        tmp_path,
+        split=_split_task(tmp_path, names),
+        map_task=map_task,
+        extra_tasks=[_reader(i) for i in range(readers)],
+        extra_edges=[
+            _edge("score", "scored", f"read{i}", "scored")
+            for i in range(readers)
+        ],
+    )
+    wf.cache = mode
+    return wf
+
+
+async def _fresh(path: Path, mode: CacheMode) -> str | None:
+    """*path*'s digest read now, outside any run."""
+    return await ArtifactStore(LocalTarget()).digest(
+        FolderArtifact(id="x", path=path), mode
+    )
+
+
+_MiB = 1 << 20
+_BLOB = f"head -c {2 * _MiB} /dev/zero > $scored/blob"
+_KEEP_BAD = "cp $batch $scored/result.txt; ! grep -q bad $batch"
+
+
+@pytest.mark.unit
+class TestSlotDigests:
+    """
+    Each clone digests its slot as it succeeds; the map composes and seeds
+    its folder digest, so its readers never read the folder.
+    """
+
+    @pytest.mark.parametrize("mode", ["deep", "fast"])
+    @pytest.mark.parametrize(
+        "case", ["plain", "dropped", "empty", "symlink", "failed removal"]
+    )
+    async def test_seeded_root_equals_a_recompute(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+        case: str,
+        mode: CacheMode,
+    ) -> None:
+        """
+        Whatever the slots hold, the composed digest is the folder's own,
+        and the readers make no digest command on the folder.
+        """
+        del horus_context
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "f").write_text("not in the folder")
+        command = {
+            "plain": _BODY,
+            "dropped": _KEEP_BAD,
+            "empty": f"grep -q bad $batch || {_BODY}",
+            "symlink": (
+                f"if grep -q bad $batch; then rmdir $scored; "
+                f"ln -s {tmp_path}/elsewhere $scored; else {_BODY}; fi"
+            ),
+            "failed removal": _KEEP_BAD,
+        }[case]
+        if case == "failed removal":
+            monkeypatch.setattr(map_module, "_remove_slots", AsyncMock())
+        wf = _read_map(
+            tmp_path,
+            ["a.txt", "b.txt", "c.txt"],
+            command,
+            readers=2,
+            mode=mode,
+            on_item_failure="drop",
+        )
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        root = tmp_path / "scored_out"
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        if case == "dropped":
+            assert sorted(p.name for p in root.iterdir()) == ["0", "2"]
+        if case == "failed removal":
+            assert (root / "1" / "result.txt").exists()
+        if case == "empty":
+            assert list((root / "1").iterdir()) == []
+        if case == "symlink":
+            assert (root / "1").is_symlink()
+        assert spy.seeded == {(str(root), mode): await _fresh(root, mode)}
+        assert spy.on(root) == []
+
+    async def test_digest_taken_during_the_drop_removal_is_forgotten(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A reader that digests a dropped slot while it is being removed
+        leaves no stale digest behind for the readers after the map.
+        """
+        del horus_context
+        wf = _read_map(
+            tmp_path, ["a.txt", "b.txt"], _KEEP_BAD, on_item_failure="drop"
+        )
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        remove = map_module._remove_slots
+
+        async def racing_remove(target: BaseTarget, paths: list[str]) -> None:
+            for path in paths:
+                artifact = FolderArtifact(id="slot", path=Path(path))
+                await wf.digest(target, artifact, "deep")
+            await remove(target, paths)
+
+        monkeypatch.setattr(map_module, "_remove_slots", racing_remove)
+        slot = str(tmp_path / "scored_out" / "1")
+        cached_at_seed: list[str] = []
+        seed = BaseWorkflow.seed_digest
+
+        def spy_seed(wf_: BaseWorkflow, *args: Any) -> None:
+            cached_at_seed.extend(k[2] for k in wf_._digests if k[2] == slot)
+            seed(wf_, *args)
+
+        with patch.object(BaseWorkflow, "seed_digest", spy_seed):
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert not (tmp_path / "scored_out" / "1").exists()
+        assert cached_at_seed == []
+
+    async def test_upstream_dropped_slot_and_chained_settle_read_nothing(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A drops an item, so chained B skips it; both seed their folder as a
+        recompute would, and neither B's final digest of A's folder nor C's
+        reading of B's makes a command on a folder root.
+        """
+        del horus_context
+        _set(tmp_path, "exit", "a_out_1", 3)
+        reader = _reader(0, folder="out")
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [
+                _stage_map(tmp_path, "a", drop_exit_codes=[3]),
+                _stage_map(tmp_path, "b", chain=True),
+            ],
+            extra_tasks=[reader],
+            extra_edges=[_edge("b", "out", "read0", "out")],
+        )
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "b")["b[1]"] == (
+            TaskStatus.SKIPPED,
+            SkipReason.UPSTREAM_DROPPED,
+        )
+        for name in ("a_out", "b_out"):
+            root = tmp_path / name
+            assert sorted(p.name for p in root.iterdir()) == ["0", "2"]
+            assert spy.seeded[(str(root), "deep")] == await _fresh(
+                root, "deep"
+            )
+            assert spy.on(root) == []
+
+    async def test_only_the_consumers_modes_are_digested(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A deep workflow whose only reader is fast reads no big slot."""
+        del horus_context
+        wf = _read_map(tmp_path, ["a.txt", "b.txt"], _BLOB)
+        wf.tasks[2].cache = "fast"
+        root = tmp_path / "scored_out"
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert {(c[0], c[1]) for c in spy.under(root)} == {
+            (str(root / "0"), "fast"),
+            (str(root / "1"), "fast"),
+        }
+        assert sum(c[2] for c in spy.under(root)) == 0
+        assert spy.seeded == {(str(root), "fast"): await _fresh(root, "fast")}
+
+    async def test_a_failed_listing_seeds_nothing(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The folder cannot be listed for the seed: the map still completes,
+        and its reader digests the folder itself.
+        """
+        del horus_context
+        root = tmp_path / "scored_out"
+        list_dir = LocalTarget.list_dir
+        listings: list[str] = []
+
+        async def failing(target: LocalTarget, path: str) -> Any:
+            listings.append(path)
+            # The first listing prunes old slots; the second is the seed's.
+            if listings.count(str(root)) == 2:
+                raise OSError("listing lost")
+            return await list_dir(target, path)
+
+        monkeypatch.setattr(LocalTarget, "list_dir", failing)
+        wf = _read_map(tmp_path, ["a.txt", "b.txt"], _BODY)
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert spy.seeded == {}
+        assert [c[:2] for c in spy.on(root)] == [(str(root), "deep")]
+
+    async def test_no_consumer_no_slot_digest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A map nobody reads digests no slot and seeds nothing."""
+        del horus_context
+        wf = _read_map(tmp_path, ["a.txt", "b.txt"], _BODY, readers=0)
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert spy.under(tmp_path / "scored_out") == []
+        assert spy.seeded == {}
+
+    async def test_a_rerun_slot_is_digested_again(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The slot that ran on the lost machine is digested again after its
+        re-run on the new one, and the seed is the final folder's digest.
+        """
+        del horus_context
+        monkeypatch.setattr(
+            MapTask, "_consumer_modes", MagicMock(return_value={"deep"})
+        )
+        wf, node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+        root = tmp_path / "node" / "scored_out"
+
+        with _DigestSpy().watch() as spy:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert [len(spy.on(root / slot)) for slot in "012"] == [2, 1, 1]
+        assert spy.on(root) == []
+        assert spy.seeded == {(str(root), "deep"): await _fresh(root, "deep")}
+
+
+@pytest.mark.unit
+class TestMapBytesRead:
+    """
+    Bytes the digest commands read for 4 slots of 2 MiB and 3 readers of
+    the map folder.
+    """
+
+    @staticmethod
+    async def _measure(
+        tmp_path: Path, mode: CacheMode
+    ) -> tuple[int, int, int, int]:
+        """
+        Commands on the map folder or its slots, their bytes, commands on
+        the root itself, and digest commands seen by the target.
+        """
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        tmp_path.mkdir()
+        wf = _read_map(tmp_path, list("abcd"), _BLOB, readers=3, mode=mode)
+        root = tmp_path / "scored_out"
+        with (
+            _DigestSpy().watch() as spy,
+            patch.object(
+                LocalTarget,
+                "run_command_sync",
+                autospec=True,
+                side_effect=LocalTarget.run_command_sync,
+            ) as run,
+        ):
+            await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
+        commands = sum("horus-tree" in c.args[1] for c in run.call_args_list)
+        assert commands == len(spy.calls)
+        calls = spy.under(root)
+        return (
+            len(calls),
+            sum(c[2] for c in calls),
+            len(spy.on(root)),
+            commands,
+        )
+
+    async def test_slot_digests_read_each_byte_once(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """
+        Deep reads the 8 MiB once, through the 4 slot digests, and never
+        the root; fast reads nothing. Before: no slot digests (the run cache
+        alone) reads the root once; no run cache reads it per reader.
+        """
+        del horus_context
+        no_slots = patch.object(
+            MapTask, "_consumer_modes", MagicMock(return_value=set())
+        )
+
+        async def uncached(
+            _wf: BaseWorkflow,
+            target: BaseTarget,
+            artifact: BaseArtifact,
+            mode: CacheMode,
+        ) -> str | None:
+            return await ArtifactStore(target).digest(artifact, mode)
+
+        deep = await self._measure(tmp_path, "deep")
+        fast = await self._measure(tmp_path, "fast")
+        with no_slots:
+            run_cache_only = await self._measure(tmp_path, "deep")
+            with patch.object(BaseWorkflow, "digest", uncached):
+                no_cache = await self._measure(tmp_path, "deep")
+
+        with capsys.disabled():
+            for name, (calls, read, on_root, _all) in (
+                ("deep", deep),
+                ("fast", fast),
+                ("deep, no slot digests (pre-WP3)", run_cache_only),
+                ("deep, no run cache (pre-WP2)", no_cache),
+            ):
+                print(  # noqa: T201
+                    f"\nmap bytes read, {name}: {calls} command(s), "
+                    f"{read / _MiB:g} MiB, {on_root} on the map root"
+                )
+        assert deep[:3] == (4, 8 * _MiB, 0)
+        assert fast[:3] == (4, 0, 0)
+        assert run_cache_only[:3] == (1, 8 * _MiB, 1)
+        assert no_cache[:3] == (3, 24 * _MiB, 3)
