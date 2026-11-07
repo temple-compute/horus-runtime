@@ -37,6 +37,7 @@ from horus_runtime.core.artifact.store import (
     SMALL_FILE,
     ArtifactStore,
     CacheMode,
+    _parse_digest,
     _tree_digest,
     compose_folder_digest,
 )
@@ -369,6 +370,23 @@ class TestDigestFormat:
         leaves = {b"./a": "0" * 64, b"./a/b": "1" * 64}
         with pytest.raises(ValueError, match="a/b"):
             _tree_digest("deep", leaves)
+
+    def test_names_come_from_find_not_the_hasher(self) -> None:
+        """
+        The uutils ``sha256sum -z`` prints a non-UTF-8 name with U+FFFD in
+        it; the batch's own name list keeps the real bytes.
+        """
+        hexd = "a" * 64
+        record = hexd.encode() + b"  ./raw\xef\xbf\xbd"
+        out = b"\0".join(
+            [b"horus-tree", b"horus-names", b"1", b"./raw\xff", record, b""]
+        )
+        assert _parse_digest("deep", out) == (
+            compose_folder_digest("deep", {b"raw\xff": hexd})
+        )
+        short = out.replace(b"\x001\x00", b"\x002\x00")
+        with pytest.raises(ValueError):
+            _parse_digest("deep", short)
 
     async def test_fallbacks_give_the_same_digests(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

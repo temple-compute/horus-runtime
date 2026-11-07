@@ -62,7 +62,8 @@ st='stat -L -c %s:%Y'; stat -L -c %s / >/dev/null 2>&1 || st='stat -L -f %z:%m'
 export h st
 z=; printf '' | $h -z >/dev/null 2>&1 && z=1
 hashes() {
-  if [ -n "$z" ]; then find . -type f "$@" -print0 | xargs -0 -r $h -z
+  if [ -n "$z" ]; then find . -type f "$@" -print0 | xargs -0 -r sh -c \
+    'printf "horus-names\0%s\0" $#; printf "%s\0" "$@"; $h -z "$@"' sh
   else find . -type f "$@" -exec sh -c \
     'for f; do printf "%s  %s\0" "$($h < "$f" | cut -c1-64)" "$f"; done' \
     sh {} +
@@ -78,7 +79,12 @@ stats() {
 """
 """Shell helpers of the digest command: ``hashes`` prints ``<hex>  <path>``
 records and ``stats`` prints ``<size>:<mtime> <path>`` records, each ending in
-NUL, through GNU tools or a fork-per-file fallback (busybox, macOS)."""
+NUL, through GNU tools or a fork-per-file fallback (busybox, macOS). A file's
+size and mtime come from ``find -printf`` too where it exists, since uutils
+``stat`` rounds ``%Y`` where GNU truncates. With
+``-z``, each batch of ``hashes`` first prints ``horus-names``, its count and
+the names as ``find`` gave them: uutils ``sha256sum`` rewrites non-UTF-8
+names in its output."""
 
 _DIGEST_BODY: dict[CacheMode, str] = {
     "deep": r"""if [ -d "$p" ]; then
@@ -90,7 +96,10 @@ else exit 1; fi""",
   cd "$p" || exit 1; printf 'horus-tree\0'
   stats && printf 'horus-content\0' && hashes -size -1048576c
 elif [ -f "$p" ]; then
-  printf 'horus-file\0'; s=$($st "$p") || exit 1; printf '%s\0' "$s"
+  printf 'horus-file\0'
+  s=$(find -L "$p" -maxdepth 0 -printf '%s:%T@' 2>/dev/null) && [ -n "$s" ] ||
+    s=$($st "$p") || exit 1
+  printf '%s\0' "$s"
   if [ "${s%%:*}" -lt 1048576 ]; then $h < "$p"; fi
 else exit 1; fi""",
 }
@@ -166,6 +175,14 @@ def _hex(record: bytes) -> str | None:
     return head.decode() if _HEX.fullmatch(head) else None
 
 
+def _hash_record(record: bytes) -> str:
+    """The hex of a ``<hex>  <path>`` record; :class:`ValueError` if not."""
+    hexd = _hex(record)
+    if hexd is None or record[64:66] not in (b"  ", b" *"):
+        raise ValueError(record)
+    return hexd
+
+
 def _parse_digest(mode: CacheMode, out: bytes) -> str | None:
     """
     Public digest from the digest command's NUL-separated output. Raises
@@ -181,7 +198,7 @@ def _parse_digest(mode: CacheMode, out: bytes) -> str | None:
             return _hex(record)
         size, mtime = rest[0].split(b":")
         (content,) = [_hex(r) for r in rest[1:]] or [None]
-        return _leaf(mode, int(size), int(mtime), content)
+        return _leaf(mode, int(size), int(mtime.split(b".")[0]), content)
     if head != b"horus-tree":
         raise ValueError(head)
 
@@ -190,11 +207,20 @@ def _parse_digest(mode: CacheMode, out: bytes) -> str | None:
         split = rest.index(b"horus-content")
         stats, rest = rest[:split], rest[split + 1 :]
     contents: dict[bytes, str] = {}
-    for record in rest:
-        hexd = _hex(record)
-        if hexd is None or record[64:66] not in (b"  ", b" *"):
-            raise ValueError(record)
-        contents[record[66:]] = hexd
+    i = 0
+    while i < len(rest):
+        if rest[i] != b"horus-names":
+            contents[rest[i][66:]] = _hash_record(rest[i])
+            i += 1
+            continue
+        n = int(rest[i + 1])
+        names = rest[i + 2 : i + 2 + n]
+        hashed = rest[i + 2 + n : i + 2 + 2 * n]
+        if len(hashed) != n:  # a short batch also leaves names short
+            raise ValueError(rest[i:])
+        for name, record in zip(names, hashed, strict=True):
+            contents[name] = _hash_record(record)
+        i += 2 + 2 * n
     if mode == "deep":
         return _tree_digest(mode, contents)
 
