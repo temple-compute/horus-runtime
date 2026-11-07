@@ -63,6 +63,10 @@ class HorusLogger(BaseSettings):
     compression: str | None = None
     filename_template: str = "log_{time:YYYY-MM-DD}.log"
 
+    # Every sink sets ``diagnose=False``: tracebacks stay, but not the
+    # values of their frame variables, which can be large (a repr of the
+    # workflow per failed clone) or hold secrets.
+
     #: Loguru handler id of the terminal sink, tracked so it can be swapped
     #: (e.g. the live TUI redirects it to a panel) without touching the file
     #: sink. ``None`` until :meth:`setup` runs.
@@ -117,6 +121,7 @@ class HorusLogger(BaseSettings):
             retention=self.retention,
             compression=self.compression,
             enqueue=True,
+            diagnose=False,
         )
 
     def _install_terminal_sink(self) -> None:
@@ -130,6 +135,7 @@ class HorusLogger(BaseSettings):
             sink=sys.stdout,
             format=self.format,
             level=self.level,
+            diagnose=False,
         )
 
     def set_log_directory(self, path: "Path") -> None:
@@ -148,7 +154,9 @@ class HorusLogger(BaseSettings):
         """
         if self._terminal_sink_id is not None:
             logger.remove(self._terminal_sink_id)
-        self._terminal_sink_id = logger.add(sink=sink, level=self.level)
+        self._terminal_sink_id = logger.add(
+            sink=sink, level=self.level, diagnose=False
+        )
 
     def restore_terminal(self) -> None:
         """
@@ -160,6 +168,7 @@ class HorusLogger(BaseSettings):
             sink=sys.stdout,
             format=self.format,
             level=self.level,
+            diagnose=False,
         )
 
     def set_level(self, level: LoggerLevel) -> None:

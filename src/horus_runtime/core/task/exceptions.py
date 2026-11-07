@@ -19,6 +19,9 @@
 Exceptions related to task execution in the Horus runtime.
 """
 
+from collections.abc import Callable
+from typing import Any, Self
+
 
 class BaseTaskError(Exception):
     """
@@ -30,6 +33,44 @@ class TaskExecutionError(BaseTaskError):
     """
     Exception raised when a task execution fails in the Horus runtime.
     """
+
+
+class CommandFailedError(TaskExecutionError):
+    """
+    The task's command ran and exited non-zero. Never retried; a map reads
+    :attr:`exit_code` to drop an item, never the (translated) message.
+    """
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        Callable[..., "CommandFailedError"],
+        tuple[type[Self], str, int],
+        dict[str, Any],
+    ]:
+        """
+        Keep :attr:`exit_code` and any notes across pickling, without
+        calling ``__init__``: a subclass may take other arguments.
+        """
+        return (
+            _rebuild,
+            (type(self), str(self), self.exit_code),
+            self.__dict__,
+        )
+
+
+def _rebuild(
+    cls: type[CommandFailedError], message: str, exit_code: int
+) -> CommandFailedError:
+    """Unpickle a :class:`CommandFailedError` (or subclass)."""
+    exc = cls.__new__(cls)
+    TaskExecutionError.__init__(exc, message)
+    exc.exit_code = exit_code
+    return exc
 
 
 class TargetLostError(TaskExecutionError):

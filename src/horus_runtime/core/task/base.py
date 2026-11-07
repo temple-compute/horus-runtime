@@ -61,7 +61,9 @@ from horus_runtime.registry.auto_registry import AutoRegistry
 from horus_runtime.secrets import TaskSecret, env_name_error
 
 if TYPE_CHECKING:
-    from horus_runtime.core.workflow.base import BaseWorkflow
+    from asyncio import Future
+
+    from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 
 InputDigests = Callable[[], Awaitable[dict[str, str | None]]]
 """Returns each input's digest by id, ``None`` where it cannot be hashed."""
@@ -310,13 +312,42 @@ class BaseTask(AutoRegistry, entry_point="task"):
     instead of ``FAILED``.
     """
 
+    _streaming_from: frozenset[str] = PrivateAttr(default=frozenset())
+    """
+    Set by the scheduler at dispatch: dependencies this run started before
+    they finished.
+    """
+
+    @property
+    def streamed_inputs(self) -> frozenset[str]:
+        """
+        Inputs that arrive per item while the task runs: not staged, digested
+        or checked first.
+        """
+        return frozenset()
+
+    def stream_sources(
+        self, source_map: dict[tuple[str, str], "EdgeSource"]
+    ) -> dict[str, "Future[None]"]:
+        """
+        Dependencies this task may start before they finish, each with the
+        future that resolves once its items start to arrive.
+        """
+        del source_map
+        return {}
+
     @property
     def fingerprinted_inputs(self) -> list[BaseArtifact]:
         """
         The inputs whose content decides whether recorded outputs are stale.
+        Streamed inputs are left out until they settle: their digest is
+        deferred, not dropped.
         """
+        streamed = self.streamed_inputs
         return [
-            a for a in self.inputs if a.id not in self.unfingerprinted_inputs
+            a
+            for a in self.inputs
+            if a.id not in self.unfingerprinted_inputs and a.id not in streamed
         ]
 
     @property

@@ -26,7 +26,7 @@ workflow with no edges has independent tasks (no dependencies).
 import asyncio
 from pathlib import Path
 from typing import ClassVar, cast
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -813,6 +813,33 @@ class TestSourceDigests:
 
         assert await wf.source_digests(consumer) == {"inp": "ab"}
 
+    async def test_source_digests_only(self, tmp_path: Path) -> None:
+        """With ``only``, just the named inputs are digested."""
+        wf, consumer = _fan_in(tmp_path, 3)
+        for i in range(3):
+            (tmp_path / f"p{i}.txt").write_text(str(i))
+
+        digests = await wf.source_digests(consumer, only={"in1"})
+
+        assert list(digests) == ["in1"]
+        assert digests["in1"] is not None
+
+    async def test_streamed_inputs_are_not_digested(
+        self, tmp_path: Path
+    ) -> None:
+        """A streamed input is left out of the fingerprint until it settles."""
+        wf, consumer = _fan_in(tmp_path, 2)
+        for i in range(2):
+            (tmp_path / f"p{i}.txt").write_text(str(i))
+
+        with patch.object(
+            HorusTask,
+            "streamed_inputs",
+            new_callable=PropertyMock,
+            return_value=frozenset({"in1"}),
+        ):
+            assert list(await wf.source_digests(consumer)) == ["in0"]
+
 
 def _fan_in(tmp_path: Path, n: int) -> tuple[HorusWorkflow, HorusTask]:
     """*n* producers, each feeding one input of ``consumer``."""
@@ -928,6 +955,37 @@ class TestConcurrentInputTransfers:
             pytest.raises(TargetLostError, match="node gone"),
         ):
             await wf.transfer_artifacts(consumer)
+
+    async def test_transfer_skips_streamed_inputs(
+        self, tmp_path: Path
+    ) -> None:
+        """A streamed input is not staged: it arrives per item later."""
+        wf, consumer = _fan_in(tmp_path, 2)
+        moved: list[str] = []
+
+        class _Recording:
+            async def transfer(
+                self, artifact: BaseArtifact, *_: object
+            ) -> None:
+                moved.append(artifact.path.name)
+
+        with (
+            patch.object(
+                BaseTransferStrategy,
+                "get_from_registry",
+                return_value=_Recording,
+            ),
+            patch.object(
+                HorusTask,
+                "streamed_inputs",
+                new_callable=PropertyMock,
+                return_value=frozenset({"in1"}),
+            ),
+        ):
+            await wf.transfer_artifacts(consumer)
+
+        assert moved == ["p0.txt"]
+        assert consumer.inputs[1].path == tmp_path / "c1.txt"
 
     async def test_nested_destinations_transfer_one_at_a_time(
         self, tmp_path: Path

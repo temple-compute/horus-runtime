@@ -28,12 +28,14 @@ from typing import ClassVar, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import Field, PrivateAttr
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow import scheduler as scheduler_mod
 from horus_builtin.workflow.dag import (
     StalledWorkflowError,
     ancestors,
@@ -43,6 +45,7 @@ from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_builtin.workflow.scheduler import (
     DEFAULT_MAX_CONCURRENCY,
     TargetPool,
+    _ready,
 )
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
@@ -55,7 +58,7 @@ from horus_runtime.core.placement import (
 )
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import InputDigests
+from horus_runtime.core.task.base import BaseTask, InputDigests
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
     TaskExecutionError,
@@ -2104,3 +2107,475 @@ class TestRetryOnTargetLoss:
         assert slots
         assert all(slot.free == 1 for slot in slots)
         assert wf.placement._remaining[location_id] == {"gpus": 1}
+
+
+class _StreamSource(_PassTask):
+    """
+    Opens its stream as it starts, then ends once a consumer sets
+    ``release``. Stands in for a map's item stream (R6).
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    fail: bool = False
+    _opened: "asyncio.Future[None] | None" = PrivateAttr(default=None)
+    _release: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+
+    def opened(self) -> "asyncio.Future[None]":
+        """The open future, one per run, shared with early consumers."""
+        if self._opened is None:
+            self._opened = asyncio.get_running_loop().create_future()
+        return self._opened
+
+    async def _run(self) -> None:
+        self.runs += 1
+        try:
+            self.opened().set_result(None)
+            await self._release.wait()
+            if self.fail:
+                raise TaskExecutionError("source failed")
+        finally:
+            self._opened = None
+
+
+class _StreamConsumer(_PassTask):
+    """
+    Starts on its source's open stream, releases it, then ends (or hangs
+    until cancelled).
+    """
+
+    add_to_registry: ClassVar[bool] = False
+    hang: bool = False
+    streams: bool = True
+    seen: list[frozenset[str]] = Field(default_factory=list)
+    cancelled: bool = False
+    _source: _StreamSource | None = PrivateAttr(default=None)
+
+    def stream_sources(
+        self, source_map: dict[tuple[str, str], EdgeSource]
+    ) -> dict[str, "asyncio.Future[None]"]:
+        del source_map
+        if self._source is None or not self.streams:
+            return {}
+        return {self._source.id: self._source.opened()}
+
+    async def _run(self) -> None:
+        self.runs += 1
+        self.seen.append(self._streaming_from)
+        if self._source is not None:
+            self._source._release.set()
+        if self.hang:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+
+class _MapConsumer(_StreamConsumer):
+    """A streaming consumer that dispatches children, like a map."""
+
+    add_to_registry: ClassVar[bool] = False
+    dispatches_children: ClassVar[bool] = True
+
+
+def _consumer(
+    task_id: str,
+    source: _StreamSource,
+    tmp_path: Path,
+    task_cls: type[_StreamConsumer] = _StreamConsumer,
+    **fields: object,
+) -> _StreamConsumer:
+    task = _task(task_id, tmp_path=tmp_path, task_cls=task_cls)
+    assert isinstance(task, _StreamConsumer)
+    for name, value in fields.items():
+        setattr(task, name, value)
+    task._source = source
+    return task
+
+
+@pytest.mark.unit
+class TestStreaming:
+    """
+    A task may start once its source's stream is open, before the source
+    finishes (``BaseTask.stream_sources``).
+    """
+
+    async def test_ready_on_stream_open(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A streaming dep counts once its stream is open. Until then the
+        open future of a dispatched source is returned to wait on.
+        """
+        del horus_context
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        b = _consumer("b", a, tmp_path)
+        c = _task("c", tmp_path=tmp_path, task_cls=_PassTask)
+        tasks_by_id: dict[str, BaseTask] = {t.id: t for t in (root, a, b, c)}
+        deps: dict[str, set[str]] = {
+            "root": set(),
+            "a": {"root"},
+            "b": {"a"},
+            "c": {"a"},
+        }
+
+        def ready(
+            dispatched: set[str],
+        ) -> tuple[list[str], set[asyncio.Future[None]]]:
+            return _ready(
+                set(deps),
+                deps,
+                completed=dispatched & {"root"},
+                dispatched=dispatched,
+                blocked=set(),
+                tasks_by_id=tasks_by_id,
+                source_map={},
+            )
+
+        # Nothing to wait on while the source has not started.
+        assert ready(set()) == (["root"], set())
+        # Its stream is waited on from the batch that dispatches it.
+        assert ready({"root"}) == (["a"], {a.opened()})
+        assert ready({"root", "a"}) == ([], {a.opened()})
+        a.opened().set_result(None)
+        assert ready({"root", "a"}) == (["b"], set())
+
+    async def test_wakes_on_stream_open_without_a_completion(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The source ends only once the consumer runs, so the consumer must
+        start on the stream opening alone.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        b = _consumer("b", a, tmp_path, seen=[])
+        wf = HorusWorkflow(
+            name="stream",
+            tasks=[a, b],
+            edges=[WorkflowEdge(source="a", target="b")],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert a.status == TaskStatus.COMPLETED
+        assert b.status == TaskStatus.COMPLETED
+        assert b.seen == [frozenset({"a"})]
+
+    async def test_continue_cancels_running_blocked_descendant(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``continue``, a consumer still running on a failed source's
+        stream is cancelled, then marked blocked like its descendants. An
+        unrelated branch completes.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        a.fail = True
+        b = _consumer("b", a, tmp_path, hang=True)
+        after_b = _task("after_b", tmp_path=tmp_path, task_cls=_PassTask)
+        c = _task("c", tmp_path=tmp_path, task_cls=_PassTask)
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(
+            name="stream_continue",
+            tasks=[root, a, b, after_b, c],
+            edges=[
+                WorkflowEdge(source="root", target="a"),
+                WorkflowEdge(source="root", target="c"),
+                WorkflowEdge(source="a", target="b"),
+                WorkflowEdge(source="b", target="after_b"),
+            ],
+            failure_policy="continue",
+        )
+
+        with pytest.raises(WorkflowExecutionError) as exc_info:
+            await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert exc_info.value.failed_task_ids == ["a"]
+        assert a.status == TaskStatus.FAILED
+        assert b.cancelled
+        for task in (b, after_b):
+            assert task.status == TaskStatus.SKIPPED
+            assert task.skip_reason == SkipReason.UPSTREAM_FAILED
+        assert after_b.runs == 0
+        assert c.status == TaskStatus.COMPLETED
+
+    async def test_streaming_from_reset_on_reuse(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A reused task that no longer streams starts with none set."""
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        b = _consumer("b", a, tmp_path, seen=[])
+        wf = HorusWorkflow(
+            name="stream_reuse",
+            tasks=[a, b],
+            edges=[WorkflowEdge(source="a", target="b")],
+        )
+        await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        b.streams = False
+        await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert b.seen == [frozenset({"a"}), frozenset()]
+        assert b.status == TaskStatus.COMPLETED
+
+    async def test_dead_stream_waits_for_the_source(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A cancelled or failed stream future never counts as open, and is
+        not waited on: the consumer waits for its source to complete.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        b = _consumer("b", a, tmp_path)
+        tasks_by_id: dict[str, BaseTask] = {"a": a, "b": b}
+        deps: dict[str, set[str]] = {"a": set(), "b": {"a"}}
+
+        def ready(completed: set[str]) -> tuple[list[str], set[object]]:
+            got, waits = _ready(
+                set(deps),
+                deps,
+                completed=completed,
+                dispatched={"a"} | completed,
+                blocked=set(),
+                tasks_by_id=tasks_by_id,
+                source_map={},
+            )
+            return got, set(waits)
+
+        a.opened().cancel()
+        assert ready(set()) == ([], set())
+        a._opened = None
+        a.opened().set_exception(TaskExecutionError("boom"))
+        assert ready(set()) == ([], set())
+        assert ready({"a"}) == (["b"], set())
+
+    async def test_run_cancel_while_unblocking_cancels_the_rest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A run cancelled while a blocked consumer unwinds still cancels the
+        unrelated tasks in flight.
+        """
+        del horus_context
+        unwinding = asyncio.Event()
+
+        class SlowUnwind(_StreamConsumer):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                assert self._source is not None
+                self._source._release.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    unwinding.set()
+                    await asyncio.Event().wait()
+
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        a.fail = True
+        b = _consumer("b", a, tmp_path, task_cls=SlowUnwind)
+        c = _consumer("c", a, tmp_path, hang=True, streams=False)
+        c._source = None
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(
+            name="stream_cancel_unblock",
+            tasks=[root, a, b, c],
+            edges=[
+                WorkflowEdge(source="root", target="a"),
+                WorkflowEdge(source="root", target="c"),
+                WorkflowEdge(source="a", target="b"),
+            ],
+            failure_policy="continue",
+        )
+
+        run = asyncio.create_task(wf.run(trigger_id="root"))
+        await asyncio.wait_for(unwinding.wait(), timeout=5)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=5)
+
+        assert c.cancelled
+        assert c.status == TaskStatus.CANCELED
+
+    async def test_late_source_failure_keeps_completed_consumer(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``continue``, a source failing after its streaming consumer
+        completed leaves that consumer completed and its own running
+        consumer running to the end.
+        """
+        del horus_context
+        handled = asyncio.Event()
+        late = asyncio.Event()
+
+        class LateFail(_StreamSource):
+            add_to_registry: ClassVar[bool] = False
+
+            async def _run(self) -> None:
+                try:
+                    self.opened().set_result(None)
+                    await late.wait()
+                    raise TaskExecutionError("source failed late")
+                finally:
+                    self._opened = None
+
+        class AfterB(_PassTask):
+            add_to_registry: ClassVar[bool] = False
+            cancelled: bool = False
+
+            async def _run(self) -> None:
+                late.set()
+                try:
+                    await handled.wait()
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+
+        a = _task("a", tmp_path=tmp_path, task_cls=LateFail)
+        assert isinstance(a, LateFail)
+        b = _consumer("b", a, tmp_path)
+        c = _task("c", tmp_path=tmp_path, task_cls=AfterB)
+        assert isinstance(c, AfterB)
+        wf = HorusWorkflow(
+            name="stream_late_fail",
+            tasks=[a, b, c],
+            edges=[
+                WorkflowEdge(source="a", target="b"),
+                WorkflowEdge(source="b", target="c"),
+            ],
+            failure_policy="continue",
+        )
+        mark_blocked = scheduler_mod._mark_blocked
+
+        def spy(*args: object, **kwargs: object) -> None:
+            mark_blocked(*args, **kwargs)  # type: ignore[arg-type]
+            handled.set()
+
+        with (
+            patch.object(scheduler_mod, "_mark_blocked", spy),
+            pytest.raises(WorkflowExecutionError) as exc_info,
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert exc_info.value.failed_task_ids == ["a"]
+        assert a.status == TaskStatus.FAILED
+        assert b.status == TaskStatus.COMPLETED
+        assert b.skip_reason is None
+        assert not c.cancelled
+        assert c.status == TaskStatus.COMPLETED
+
+
+@pytest.mark.unit
+class TestMapsTakeNoPoolSlot:
+    """
+    A map waits on its clones, which take slots of their own, so it skips
+    the workflow's ``max_concurrency`` slot (but not the target handout).
+    """
+
+    async def test_map_takes_no_outer_slot(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under ``max_concurrency=1`` a map starts on the stream of a source
+        that holds the only slot and waits for it: no deadlock.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        m = _consumer("m", a, tmp_path, task_cls=_MapConsumer)
+        wf = HorusWorkflow(
+            name="map_slot",
+            tasks=[a, m],
+            edges=[WorkflowEdge(source="a", target="m")],
+            max_concurrency=1,
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert a.status == TaskStatus.COMPLETED
+        assert m.status == TaskStatus.COMPLETED
+
+    async def test_maps_never_member_queued(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        With the only slot taken, a plain task is reported queued to the
+        lease manager and a map is not.
+        """
+        del horus_context
+        a = _task("a", tmp_path=tmp_path, task_cls=_StreamSource)
+        assert isinstance(a, _StreamSource)
+        m = _consumer("m", a, tmp_path, task_cls=_MapConsumer)
+        p = _consumer("p", a, tmp_path)
+        wf = HorusWorkflow(
+            name="map_queue",
+            tasks=[a, m, p],
+            edges=[
+                WorkflowEdge(source="a", target="m"),
+                WorkflowEdge(source="a", target="p"),
+            ],
+            max_concurrency=1,
+        )
+        queued: list[str] = []
+        member_queued = LeaseManager.member_queued
+
+        def spy(leases: LeaseManager, task: HorusTask) -> None:
+            queued.append(task.id)
+            member_queued(leases, task)
+
+        with patch.object(LeaseManager, "member_queued", spy):
+            await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert queued == ["p"]
+        assert m.status == TaskStatus.COMPLETED
+        assert p.status == TaskStatus.COMPLETED
+
+    async def test_map_keeps_target_handout(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Two maps on one target instance run at once, the second on an idle
+        copy; both get the declared target back.
+        """
+        del horus_context
+        shared = LocalTarget(working_directory=tmp_path.as_posix())
+        barrier = asyncio.Barrier(2)
+        seen: list[BaseTarget] = []
+
+        class Map(_PassTask):
+            add_to_registry: ClassVar[bool] = False
+            dispatches_children: ClassVar[bool] = True
+
+            async def _run(self) -> None:
+                seen.append(self.target)
+                await barrier.wait()
+
+        maps = [
+            _task(map_id, tmp_path=tmp_path, task_cls=Map, target=shared)
+            for map_id in ("m1", "m2")
+        ]
+        root = _task("root", tmp_path=tmp_path, task_cls=_PassTask)
+        wf = HorusWorkflow(
+            name="map_handout",
+            tasks=[root, *maps],
+            edges=[WorkflowEdge(source="root", target=m.id) for m in maps],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="root"), timeout=10)
+
+        assert len(seen) == 2
+        assert seen[0] is not seen[1]
+        assert shared in seen
+        assert all(m.target is shared for m in maps)

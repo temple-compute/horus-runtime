@@ -22,11 +22,15 @@ fan-out behaviour as an ordinary DAG node.
 
 import asyncio
 import contextvars
+import hashlib
+import itertools
+import json
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -42,8 +46,20 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.workflow import map as map_module
+from horus_builtin.workflow.dag import (
+    CyclicDependencyError,
+    build_dependencies,
+    topological_sort,
+)
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_builtin.workflow.map import MapOver, MapTask
+from horus_builtin.workflow.map import (
+    MapConfigurationError,
+    MapOver,
+    MapTask,
+    _ItemStream,
+    _remove_slots,
+)
 from horus_builtin.workflow.scheduler import execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core import lease as lease_module
@@ -51,13 +67,30 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
 from horus_runtime.core.artifact.store import ArtifactStore
 from horus_runtime.core.lease import BaseEvacuator
+from horus_runtime.core.placement import ResourceCapacity
+from horus_runtime.core.resources import ResourceRequest
+from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import ChannelProcess
-from horus_runtime.core.task.exceptions import TargetLostError
-from horus_runtime.core.task.status import TERMINAL_STATUSES, TaskStatus
+from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.exceptions import (
+    CommandFailedError,
+    TargetLostError,
+    TaskExecutionError,
+    exception_leaves,
+)
+from horus_runtime.core.task.status import (
+    TERMINAL_STATUSES,
+    SkipReason,
+    TaskStatus,
+)
 from horus_runtime.core.transfer.events import TransferEvent
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
+from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
-from horus_runtime.core.workflow.exceptions import ArtifactLostError
+from horus_runtime.core.workflow.exceptions import (
+    ArtifactLostError,
+    WorkflowExecutionError,
+)
 from horus_runtime.middleware.bound_task import (
     BoundTaskMiddleware,
     BoundTaskMiddlewareContext,
@@ -78,6 +111,16 @@ def _fails_long(batch: FileArtifact) -> None:
     """A function body failing with a long error for a "bad" item."""
     if batch.path.read_text() == "bad":
         raise ValueError("x" * 1000)
+
+
+def _exits(batch: FileArtifact) -> None:
+    """A function body that exits with N for an item holding "exit N"."""
+    words = batch.path.read_text().split()
+    if words[0] == "exit":
+        raise CommandFailedError(
+            f"Shell command exited with return code {words[1]}",
+            int(words[1]),
+        )
 
 
 def _split_task(tmp_path: Path, names: list[str]) -> HorusTask:
@@ -300,7 +343,7 @@ class TestFolderFanOut:
         map_task.error = "RuntimeError: boom"
 
         clone = map_task._clone(
-            "0", FileArtifact(id="batches", path=tmp_path / "a"), tmp_path
+            "0", FileArtifact(id="batches", path=tmp_path / "a"), tmp_path, {}
         )
 
         assert clone.started_at is None
@@ -940,7 +983,7 @@ class TestCloneFailure:
         wf = _wire(tmp_path, split=split, map_task=map_task)
         wf.failure_policy = "continue"
 
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(WorkflowExecutionError):
             await wf.run(trigger_id="split")
 
         clones = {
@@ -1068,6 +1111,425 @@ class TestMapPorts:
             )
 
 
+def _edge(
+    source: str, output: str, target: str, input_id: str
+) -> WorkflowEdge:
+    """A transfer edge from *source*'s *output* into *target*'s input."""
+    return WorkflowEdge(
+        source=source,
+        source_output=output,
+        target=target,
+        target_input=input_id,
+    )
+
+
+def _plain(task_id: str) -> HorusTask:
+    """A plain task with one folder output, ``<task_id>_out``."""
+    return HorusTask(
+        id=task_id,
+        name=task_id,
+        runtime=CommandRuntime(command="true"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        outputs=[FolderArtifact(id="out", path=Path(f"{task_id}_out"))],
+    )
+
+
+def _over_map(task_id: str, **kwargs: Any) -> MapTask:
+    """A map over its ``batches`` input, writing ``<task_id>_out``."""
+    return MapTask(
+        id=task_id,
+        name=task_id,
+        over=MapOver(input_id="batches", item_id="batch"),
+        runtime=CommandRuntime(command="cp $batch $scored/"),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id="batches", path=Path(f"{task_id}_in"))],
+        outputs=[FolderArtifact(id="scored", path=Path(f"{task_id}_out"))],
+        **kwargs,
+    )
+
+
+def _consumer(
+    *,
+    inputs: tuple[str, ...] = ("a_out",),
+    command: str = "ls $item > $out/ls.txt",
+    **kwargs: Any,
+) -> MapTask:
+    """Map ``b`` over its ``a_out`` input, one folder input per id."""
+    return MapTask(
+        id="b",
+        name="b",
+        over=MapOver(input_id="a_out", item_id="item"),
+        runtime=CommandRuntime(command=command),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        inputs=[FolderArtifact(id=i, path=Path(f"{i}_in")) for i in inputs],
+        outputs=[FolderArtifact(id="out", path=Path("b_out"))],
+        **kwargs,
+    )
+
+
+def _pairing_wf(
+    b: MapTask, tasks: list[BaseTask], edges: list[WorkflowEdge]
+) -> HorusWorkflow:
+    """A workflow of *tasks* and *b*, wired by *edges*."""
+    return HorusWorkflow(name="wf", tasks=[*tasks, b], edges=edges)
+
+
+@pytest.mark.unit
+class TestMapFields:
+    """``chain``, ``zip`` and ``drop_exit_codes`` are checked at load."""
+
+    def test_v1_zip_input_not_found(self) -> None:
+        """A zip entry must name one of the map's own inputs."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Input artifact 'reads' not found in task inputs."
+            ),
+        ):
+            _consumer(zip=[MapOver(input_id="reads", item_id="read")])
+
+    def test_v2_zip_input_not_iterable(self) -> None:
+        """A zip input must enumerate its items."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape("Input artifact 'reads' is not iterable."),
+        ):
+            MapTask(
+                id="b",
+                name="b",
+                over=MapOver(input_id="a_out", item_id="item"),
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[
+                    FolderArtifact(id="a_out", path=Path("a_out_in")),
+                    FileArtifact(id="reads", path=Path("reads.txt")),
+                ],
+                outputs=[FolderArtifact(id="out", path=Path("b_out"))],
+                zip=[MapOver(input_id="reads", item_id="read")],
+            )
+
+    @pytest.mark.parametrize(
+        ("entry", "item"),
+        [
+            (MapOver(input_id="c_out", item_id="item"), "item"),
+            (MapOver(input_id="c_out", item_id="c_out"), "c_out"),
+            (MapOver(input_id="a_out", item_id="pair"), "a_out"),
+        ],
+    )
+    def test_v3_zip_binding_collides(self, entry: MapOver, item: str) -> None:
+        """A zip ``as`` is a free id, and no input is iterated twice."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(f"Map task 'b' binds '{item}' twice."),
+        ):
+            _consumer(inputs=("a_out", "c_out"), zip=[entry])
+
+    def test_v4_chain_over_not_from_map(self) -> None:
+        """A chained map's ``over`` must come from a map."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, but 'a_out' does not come from a "
+                "map."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("a")],
+                [_edge("a", "out", "b", "a_out")],
+            )
+
+    def test_v5_zip_not_from_map(self) -> None:
+        """A zip input must come from a map, not a plain task."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' pairs 'c_out' by item, but it does not come "
+                "from a map."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(
+                    inputs=("a_out", "c_out"),
+                    zip=[MapOver(input_id="c_out", item_id="pair")],
+                ),
+                [_plain("split"), _over_map("a"), _plain("c")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    _edge("c", "out", "b", "c_out"),
+                ],
+            )
+
+    def test_v6_zip_other_item_space(self) -> None:
+        """Paired maps must iterate the same collection."""
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+        )
+        tasks: list[BaseTask] = [
+            _plain("split"),
+            _plain("split2"),
+            _over_map("a"),
+            _over_map("c"),
+        ]
+        edges = [
+            _edge("split", "out", "a", "batches"),
+            _edge("a", "scored", "b", "a_out"),
+            _edge("c", "scored", "b", "c_out"),
+        ]
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' pairs 'c_out' by item, but 'c' maps over "
+                "different items than 'a'."
+            ),
+        ):
+            _pairing_wf(
+                b, tasks, [*edges, _edge("split2", "out", "c", "batches")]
+            )
+
+        # Over the same collection, the pairing loads.
+        _pairing_wf(
+            b.model_copy(deep=True),
+            tasks,
+            [*edges, _edge("split", "out", "c", "batches")],
+        )
+
+    def test_v6_over_cycle_loads(self) -> None:
+        """
+        Maps feeding each other's ``over`` skip the pairing check instead
+        of recursing; the cycle check reports them.
+        """
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+        )
+        wf = _pairing_wf(
+            b,
+            [_plain("split"), _over_map("a"), _over_map("c")],
+            [
+                _edge("b", "out", "a", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+                _edge("split", "out", "c", "batches"),
+                _edge("c", "scored", "b", "c_out"),
+            ],
+        )
+
+        with pytest.raises(CyclicDependencyError):
+            topological_sort(
+                {t.id for t in wf.tasks},
+                build_dependencies(wf.tasks, wf.edges),
+            )
+
+    def test_v7_chained_body_reads_whole_folder(self) -> None:
+        """A chained command cannot name a streamed folder."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of 'c_out'. "
+                "Use '$pair' for this item."
+            ),
+        ):
+            _consumer(
+                inputs=("a_out", "c_out"),
+                command="cp ${c_out.path}/x $out/",
+                chain=True,
+                zip=[MapOver(input_id="c_out", item_id="pair")],
+            )
+        # `$$` is a literal dollar, not a placeholder.
+        _consumer(command="echo $$a_out > $out/x", chain=True)
+
+    def test_v7_task_placeholder(self) -> None:
+        """``${task.inputs}`` reads every folder and
+        ``${task.inputs.<streamed id>}`` a streamed one; other ``task``
+        names, ``task.outputs`` and inputs that do not stream do not.
+        """
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of "
+                "'task.inputs'. Use '$item' for this item."
+            ),
+        ):
+            _consumer(command="ls ${task.inputs}", chain=True)
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained, so it cannot read all of "
+                "'task.inputs.c_out'. Use '$pair' for this item."
+            ),
+        ):
+            _consumer(
+                inputs=("a_out", "c_out"),
+                command="ls ${task.inputs.c_out.path}",
+                chain=True,
+                zip=[MapOver(input_id="c_out", item_id="pair")],
+            )
+        _consumer(
+            inputs=("a_out", "idx"),
+            command=(
+                "run -t ${task.resources.cpus} ${task.id} ${task.name} "
+                "--genomeDir ${task.inputs.idx} $item "
+                "> ${task.outputs}/x"
+            ),
+            chain=True,
+        )
+
+    def test_v8_python_chain_loads(self) -> None:
+        """A Python body cannot be checked, so a chain over it loads."""
+        b = _consumer(chain=True)
+        b.runtime = PythonFunctionRuntime(func=_reads_everything)
+        b.executor = PythonFunctionExecutor()
+        wf = _pairing_wf(
+            MapTask.model_validate(b.model_dump()),
+            [_plain("split"), _over_map("a")],
+            [
+                _edge("split", "out", "a", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+            ],
+        )
+        loaded = next(t for t in wf.tasks if t.id == "b")
+        assert isinstance(loaded, MapTask)
+        assert loaded.chain
+
+    def test_v9_second_edge_from_chained_source(self) -> None:
+        """A chained source feeds nothing but its paired input."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so no other input can take "
+                "all of its output."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(inputs=("a_out", "a_all"), chain=True),
+                [_plain("split"), _over_map("a")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    _edge("a", "scored", "b", "a_all"),
+                ],
+            )
+
+    @pytest.mark.parametrize("transfer", [True, False])
+    def test_condition_on_chained_edge_rejected(self, transfer: bool) -> None:
+        """
+        A chained map starts before its source ends, so a condition on an
+        edge from that source would be read too early.
+        """
+        edge = _edge("a", "scored", "b", "a_out")
+        edges = [_edge("split", "out", "a", "batches"), edge]
+        condition = EdgeCondition(
+            key="ok", op="truthy", source_output="scored"
+        )
+        if transfer:
+            edge.condition = condition
+        else:
+            edges.append(
+                WorkflowEdge(source="a", target="b", condition=condition)
+            )
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so its edge cannot have a "
+                "condition."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("split"), _over_map("a")],
+                edges,
+            )
+
+    def test_condition_reading_the_chained_source_rejected(self) -> None:
+        """A condition on another edge that reads A is read too early too."""
+        condition = EdgeCondition(
+            key="ok", op="truthy", source_task="a", source_output="scored"
+        )
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' is chained to 'a', so its edge cannot have a "
+                "condition."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(chain=True),
+                [_plain("split"), _over_map("a")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    WorkflowEdge(
+                        source="split", target="b", condition=condition
+                    ),
+                ],
+            )
+
+    def test_deep_chain_with_a_zip_loads(self) -> None:
+        """
+        The item space of a map 1200 maps down its ``over`` chain is found
+        without recursing once per map, for each map that zips.
+        """
+        maps = [_over_map(f"m{i}") for i in range(1200)]
+        maps[1].inputs.append(FolderArtifact(id="mates", path=Path("mates")))
+        maps[1].zip = [MapOver(input_id="mates", item_id="mate")]
+        edges = [
+            _edge("split", "out", "m0", "batches"),
+            _edge("m0", "scored", "m1", "mates"),
+        ]
+        edges += [
+            _edge(f"m{i}", "scored", f"m{i + 1}", "batches")
+            for i in range(len(maps) - 1)
+        ]
+        last = _consumer(inputs=("a_out", "mates"))
+        last.zip = [MapOver(input_id="mates", item_id="mate")]
+        edges += [
+            _edge(maps[-1].id, "scored", "b", "a_out"),
+            _edge("m0", "scored", "b", "mates"),
+        ]
+
+        _pairing_wf(last, [_plain("split"), *maps], edges)
+
+    def test_condition_on_unchained_edge_allowed(self) -> None:
+        """Without a chain, the condition is read once A ended, as before."""
+        edge = _edge("a", "scored", "b", "a_out")
+        edge.condition = EdgeCondition(key="ok", op="truthy")
+
+        _pairing_wf(
+            _consumer(),
+            [_plain("split"), _over_map("a")],
+            [_edge("split", "out", "a", "batches"), edge],
+        )
+
+    def test_drop_code_zero_rejected(self) -> None:
+        """0 is success, never a drop."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' lists exit code 0 to drop items, but 0 means "
+                "success."
+            ),
+        ):
+            _consumer(drop_exit_codes=[3, 0])
+
+    @pytest.mark.parametrize("code", [-1, 256])
+    def test_drop_code_out_of_range_rejected(self, code: int) -> None:
+        """A drop code is an exit code a command can return."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                f"Map task 'b' lists exit code {code} to drop items. Use a "
+                "code from 1 to 255."
+            ),
+        ):
+            _consumer(drop_exit_codes=[code])
+
+
 @pytest.mark.unit
 class TestRoundTrip:
     """A map is an ordinary task document: to_yaml/from_yaml preserves it
@@ -1106,6 +1568,61 @@ class TestRoundTrip:
         assert isinstance(score2, MapTask)
         assert score2.over.input_id == "batches"
         assert score2.over.item_id == "batch"
+
+        await wf2.run(trigger_id="split")
+        assert wf2.status.value == "completed"
+
+    async def test_chain_zip_drop_codes_round_trip(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A chained map runs after its source like any other map, and the
+        new fields survive to_yaml/from_yaml.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        a = _over_map("a")
+        c = _over_map("c")
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            chain=True,
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+            drop_exit_codes=[3, 10],
+        )
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[split, a, c, b],
+            edges=[
+                _edge("split", "batches", "a", "batches"),
+                _edge("split", "batches", "c", "batches"),
+                _edge("a", "scored", "b", "a_out"),
+                _edge("c", "scored", "b", "c_out"),
+            ],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
+        assert sorted(p.name for p in (tmp_path / "b_out").iterdir()) == [
+            "0",
+            "1",
+        ]
+
+        out_path = tmp_path / "dump.yaml"
+        wf.to_yaml(out_path)
+
+        dumped = yaml.safe_load(out_path.read_text())
+        b_dict = next(t for t in dumped["tasks"] if t["id"] == "b")
+        assert b_dict["chain"] is True
+        assert b_dict["drop_exit_codes"] == [3, 10]
+        assert [z["input_id"] for z in b_dict["zip"]] == ["c_out"]
+
+        wf2 = BaseWorkflow.from_yaml(out_path)
+        b2 = next(t for t in wf2.tasks if t.id == "b")
+        assert isinstance(b2, MapTask)
+        assert b2.chain is True
+        assert b2.zip == [MapOver(input_id="c_out", item_id="pair")]
+        assert b2.drop_exit_codes == [3, 10]
 
         await wf2.run(trigger_id="split")
         assert wf2.status.value == "completed"
@@ -1186,6 +1703,35 @@ def _dropping_map(**kwargs: object) -> MapTask:
     )
     map_task.on_item_failure = "drop"
     return map_task
+
+
+def _drop_code_wf(
+    tmp_path: Path, contents: dict[str, str], **kwargs: Any
+) -> tuple[HorusWorkflow, MapTask]:
+    """``split -> score``, the body exiting N for an item holding "exit N",
+    with ``drop_exit_codes: [3]``.
+    """
+    split = _split_task(tmp_path, list(contents))
+    for name, content in contents.items():
+        (tmp_path / "batches" / name).write_text(content)
+    map_task = _map_task(
+        over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+    )
+    map_task.runtime = PythonFunctionRuntime(func=_exits)
+    map_task.executor = PythonFunctionExecutor()
+    map_task.drop_exit_codes = [3]
+    for key, value in kwargs.items():
+        setattr(map_task, key, value)
+    return _wire(tmp_path, split=split, map_task=map_task), map_task
+
+
+def _drop_events(emit: MagicMock) -> list[HorusTaskEvent]:
+    """The drop events among *emit*'s calls."""
+    return [
+        c.args[0]
+        for c in emit.call_args_list
+        if isinstance(c.args[0], HorusTaskEvent) and "map" in c.args[0].data
+    ]
 
 
 def _drop_messages(emit: MagicMock) -> list[str]:
@@ -1277,9 +1823,16 @@ class TestDropFailedItems:
         assert "1 (b.txt): " in message
 
     async def test_the_drop_event_is_capped(
-        self, tmp_path: Path, horus_context: HorusContext
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A large drop lists 20 items, then "+N more", each error cut."""
+        """
+        A large drop lists 20 items, then "+N more", each error cut; `data`
+        lists the first drops and counts them all.
+        """
+        monkeypatch.setattr(map_module, "_EVENT_ITEMS", 3)
         names = [f"{i:02d}.txt" for i in range(25)]
         split = _split_task(tmp_path, names)
         map_task = _dropping_map()
@@ -1302,6 +1855,14 @@ class TestDropFailedItems:
         assert (
             lines[1] == "01 (01.txt): " + ("ValueError: " + "x" * 1000)[:500]
         )
+        (event,) = _drop_events(emit)
+        dropped = event.data["map"]["dropped"]
+        assert [d["slot"] for d in dropped] == ["01", "02", "03"]
+        assert event.data["map"]["dropped_count"] == 24
+        states = _clone_states(wf, "score").values()
+        assert sum(state != TaskStatus.COMPLETED for state in states) == 24
+        assert dropped[0]["item"] == "01.txt"
+        assert dropped[0]["reason"] == ("ValueError: " + "x" * 1000)[:500]
 
     async def test_every_item_failing_fails_the_map(
         self, tmp_path: Path, horus_context: HorusContext
@@ -1312,11 +1873,228 @@ class TestDropFailedItems:
         map_task = _dropping_map(command="exit 1")
         wf = _wire(tmp_path, split=split, map_task=map_task)
 
+        with pytest.raises(TaskExecutionError) as exc_info:
+            await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.FAILED
+        assert map_task.error is not None
+        assert "All 2 items were dropped in score." in map_task.error
+        assert wf.status.value == "failed"
+        # The clone errors stay attached for the traceback.
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, BaseExceptionGroup)
+        leaves = exception_leaves(cause)
+        assert len(leaves) == 2
+        assert all(isinstance(e, CommandFailedError) for e in leaves)
+
+    async def test_drop_code_drops_under_fail_policy(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop code drops the item even under ``on_item_failure:
+        fail``: the slot is removed and the map and the run complete.
+        """
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "a", "b.txt": "exit 3", "c.txt": "c"}
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert map_task.on_item_failure == "fail"
+        assert wf.status.value == "completed"
+        assert map_task.status == TaskStatus.COMPLETED
+        assert map_task._dropped_slots == ["1"]
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "2"]
+
+    async def test_other_code_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A code not in the list fails the map, as without drop codes."""
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "a", "b.txt": "exit 4"}
+        )
+
         with pytest.raises(Exception):  # noqa: B017
             await wf.run(trigger_id="split")
 
         assert map_task.status == TaskStatus.FAILED
         assert wf.status.value == "failed"
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.status == TaskStatus.FAILED
+        assert clone.skip_reason is None
+
+    async def test_drop_code_under_fail_fast_keeps_siblings(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Under fail_fast, a drop in the first slot cancels no sibling."""
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path, {"a.txt": "exit 3", "b.txt": "b", "c.txt": "c"}
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.failure_policy == "fail_fast"
+        assert map_task.status == TaskStatus.COMPLETED
+        statuses = {
+            t.id: t.status for t in wf.tasks if t.id.startswith("score[")
+        }
+        assert statuses == {
+            "score[0]": TaskStatus.SKIPPED,
+            "score[1]": TaskStatus.COMPLETED,
+            "score[2]": TaskStatus.COMPLETED,
+        }
+
+    async def test_fatal_failure_under_fail_fast_cancels_siblings(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        With drop codes set, a drop cancels no sibling, but a failure that
+        is not droppable still cancels the rest under fail_fast.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt", "c.txt"])
+        (tmp_path / "batches" / "a.txt").write_text("drop")
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                'grep -q drop "$batch" && exit 3; '
+                'grep -q bad "$batch" && { sleep 0.5; exit 1; }; '
+                "sleep 30 && cp $batch $scored/result.txt"
+            ),
+        )
+        map_task.drop_exit_codes = [3]
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with pytest.raises(Exception) as exc_info:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=15)
+
+        # Not the timeout: the failure itself cancelled score[2].
+        assert not isinstance(exc_info.value, TimeoutError)
+        clones = {t.id: t for t in wf.tasks if t.id.startswith("score[")}
+        assert clones["score[0]"].status == TaskStatus.SKIPPED
+        assert clones["score[0]"].skip_reason == SkipReason.DROPPED
+        assert clones["score[1]"].status == TaskStatus.FAILED
+        assert clones["score[2]"].status == TaskStatus.CANCELED
+        assert map_task.status == TaskStatus.FAILED
+
+    async def test_drop_code_never_retries(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop is final: the clone ran once."""
+        del horus_context
+        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.runs == 1
+        assert clone._target_loss_retries == 0
+
+    async def test_dropped_clone_error_names_the_code(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The clone's error says which code dropped it."""
+        del horus_context
+        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.error == "Dropped: exit code 3"
+
+    async def test_drop_code_clone_is_skipped_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop-code clone ends SKIPPED with ``dropped``; a crash under
+        ``on_item_failure: drop`` stays FAILED.
+        """
+        del horus_context
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3", "c.txt": "exit 4"},
+            on_item_failure="drop",
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        tasks = {t.id: t for t in wf.tasks}
+        assert tasks["score[1]"].status == TaskStatus.SKIPPED
+        assert tasks["score[1]"].skip_reason == SkipReason.DROPPED
+        assert tasks["score[1]"].finished_at is not None
+        assert tasks["score[2]"].status == TaskStatus.FAILED
+        assert tasks["score[2]"].skip_reason is None
+
+    async def test_drop_event_is_warning(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """One WARNING event lists every own drop and its reason."""
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3", "c.txt": "exit 4"},
+            on_item_failure="drop",
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        (event,) = _drop_events(emit)
+        assert event.task_id == "score"
+        assert event.level == "WARNING"
+        assert event.data == {
+            "map": {
+                "dropped": [
+                    {"slot": "1", "item": "b.txt", "reason": "exit code 3"},
+                    {
+                        "slot": "2",
+                        "item": "c.txt",
+                        "reason": "CommandFailedError: Shell command exited "
+                        "with return code 4",
+                    },
+                ],
+                "dropped_count": 2,
+                "upstream_dropped": {},
+                "upstream_dropped_count": 0,
+            }
+        }
+        assert event.message is not None
+        assert "1 (b.txt): Dropped: exit code 3" in event.message
+
+    async def test_config_hash_unchanged_without_new_fields(self) -> None:
+        """A map without zip or drop codes hashes as before; setting either
+        changes the hash.
+        """
+        map_task = _map_task(
+            over_artifact=FolderArtifact(id="batches", path=Path("batches_in"))
+        )
+        digests = {"batches": "d"}
+        expected = hashlib.sha256(
+            json.dumps(
+                {
+                    "runtime": map_task.runtime.model_dump(mode="json"),
+                    "executor": map_task.executor.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        assert (await map_task._fingerprint(digests)).config_hash == expected
+
+        map_task.drop_exit_codes = [3]
+        with_codes = (await map_task._fingerprint(digests)).config_hash
+        assert with_codes != expected
+        map_task.zip = [MapOver(input_id="batches", item_id="pair")]
+        assert (await map_task._fingerprint(digests)).config_hash not in (
+            expected,
+            with_codes,
+        )
 
     async def test_a_rerun_retries_only_the_dropped_item(
         self, tmp_path: Path, horus_context: HorusContext
@@ -1445,6 +2223,89 @@ class TestDropFailedItems:
         assert map_task.status == TaskStatus.COMPLETED
         statuses = {t.id: t.status for t in wf.tasks}
         assert statuses["score[1]"] == TaskStatus.FAILED
+
+
+class _ShellRemove(LocalTarget):
+    """A local target that removes over its shell, as SSH does."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_shell_remove"
+    remove: ClassVar[Any] = BaseTarget.remove
+
+
+@pytest.mark.unit
+class TestRemoveSlots:
+    """Dropped slots go in commands that fit a command line."""
+
+    async def test_many_long_paths_are_all_removed(
+        self, tmp_path: Path
+    ) -> None:
+        """Past the 128 KiB argument cap, in several checked commands."""
+        root = tmp_path / ("r" * 100)
+        paths = [root / f"{i:04d}" for i in range(1500)]
+        for path in paths:
+            path.mkdir(parents=True)
+        target = _ShellRemove()
+
+        with patch.object(
+            _ShellRemove,
+            "run_command_sync",
+            autospec=True,
+            side_effect=LocalTarget.run_command_sync,
+        ) as run:
+            await _remove_slots(target, [str(p) for p in paths])
+
+        assert sum(len(str(p)) for p in paths) > 128 * 1024
+        assert run.call_count > 1
+        assert all(
+            len(call.args[1]) <= map_module._RM_CHARS
+            for call in run.call_args_list
+        )
+        assert list(root.iterdir()) == []
+
+    async def test_a_failed_command_is_logged(self) -> None:
+        """A non-zero exit is not silent."""
+        target = _ShellRemove()
+        process = MagicMock(wait=AsyncMock(return_value=1))
+
+        with (
+            patch.object(
+                _ShellRemove,
+                "run_command_sync",
+                AsyncMock(return_value=process),
+            ),
+            patch.object(map_module, "horus_logger") as logger,
+        ):
+            await _remove_slots(target, ["/w/a", "/w/b c"])
+
+        (call,) = logger.log.warning.call_args_list
+        assert "exit code 1" in call.args[0]
+        assert "/w/a '/w/b c'" in call.args[0]
+
+    async def test_native_remove_is_used_per_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A target with its own ``remove`` keeps it; a failure is logged."""
+        (tmp_path / "a").mkdir()
+        target = LocalTarget()
+        native = target.remove
+
+        async def remove(path: str) -> None:
+            if path.endswith("b"):
+                raise PermissionError(path)
+            await native(path)
+
+        with (
+            patch.object(LocalTarget, "remove", side_effect=remove),
+            patch.object(LocalTarget, "run_command_sync") as run,
+            patch.object(map_module, "horus_logger") as logger,
+        ):
+            await _remove_slots(target, [str(tmp_path / s) for s in "ab"])
+
+        run.assert_not_called()
+        assert not (tmp_path / "a").exists()
+        (call,) = logger.log.warning.call_args_list
+        assert call.args[0].endswith("b")
 
 
 @pytest.mark.unit
@@ -1749,6 +2610,64 @@ class TestRestage:
         for slot, name in enumerate(("a.txt", "b.txt", "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
 
+    async def test_dropped_clone_is_not_run_again(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone dropped on the lost machine stays dropped."""
+        wf, _node = _on_node(
+            tmp_path, ["a.txt", "b.txt", "c.txt"], produced_on_node=False
+        )
+        (tmp_path / "batches" / "a.txt").write_text("drop")
+        score = cast(MapTask, wf.tasks[1])
+        score.runtime = CommandRuntime(
+            command=f'grep -q drop "$batch" && exit 3; {_BODY}'
+        )
+        score.drop_exit_codes = [3]
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "score")["score[0]"] == (
+            TaskStatus.SKIPPED,
+            SkipReason.DROPPED,
+        )
+        assert not any(
+            "lost with its machine" in m
+            for m in _task_messages(emit, "score[0]")
+        )
+        assert list(score._early_reruns) == []
+
+    @pytest.mark.parametrize(
+        "reason", [SkipReason.DROPPED, SkipReason.UPSTREAM_DROPPED]
+    )
+    async def test_a_dropped_slot_with_a_stale_record_is_not_run_again(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        reason: SkipReason,
+    ) -> None:
+        """
+        A slot taken in an earlier attempt keeps its lease record; dropped
+        in this one, it has no output to lose.
+        """
+        wf, _node = _on_node(tmp_path, ["a.txt"], produced_on_node=False)
+        horus_context.workflow = wf
+        score = cast(MapTask, wf.tasks[1])
+        clone = MagicMock(id="score[0]", skip_reason=reason)
+        clone.name = "score[0]"
+        clone._target_loss_retries = 0
+        run_clone = AsyncMock(return_value=None)
+        results: list[BaseException | None] = [None]
+
+        with patch.object(type(wf.leases), "output_lost", return_value=True):
+            await score._rerun_lost([clone], results, run_clone)
+
+        run_clone.assert_not_called()
+        assert results == [None]
+
     async def test_early_reruns_do_not_inherit_the_ready_context(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -1981,6 +2900,137 @@ class TestRestage:
         for slot, name in ((1, "b.txt"), (2, "c.txt")):
             assert (scored / str(slot) / "result.txt").read_text() == name
 
+    async def test_chained_clone_recovers_lost_source_item(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A's node is lost after A[1] finished and before B[1] read it: B[1]
+        reads A[1]'s own copy from the evacuator, per clone.
+        """
+        del horus_context
+        copy = tmp_path / "s3" / "a1"
+        copy.mkdir(parents=True)
+        (copy / "result.txt").write_text("from s3")
+        monkeypatch.setattr(_S3Evacuator, "stored", copy)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        node = _Node(working_directory=node_dir.as_posix())
+        a = _stage_map(tmp_path, "a", target=node)
+        a.outputs[0].path = node_dir / "a_out"
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+        wait = _ItemStream.wait
+        lost: list[str] = []
+
+        async def lose_first(
+            self: _ItemStream, slot: str, *, owner: str, source: str
+        ) -> Any:
+            item = await wait(self, slot, owner=owner, source=source)
+            if owner == "b" and slot == "1" and not lost:
+                lost.append(slot)
+                while a.status != TaskStatus.COMPLETED:
+                    await asyncio.sleep(0.01)
+                await node.lose()
+            return item
+
+        monkeypatch.setattr(_ItemStream, "wait", lose_first)
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert node.generation == 2
+        assert _result(tmp_path, "b", "1") == "from s3>b_out_1\n"
+        # A's folder is gone, so B records no manifest: a miss next time.
+        assert not (tmp_path / ".horus" / "b.json").exists()
+
+    async def test_chained_item_from_another_machine_is_reported(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """B[X] pulling A[X] across machines emits its transfer events."""
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        a = _stage_map(
+            tmp_path, "a", target=_Node(working_directory=node_dir.as_posix())
+        )
+        a.outputs[0].path = node_dir / "a_out"
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        transfers = {
+            (e.task_id, e.source_task_id, e.phase)
+            for c in emit.call_args_list
+            if isinstance(e := c.args[0], TransferEvent)
+            and e.task_id.startswith("b[")
+        }
+        assert transfers == {
+            (f"b[{slot}]", f"a[{slot}]", phase)
+            for slot in "01"
+            for phase in ("started", "progress", "finished")
+        }
+
+    async def test_chained_clone_past_its_wait_finds_a_retried_slot_lost(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A loses its node after its fan-out and runs again. B[1], already
+        past its wait, reads A[1] while A's retry rewrites it: it fails
+        with the lost output, not on a half-written slot, and is dropped.
+        """
+        del horus_context
+        monkeypatch.setattr(_S3Evacuator, "stored", None)
+        monkeypatch.setattr(lease_module, "_pick_evacuator", _S3Evacuator)
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        node = _Node(working_directory=node_dir.as_posix())
+        a = _stage_map(tmp_path, "a", target=node)
+        a.outputs[0].path = node_dir / "a_out"
+        b = _stage_map(tmp_path, "b", chain=True, on_item_failure="drop")
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+        settle = MapTask._settle
+        wait = _ItemStream.wait
+
+        async def lose_once(self: MapTask, *args: Any) -> None:
+            if self.id == "a" and not self._target_loss_retries:
+                await node.lose()
+                raise TargetLostError("node lost")
+            await settle(self, *args)
+
+        async def hold_b1(
+            self: _ItemStream, slot: str, *, owner: str, source: str
+        ) -> Any:
+            item = await wait(self, slot, owner=owner, source=source)
+            if owner == "b" and slot == "1":
+                # Until A's retry is rewriting A[1].
+                log = tmp_path / "log"
+                while log.read_text().count("a_out_1 start") < 2:
+                    await asyncio.sleep(0.01)
+            return item
+
+        monkeypatch.setattr(MapTask, "_settle", lose_once)
+        monkeypatch.setattr(_ItemStream, "wait", hold_b1)
+        _set(tmp_path, "delay", "a_out_1", 0.3)
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        b1 = next(t for t in wf.tasks if t.id == "b[1]")
+        assert b1.status == TaskStatus.FAILED
+        assert "has been released" in str(b1.error)
+        assert _result(tmp_path, "b", "0") == "x>a_out_0\n>b_out_0\n"
+
     async def test_nothing_to_restage_from_fails_loudly(
         self,
         tmp_path: Path,
@@ -2010,3 +3060,1446 @@ class TestRestage:
             and "could not restage" in (c.args[0].message or "")
             for c in emit.call_args_list
         )
+
+
+def _stage_body(tmp_path: Path) -> str:
+    """
+    A map body: write the text of its item and its zip ``mate`` (each a
+    file, or a slot holding ``result.txt``) plus ``>map_slot`` into
+    ``result.txt`` of its slot.
+    Logs start and end to ``log``; sleeps ``delay/<key>`` seconds and exits
+    with ``exit/<key>`` first, where the key is ``<map>_out_<slot>``.
+    """
+    return (
+        "k=$(basename $(dirname $out))_$(basename $out); "
+        f'echo "$k start $(date +%s.%N)" >> {tmp_path}/log; '
+        f"[ -f {tmp_path}/delay/$k ] && sleep $(cat {tmp_path}/delay/$k); "
+        f"[ -f {tmp_path}/exit/$k ] && exit $(cat {tmp_path}/exit/$k); "
+        "{ for i in $item $mate; do if [ -d $i ]; then cat $i/result.txt; "
+        'else cat $i; fi; done; echo ">$k"; } > $out/result.txt; '
+        f'echo "$k end $(date +%s.%N)" >> {tmp_path}/log'
+    )
+
+
+def _set(tmp_path: Path, what: str, key: str, value: object) -> None:
+    """Make clone *key* (``<map>_out_<slot>``) sleep or exit with *value*."""
+    (tmp_path / what).mkdir(exist_ok=True)
+    (tmp_path / what / key).write_text(str(value))
+
+
+def _when(tmp_path: Path, key: str, what: str) -> float:
+    """When clone *key* last logged *what* (``start`` or ``end``)."""
+    return max(
+        float(line.split()[2])
+        for line in (tmp_path / "log").read_text().splitlines()
+        if line.split()[:2] == [key, what]
+    )
+
+
+def _result(tmp_path: Path, map_id: str, slot: str) -> str:
+    """What clone *slot* of *map_id* wrote."""
+    return (tmp_path / f"{map_id}_out" / slot / "result.txt").read_text()
+
+
+def _stage_map(
+    tmp_path: Path, task_id: str, *, chain: bool = False, **kwargs: Any
+) -> MapTask:
+    """A ``_stage_body`` map over its ``in`` input, into ``<id>_out``."""
+    return MapTask(
+        id=task_id,
+        name=task_id,
+        over=MapOver(input_id="in", item_id="item"),
+        runtime=CommandRuntime(command=_stage_body(tmp_path)),
+        executor=ShellExecutor(),
+        inputs=[FolderArtifact(id="in", path=Path(f"{task_id}_in"))],
+        outputs=[FolderArtifact(id="out", path=tmp_path / f"{task_id}_out")],
+        chain=chain,
+        **{"target": LocalTarget(), "max_concurrency": 0, **kwargs},
+    )
+
+
+def _stages(
+    tmp_path: Path,
+    names: list[str],
+    maps: list[MapTask],
+    *,
+    extra_tasks: list[BaseTask] | None = None,
+    extra_edges: list[WorkflowEdge] | None = None,
+    **kwargs: Any,
+) -> HorusWorkflow:
+    """``split -> maps[0] -> maps[1] -> ...``, each over the one before."""
+    split = _split_task(tmp_path, names)
+    sources = [("split", "batches"), *((m.id, "out") for m in maps[:-1])]
+    return HorusWorkflow(
+        name="wf",
+        tasks=[split, *maps, *(extra_tasks or [])],
+        edges=[
+            *(
+                _edge(source, output, m.id, "in")
+                for (source, output), m in zip(sources, maps, strict=True)
+            ),
+            *(extra_edges or []),
+        ],
+        orchestrator_target=LocalTarget(working_directory=tmp_path.as_posix()),
+        **kwargs,
+    )
+
+
+def _clone_states(wf: BaseWorkflow, map_id: str) -> dict[str, Any]:
+    """Status, and skip reason when skipped, of each clone of *map_id*."""
+    return {
+        t.id: (t.status, t.skip_reason) if t.skip_reason else t.status
+        for t in wf.tasks
+        if t.id.startswith(f"{map_id}[")
+    }
+
+
+@pytest.mark.unit
+class TestChain:
+    """``chain: true``: B[X] starts as soon as A[X] is ready."""
+
+    async def test_b0_starts_before_a_last_clone_ends(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A slow last item does not hold back the others' next stage."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 0.5)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "b_out_0", "start") < _when(
+            tmp_path, "a_out_2", "end"
+        )
+        assert _result(tmp_path, "b", "2") == "z>a_out_2\n>b_out_2\n"
+
+    async def test_three_map_chain_flows_per_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """C[0] finishes while A[2] still runs; every item reaches C."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 0.5)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [
+                _stage_map(tmp_path, "a"),
+                _stage_map(tmp_path, "b", chain=True),
+                _stage_map(tmp_path, "c", chain=True),
+            ],
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "c_out_0", "end") < _when(
+            tmp_path, "a_out_2", "end"
+        )
+        for slot, name in enumerate("xyz"):
+            assert _result(tmp_path, "c", str(slot)) == (
+                f"{name}>a_out_{slot}\n>b_out_{slot}\n>c_out_{slot}\n"
+            )
+
+    async def test_upstream_drop_skips_down_the_chain(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A drop in A skips that item in B and C, which leave a gap and say
+        so once, naming A as the origin; the run completes.
+        """
+        _set(tmp_path, "exit", "a_out_1", 3)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [
+                _stage_map(tmp_path, "a", drop_exit_codes=[3]),
+                _stage_map(tmp_path, "b", chain=True),
+                _stage_map(tmp_path, "c", chain=True),
+            ],
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "a")["a[1]"] == (
+            TaskStatus.SKIPPED,
+            SkipReason.DROPPED,
+        )
+        for map_id in "bc":
+            assert _clone_states(wf, map_id) == {
+                f"{map_id}[0]": TaskStatus.COMPLETED,
+                f"{map_id}[1]": (
+                    TaskStatus.SKIPPED,
+                    SkipReason.UPSTREAM_DROPPED,
+                ),
+                f"{map_id}[2]": TaskStatus.COMPLETED,
+            }
+            out = tmp_path / f"{map_id}_out"
+            assert sorted(p.name for p in out.iterdir()) == ["0", "2"]
+        events = {
+            e.task_id: e for e in _drop_events(emit) if e.level == "WARNING"
+        }
+        assert events["b"].level == "WARNING"
+        assert events["b"].message == "1 item(s) dropped upstream."
+        assert events["b"].data["map"] == {
+            "dropped": [],
+            "dropped_count": 0,
+            "upstream_dropped": {"1": "a"},
+            "upstream_dropped_count": 1,
+        }
+        assert events["c"].data["map"]["upstream_dropped"] == {"1": "a"}
+        assert [d["slot"] for d in events["a"].data["map"]["dropped"]] == ["1"]
+        assert not (tmp_path / "log").read_text().count("b_out_1")
+
+    async def test_chained_event_names_the_sources(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B says once, at the start, which map it follows per item, listing
+        the first slots and counting them all.
+        """
+        monkeypatch.setattr(map_module, "_EVENT_ITEMS", 1)
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        (event,) = [
+            e for e in _drop_events(emit) if e.task_id == "b" and e.data
+        ]
+        assert event.message == "Map b starts each item when a finishes it."
+        assert event.data == {
+            "map": {"chain": ["a"], "slots": {"0": "x"}, "slot_count": 2}
+        }
+
+    @pytest.mark.parametrize("policy", ["fail_fast", "continue"])
+    @pytest.mark.parametrize(
+        ("end", "a_fields"),
+        [
+            ("exit code", {}),
+            ("drop code", {"drop_exit_codes": [3]}),
+            ("error under drop", {"on_item_failure": "drop"}),
+            ("placement failure", {}),
+            ("placement failure under drop", {"on_item_failure": "drop"}),
+            ("node lost, retries spent", {}),
+            ("executor error", {}),
+        ],
+    )
+    async def test_every_non_success_end_settles_b(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        bound_failures: dict[str, BaseException],
+        monkeypatch: pytest.MonkeyPatch,
+        end: str,
+        a_fields: dict[str, Any],
+        policy: str,
+    ) -> None:
+        """
+        However A[1] ends short of success, B[1] settles: dropped when A
+        drops it, else B is cancelled or blocked with A. Nothing hangs.
+        """
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 0.3)
+        if end in ("exit code", "error under drop"):
+            _set(tmp_path, "exit", "a_out_1", 1)
+        elif end == "drop code":
+            _set(tmp_path, "exit", "a_out_1", 3)
+        elif end.startswith("placement failure"):
+            bound_failures["a[1]"] = RuntimeError("no room")
+        elif end == "node lost, retries spent":
+            bound_failures["a[1]"] = TargetLostError("node lost")
+        else:
+            execute = ShellExecutor._execute
+
+            async def broken(self: ShellExecutor, task: BaseTask) -> None:
+                if task.id == "a[1]":
+                    raise TaskExecutionError("executor broke")
+                await execute(self, task)
+
+            monkeypatch.setattr(ShellExecutor, "_execute", broken)
+        a = _stage_map(tmp_path, "a", **a_fields)
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y", "z"], [a, b], failure_policy=policy)
+        run = asyncio.wait_for(wf.run(trigger_id="split"), timeout=20)
+
+        if "drop" in end:
+            await run
+            assert wf.status.value == "completed"
+            assert _clone_states(wf, "b") == {
+                "b[0]": TaskStatus.COMPLETED,
+                "b[1]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
+                "b[2]": TaskStatus.COMPLETED,
+            }
+            return
+        with pytest.raises(Exception) as excinfo:
+            await run
+        assert not isinstance(excinfo.value, TimeoutError), excinfo.value
+        assert a.status == TaskStatus.FAILED
+        clones = [t for t in wf.tasks if t.id.startswith("b[")]
+        assert not any(
+            t.status
+            in (TaskStatus.PENDING, TaskStatus.CONFIGURING, TaskStatus.RUNNING)
+            for t in clones
+        )
+        if policy == "fail_fast":
+            assert b.status == TaskStatus.CANCELED
+        else:
+            assert (b.status, b.skip_reason) == (
+                TaskStatus.SKIPPED,
+                SkipReason.UPSTREAM_FAILED,
+            )
+            assert all(t.status in TERMINAL_STATUSES for t in clones), (
+                type(excinfo.value),
+                [(t.id, t.status) for t in clones],
+            )
+            assert clones[1].skip_reason == SkipReason.UPSTREAM_FAILED
+
+    async def test_consumer_failing_with_its_source_stays_failed(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Under continue, A and B, chained on A, fail in the same batch: B
+        stays FAILED with its error instead of being marked blocked.
+        """
+        del horus_context
+        go = asyncio.Event()
+        asyncio.get_running_loop().call_later(1.0, go.set)
+        manifest = MapTask._write_manifest
+        settle = MapTask._settle
+
+        async def a_breaks(self: MapTask, *args: Any) -> None:
+            if self.id == "a":
+                await go.wait()
+                raise RuntimeError("a broke")
+            await manifest(self, *args)
+
+        async def b_breaks(self: MapTask, *args: Any) -> None:
+            if self.id == "b":
+                await go.wait()
+                raise RuntimeError("b broke")
+            await settle(self, *args)
+
+        monkeypatch.setattr(MapTask, "_write_manifest", a_breaks)
+        monkeypatch.setattr(MapTask, "_settle", b_breaks)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x"], [a, b], failure_policy="continue")
+
+        with pytest.raises(WorkflowExecutionError) as excinfo:
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert "a, b." in str(excinfo.value)
+        assert a.status == TaskStatus.FAILED
+        assert (b.status, b.skip_reason) == (TaskStatus.FAILED, None)
+        assert "b broke" in str(b.error)
+
+    async def test_run_cancel_unwinds_waiting_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Cancelling the run while B[2] waits on A[2] ends both at once."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 5)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+        run = asyncio.create_task(wf.run(trigger_id="split"))
+        log = tmp_path / "log"
+        while not (log.exists() and "b_out_1 end" in log.read_text()):
+            await asyncio.sleep(0.02)
+
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=3)
+
+        a, b = wf.tasks[1], wf.tasks[2]
+        assert a.status == TaskStatus.CANCELED
+        assert b.status == TaskStatus.CANCELED
+        assert "b_out_2" not in log.read_text()
+
+    async def test_fail_fast_cancels_waiting_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A's failure cancels B at once: B[2] never starts."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_1", 0.2)
+        _set(tmp_path, "exit", "a_out_1", 1)
+        _set(tmp_path, "delay", "a_out_2", 5)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y", "z"], [a, b])
+
+        with pytest.raises(ExceptionGroup):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=3)
+
+        assert b.status == TaskStatus.CANCELED
+        assert _clone_states(wf, "b")["b[0]"] == TaskStatus.COMPLETED
+        assert "b_out_2" not in (tmp_path / "log").read_text()
+
+    async def test_continue_stops_new_clones_and_blocks(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Under continue, A finishes its other items, B starts none after
+        A[1] fails and is blocked; B[0] keeps its result.
+        """
+        del horus_context
+        _set(tmp_path, "delay", "a_out_1", 0.2)
+        _set(tmp_path, "exit", "a_out_1", 1)
+        _set(tmp_path, "delay", "a_out_2", 0.5)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(
+            tmp_path, ["x", "y", "z"], [a, b], failure_policy="continue"
+        )
+
+        with pytest.raises(WorkflowExecutionError):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=5)
+
+        assert _clone_states(wf, "a")["a[2]"] == TaskStatus.COMPLETED
+        blocked = (TaskStatus.SKIPPED, SkipReason.UPSTREAM_FAILED)
+        assert (b.status, b.skip_reason) == blocked
+        assert _clone_states(wf, "b") == {
+            "b[0]": TaskStatus.COMPLETED,
+            "b[1]": blocked,
+            "b[2]": blocked,
+        }
+        assert "b_out_2" not in (tmp_path / "log").read_text()
+
+    async def test_source_loss_retry_keeps_stream_open(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        A loss of A's own machine after its fan-out runs A again; B keeps
+        waiting on the same stream instead of failing, and completes.
+        """
+        del horus_context
+        settle = MapTask._settle
+        lost: list[str] = []
+
+        async def lose_once(self: MapTask, *args: Any) -> None:
+            if self.id == "a" and not lost:
+                lost.append(self.id)
+                raise TargetLostError("node lost")
+            await settle(self, *args)
+
+        monkeypatch.setattr(MapTask, "_settle", lose_once)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert lost == ["a"]
+        assert a._target_loss_retries == 1
+        assert _clone_states(wf, "b") == {
+            "b[0]": TaskStatus.COMPLETED,
+            "b[1]": TaskStatus.COMPLETED,
+        }
+
+    async def test_chained_map_holds_its_source_until_its_fan_out(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B counts as pulling from A's machine from its start to its fan-out,
+        so A's machine is never released between the two.
+        """
+        del horus_context
+        map_items = MapTask._map_items
+        pulling: list[bool] = []
+
+        async def record(self: MapTask, wf: BaseWorkflow, *args: Any) -> None:
+            if self.id == "b":
+                pulling.append(self.id in wf.leases._pulling)
+            await map_items(self, wf, *args)
+
+        monkeypatch.setattr(MapTask, "_map_items", record)
+        _set(tmp_path, "delay", "a_out_1", 0.3)
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert pulling == [True]
+
+    async def test_stream_closes_before_the_source_digests(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B's folder is final once it settled: C need not wait for B to
+        digest A before it digests B.
+        """
+        del horus_context
+        digests = HorusWorkflow.source_digests
+        closed: list[bool] = []
+
+        async def record(
+            self: HorusWorkflow, task: BaseTask, *args: Any, **kwargs: Any
+        ) -> Any:
+            if task.id == "b" and kwargs.get("only"):
+                stream = cast(MapTask, task)._stream
+                closed.append(stream is None or stream.closed.done())
+            return await digests(self, task, *args, **kwargs)
+
+        monkeypatch.setattr(HorusWorkflow, "source_digests", record)
+        b = _stage_map(tmp_path, "b", chain=True)
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert closed == [True]
+
+    async def test_stream_stays_open_while_a_retry_can_rewrite_it(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        On a releasable machine, B digests A before it closes its stream:
+        a loss there retries B, which may rewrite slots C would digest.
+        """
+        del horus_context
+        digests = HorusWorkflow.source_digests
+        closed: list[bool] = []
+
+        async def record(
+            self: HorusWorkflow, task: BaseTask, *args: Any, **kwargs: Any
+        ) -> Any:
+            if task.id == "b" and kwargs.get("only"):
+                stream = cast(MapTask, task)._stream
+                closed.append(stream is None or stream.closed.done())
+            return await digests(self, task, *args, **kwargs)
+
+        monkeypatch.setattr(HorusWorkflow, "source_digests", record)
+        node_dir = tmp_path / "node"
+        node_dir.mkdir()
+        b = _stage_map(
+            tmp_path,
+            "b",
+            chain=True,
+            target=_Node(working_directory=node_dir.as_posix()),
+        )
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert closed == [False]
+
+    async def test_source_retry_skipped_whole_closes_its_stream(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        B loses its machine after its fan-out and the retry skips B whole;
+        C, chained on B, still gets B's stream closed and completes.
+        """
+        del horus_context
+        settle = MapTask._settle
+        skip = MapTask.is_complete_before_transfer
+        lost: list[str] = []
+
+        async def lose_once(self: MapTask, *args: Any) -> None:
+            await settle(self, *args)
+            if self.id == "b" and not lost:
+                lost.append(self.id)
+                raise TargetLostError("node lost")
+
+        async def skip_retry(self: MapTask, *args: Any) -> bool:
+            return bool(self.id == "b" and lost) or await skip(self, *args)
+
+        monkeypatch.setattr(MapTask, "_settle", lose_once)
+        monkeypatch.setattr(MapTask, "is_complete_before_transfer", skip_retry)
+        _set(tmp_path, "delay", "c_out_1", 0.3)
+        b = _stage_map(tmp_path, "b", chain=True)
+        c = _stage_map(tmp_path, "c", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [_stage_map(tmp_path, "a"), b, c])
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert (b.status, b.skip_reason) == (
+            TaskStatus.SKIPPED,
+            SkipReason.COMPLETE,
+        )
+        assert c.status == TaskStatus.COMPLETED
+
+    async def test_chained_clone_drops_whole_streamed_folders(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A chained clone gets its item only: not the streamed folder, which
+        B never stages, nor an item side artifact.
+        """
+        del horus_context
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "b[0]")
+        assert [i.id for i in clone.inputs] == ["item"]
+        assert not any(s.id.endswith("_item") for s in clone.side_artifacts)
+        # A's clone still records its item.
+        a0 = next(t for t in wf.tasks if t.id == "a[0]")
+        assert "a[0]_item" in [s.id for s in a0.side_artifacts]
+
+    async def test_chained_clone_sources_from_a_clone(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """B[X] reads A[X]'s slot from A[X] itself, digested at the source."""
+        del horus_context
+        seen: dict[str, EdgeSource] = {}
+        real = execute_task
+
+        async def spy(wf: BaseWorkflow, task: BaseTask, **kwargs: Any) -> None:
+            source = kwargs["source_map"].get((task.id, "item"))
+            if source is not None:
+                seen[task.id] = source
+            await real(wf, task, **kwargs)
+
+        monkeypatch.setattr("horus_builtin.workflow.map.execute_task", spy)
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        await wf.run(trigger_id="split")
+
+        source = seen["b[1]"]
+        assert source.task_id == "a[1]"
+        assert source.artifact is not None
+        assert Path(source.artifact.path) == tmp_path / "a_out" / "1"
+        assert source.digest is None
+        assert source.report is False
+        assert seen["a[1]"].task_id is None
+
+    async def test_same_target_item_is_not_copied(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        On one shared filesystem (e.g. a Slurm cluster), B[X] reads A[X]'s
+        slot in place: no transfer runs and nothing is staged.
+        """
+        del horus_context
+        cluster = _Cluster(working_directory=tmp_path.as_posix())
+
+        async def no_transfer(*_: Any, **__: Any) -> None:
+            raise AssertionError("a transfer ran")
+
+        monkeypatch.setattr(
+            "horus_runtime.core.transfer.strategy.TransferMiddleware."
+            "call_with_middleware",
+            no_transfer,
+        )
+        a = _stage_map(tmp_path, "a", target=cluster)
+        b = _stage_map(tmp_path, "b", chain=True, target=cluster)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+        wf.tasks[0].target = cluster
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        clone = next(t for t in wf.tasks if t.id == "b[1]")
+        assert Path(clone.inputs[0].path) == tmp_path / "a_out" / "1"
+        assert _result(tmp_path, "b", "1") == "y>a_out_1\n>b_out_1\n"
+        assert not (tmp_path / "b_in").exists()
+
+    async def test_all_items_dropped_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Dropped upstream or here, every item gone fails B."""
+        del horus_context
+        _set(tmp_path, "exit", "a_out_1", 3)
+        _set(tmp_path, "exit", "b_out_0", 4)
+        _set(tmp_path, "exit", "b_out_2", 4)
+        a = _stage_map(tmp_path, "a", drop_exit_codes=[3])
+        b = _stage_map(tmp_path, "b", chain=True, drop_exit_codes=[4])
+        wf = _stages(tmp_path, ["x", "y", "z"], [a, b])
+
+        with pytest.raises(TaskExecutionError):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert a.status == TaskStatus.COMPLETED
+        assert b.status == TaskStatus.FAILED
+        assert b.error == "TaskExecutionError: All 3 items were dropped in b."
+
+    async def test_all_dropped_source_blocks_b(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drops everything: A fails, and B is blocked, not failed."""
+        del horus_context
+        for slot in range(3):
+            _set(tmp_path, "exit", f"a_out_{slot}", 3)
+        a = _stage_map(tmp_path, "a", drop_exit_codes=[3])
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(
+            tmp_path, ["x", "y", "z"], [a, b], failure_policy="continue"
+        )
+
+        with pytest.raises(WorkflowExecutionError):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert a.error == "TaskExecutionError: All 3 items were dropped in a."
+        assert (b.status, b.skip_reason) == (
+            TaskStatus.SKIPPED,
+            SkipReason.UPSTREAM_FAILED,
+        )
+
+    async def test_gather_after_all_dropped_is_blocked(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """No empty folder reaches a gather after an all-dropped chain."""
+        del horus_context
+        for slot in range(2):
+            _set(tmp_path, "exit", f"b_out_{slot}", 3)
+        gather = HorusTask(
+            id="gather",
+            name="gather",
+            runtime=CommandRuntime(command="ls $all > $listing"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            inputs=[FolderArtifact(id="all", path=Path("all_in"))],
+            outputs=[FileArtifact(id="listing", path=tmp_path / "ls.txt")],
+        )
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [
+                _stage_map(tmp_path, "a"),
+                _stage_map(tmp_path, "b", chain=True, drop_exit_codes=[3]),
+            ],
+            extra_tasks=[gather],
+            extra_edges=[_edge("b", "out", "gather", "all")],
+            failure_policy="continue",
+        )
+
+        with pytest.raises(WorkflowExecutionError):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert (gather.status, gather.skip_reason) == (
+            TaskStatus.SKIPPED,
+            SkipReason.UPSTREAM_FAILED,
+        )
+        assert not (tmp_path / "ls.txt").exists()
+
+    async def test_second_run_skips_everything(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Nothing changed: both maps skip whole, nothing runs."""
+        del horus_context
+
+        def chain() -> HorusWorkflow:
+            return _stages(
+                tmp_path,
+                ["x", "y"],
+                [
+                    _stage_map(tmp_path, "a"),
+                    _stage_map(tmp_path, "b", chain=True),
+                ],
+            )
+
+        await chain().run(trigger_id="split")
+        _starts(tmp_path)
+
+        wf = chain()
+        await wf.run(trigger_id="split")
+
+        assert _starts(tmp_path) == set()
+        for task in wf.tasks[1:]:
+            assert (task.status, task.skip_reason) == (
+                TaskStatus.SKIPPED,
+                SkipReason.COMPLETE,
+            )
+
+    async def test_one_item_change_reruns_only_its_chain(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A changed item re-runs that item in A, B and C only."""
+        del horus_context
+
+        def chain() -> HorusWorkflow:
+            return _stages(
+                tmp_path,
+                ["x", "y", "z"],
+                [
+                    _stage_map(tmp_path, "a"),
+                    _stage_map(tmp_path, "b", chain=True),
+                    _stage_map(tmp_path, "c", chain=True),
+                ],
+            )
+
+        await chain().run(trigger_id="split")
+        _starts(tmp_path)
+
+        wf = chain()
+        (tmp_path / "batches" / "y").write_text("Y")
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _starts(tmp_path) == {"a_out_1", "b_out_1", "c_out_1"}
+        assert _result(tmp_path, "c", "1").startswith("Y>a_out_1")
+
+    async def test_source_skipped_whole_takes_normal_path(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A skips whole, so B starts after it like any consumer: it reads
+        A's folder, says nothing about a chain, and still runs per item.
+        """
+
+        def chain(command: str) -> HorusWorkflow:
+            b = _stage_map(tmp_path, "b", chain=True)
+            b.runtime = CommandRuntime(command=command)
+            return _stages(
+                tmp_path, ["x", "y"], [_stage_map(tmp_path, "a"), b]
+            )
+
+        body = _stage_body(tmp_path)
+        await chain(body).run(trigger_id="split")
+        _starts(tmp_path)
+
+        wf = chain(body + "; true")
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert wf.tasks[1].skip_reason == SkipReason.COMPLETE
+        assert _starts(tmp_path) == {"b_out_0", "b_out_1"}
+        assert not [e for e in _drop_events(emit) if "chain" in e.data["map"]]
+
+    async def test_rerun_after_drop_retries_only_that_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The next run re-enters A and B for the item A dropped; their other
+        clones skip on their own manifests.
+        """
+        del horus_context
+
+        def chain() -> HorusWorkflow:
+            return _stages(
+                tmp_path,
+                ["x", "y", "z"],
+                [
+                    _stage_map(tmp_path, "a", drop_exit_codes=[3]),
+                    _stage_map(tmp_path, "b", chain=True),
+                ],
+            )
+
+        _set(tmp_path, "exit", "a_out_1", 3)
+        await chain().run(trigger_id="split")
+        _starts(tmp_path)
+        (tmp_path / "exit" / "a_out_1").unlink()
+
+        wf = chain()
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _starts(tmp_path) == {"a_out_1", "b_out_1"}
+        assert sorted(p.name for p in (tmp_path / "b_out").iterdir()) == [
+            "0",
+            "1",
+            "2",
+        ]
+
+    async def test_streamed_input_stays_in_map_manifest(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """B's manifest holds the digest of A's final folder."""
+        del horus_context
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+        )
+
+        await wf.run(trigger_id="split")
+
+        manifest = json.loads((tmp_path / ".horus" / "b.json").read_text())
+        digest = await ArtifactStore(LocalTarget()).digest(
+            FolderArtifact(id="out", path=tmp_path / "a_out")
+        )
+        assert manifest["inputs"] == {"in": digest}
+
+    async def test_manifest_independent_of_finish_order(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Whichever of A's clones finishes first, B records the manifest a
+        run that did not stream records.
+        """
+        del horus_context
+        manifests = []
+        for slow, chain in (("a_out_0", True), ("a_out_2", True), ("", False)):
+            for name in ("a_out", "b_out", ".horus", "delay"):
+                shutil.rmtree(tmp_path / name, ignore_errors=True)
+            if slow:
+                _set(tmp_path, "delay", slow, 0.3)
+            wf = _stages(
+                tmp_path,
+                ["x", "y", "z"],
+                [
+                    _stage_map(tmp_path, "a"),
+                    _stage_map(tmp_path, "b", chain=chain),
+                ],
+            )
+            await wf.run(trigger_id="split")
+            manifests.append((tmp_path / ".horus" / "b.json").read_text())
+
+        assert manifests[0] == manifests[1] == manifests[2]
+
+    async def test_streaming_map_never_skips_at_map_level(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        While B streams, its skip checks say no without digesting A's
+        partial folder.
+        """
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+        horus_context.workflow = wf
+        b.stream_sources(wf.cached_source_map(None)[1])
+        b._streaming_from = frozenset({"a"})
+        digests = AsyncMock(return_value={"in": "d"})
+
+        assert b.streamed_inputs == {"in"}
+        assert await b.is_complete(digests) is False
+        assert await b.is_complete_before_transfer(digests) is False
+        assert await b.manifest_matches(b"{}", digests) is False
+        digests.assert_not_awaited()
+
+    async def test_chain_overlaps_with_workflow_max_concurrency_one(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Waiting maps take no workflow slot, so B still overlaps A."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 0.5)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [_stage_map(tmp_path, "a"), _stage_map(tmp_path, "b", chain=True)],
+            max_concurrency=1,
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "b_out_0", "start") < _when(
+            tmp_path, "a_out_2", "end"
+        )
+
+    async def test_placement_capacity_respected_in_chain(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        One CPU for every clone of A and B: they run one at a time, and a
+        waiting B clone holds none of it.
+        """
+        del horus_context
+        for slot in range(3):
+            _set(tmp_path, "delay", f"a_out_{slot}", 0.05)
+        cpu = ResourceRequest(cpus=1)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [
+                _stage_map(tmp_path, "a", resources=cpu),
+                _stage_map(tmp_path, "b", chain=True, resources=cpu),
+            ],
+            capacity={LocalTarget().location_id: ResourceCapacity(cpus=1)},
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        spans = sorted(
+            (_when(tmp_path, key, "start"), _when(tmp_path, key, "end"))
+            for key in (f"{m}_out_{i}" for m in "ab" for i in range(3))
+        )
+        assert all(
+            end <= start for (_, end), (start, _) in itertools.pairwise(spans)
+        )
+
+    async def test_stream_future_reused_then_reset_per_run(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        B gets the same future for A's stream until A runs; after the run
+        A hands out a new, unopened one.
+        """
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x"], [a, b])
+        horus_context.workflow = wf
+        source_map = wf.cached_source_map(None)[1]
+
+        first = b.stream_sources(source_map)
+        assert first == {"a": a.stream_for_consumers().opened}
+        assert b.stream_sources(source_map)["a"] is first["a"]
+
+        horus_context.workflow = None
+        await wf.run(trigger_id="split")
+
+        assert first["a"].done()
+        assert a._stream is None
+        horus_context.workflow = wf
+        again = b.stream_sources(wf.cached_source_map(None)[1])["a"]
+        assert again is not first["a"]
+        assert not again.done()
+
+    def test_runs_on_new_event_loops_reuse_no_stream(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        One workflow run with ``asyncio.run`` three times: A skips whole on
+        the second, and the third (A runs again) opens a new stream, not
+        the one B asked for on the closed second loop.
+        """
+        del horus_context
+        a = _stage_map(tmp_path, "a")
+        b = _stage_map(tmp_path, "b", chain=True)
+        wf = _stages(tmp_path, ["x", "y"], [a, b])
+
+        asyncio.run(wf.run(trigger_id="split"))
+        asyncio.run(wf.run(trigger_id="split"))
+        assert a.skip_reason == SkipReason.COMPLETE
+        (tmp_path / "batches" / "y").write_text("Y")
+        _starts(tmp_path)
+        asyncio.run(wf.run(trigger_id="split"))
+
+        assert wf.status.value == "completed"
+        assert a.status == TaskStatus.COMPLETED
+        assert _starts(tmp_path) == {"a_out_1", "b_out_1"}
+
+
+def _zip_map(
+    tmp_path: Path, task_id: str, *, chain: bool = False, **kwargs: Any
+) -> MapTask:
+    """A ``_stage_map`` that also pairs its ``mates`` input as ``mate``."""
+    task = _stage_map(tmp_path, task_id, chain=chain, **kwargs)
+    task.inputs.append(FolderArtifact(id="mates", path=Path("mates_in")))
+    task.zip = [MapOver(input_id="mates", item_id="mate")]
+    return task
+
+
+def _zipped(
+    tmp_path: Path,
+    names: list[str],
+    *,
+    chain: bool = False,
+    a: dict[str, Any] | None = None,
+    b: dict[str, Any] | None = None,
+    c: dict[str, Any] | None = None,
+) -> HorusWorkflow:
+    """``split -> a -> b`` and ``split -> c``, b pairing c's items."""
+    return _stages(
+        tmp_path,
+        names,
+        [
+            _stage_map(tmp_path, "a", **(a or {})),
+            _zip_map(tmp_path, "b", chain=chain, **(b or {})),
+        ],
+        extra_tasks=[_stage_map(tmp_path, "c", **(c or {}))],
+        extra_edges=[
+            _edge("split", "batches", "c", "in"),
+            _edge("c", "out", "b", "mates"),
+        ],
+    )
+
+
+class _Machine(LocalTarget):
+    """A machine of its own: inputs from another one are copied onto it."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_machine"
+    machine: str
+
+    @property
+    def location_id(self) -> str:
+        """Its own location."""
+        return f"fake://{self.machine}"
+
+
+def _machine(tmp_path: Path, name: str) -> _Machine:
+    """A machine working in ``tmp_path/<name>``."""
+    (tmp_path / name).mkdir()
+    return _Machine(
+        machine=name, working_directory=(tmp_path / name).as_posix()
+    )
+
+
+def _starts(tmp_path: Path) -> set[str]:
+    """The clone keys that logged a start, then clear the log."""
+    log = tmp_path / "log"
+    if not log.exists():
+        return set()
+    keys = {
+        line.split()[0]
+        for line in log.read_text().splitlines()
+        if line.split()[1] == "start"
+    }
+    log.unlink()
+    return keys
+
+
+@pytest.mark.unit
+class TestZip:
+    """``zip``: slot X of each paired input reaches clone X."""
+
+    async def test_zip_pairs_by_slot_without_chain(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """B[1] reads A[1] and C[1]."""
+        del horus_context
+        wf = _zipped(tmp_path, ["x", "y"])
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _result(tmp_path, "b", "1") == (
+            "y>a_out_1\ny>c_out_1\n>b_out_1\n"
+        )
+
+    async def test_zip_missing_slot_drops_item(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A slot C dropped drops B's item, with C as the origin; a slot only
+        C has (A dropped it) is a gap, not an error.
+        """
+        _set(tmp_path, "exit", "c_out_1", 3)
+        _set(tmp_path, "exit", "a_out_2", 3)
+        wf = _zipped(
+            tmp_path,
+            ["x", "y", "z"],
+            a={"drop_exit_codes": [3]},
+            c={"drop_exit_codes": [3]},
+        )
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "b") == {
+            "b[0]": TaskStatus.COMPLETED,
+            "b[1]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
+        }
+        assert sorted(p.name for p in (tmp_path / "b_out").iterdir()) == ["0"]
+        (event,) = [e for e in _drop_events(emit) if e.task_id == "b"]
+        assert event.data["map"]["upstream_dropped"] == {"1": "c"}
+
+    async def test_zip_folder_unfingerprinted_on_clones(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone fingerprints its paired item, not the whole folder."""
+        del horus_context
+        wf = _zipped(tmp_path, ["x", "y"])
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "b[0]")
+        assert sorted(clone.unfingerprinted_inputs) == ["in", "mates"]
+        assert sorted(a.id for a in clone.fingerprinted_inputs) == [
+            "item",
+            "mate",
+        ]
+
+    async def test_one_zip_item_change_reruns_one_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A changed slot of C re-runs only the B clone paired with it."""
+        del horus_context
+        await _zipped(tmp_path, ["x", "y", "z"]).run(trigger_id="split")
+        _starts(tmp_path)
+        (tmp_path / "c_out" / "1" / "result.txt").write_text("changed")
+
+        wf = _zipped(tmp_path, ["x", "y", "z"])
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _starts(tmp_path) == {"b_out_1"}
+        assert _result(tmp_path, "b", "1") == ("y>a_out_1\nchanged>b_out_1\n")
+
+    async def test_chained_zip_pairs_by_slot(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Chained, B[0] starts on A[0] and C[0] while A[2] still runs."""
+        del horus_context
+        _set(tmp_path, "delay", "a_out_2", 0.5)
+        wf = _zipped(tmp_path, ["x", "y", "z"], chain=True)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "b_out_0", "start") < _when(
+            tmp_path, "a_out_2", "end"
+        )
+        assert _result(tmp_path, "b", "2") == (
+            "z>a_out_2\nz>c_out_2\n>b_out_2\n"
+        )
+
+    async def test_extra_zip_slot_from_a_late_drop_is_a_gap(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        H drops slot 1 at its end. C, chained, opened with H's full list;
+        A, not chained, started after H with the gap. B, chained over A and
+        pairing C, ignores C's slot 1 instead of failing.
+        """
+        del horus_context
+        _set(tmp_path, "exit", "h_out_1", 3)
+        _set(tmp_path, "delay", "h_out_2", 0.3)
+        b = _zip_map(tmp_path, "b", chain=True)
+        wf = _stages(
+            tmp_path,
+            ["x", "y", "z"],
+            [
+                _stage_map(tmp_path, "h", drop_exit_codes=[3]),
+                _stage_map(tmp_path, "a"),
+                b,
+            ],
+            extra_tasks=[_stage_map(tmp_path, "c", chain=True)],
+            extra_edges=[
+                _edge("h", "out", "c", "in"),
+                _edge("c", "out", "b", "mates"),
+            ],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert _clone_states(wf, "c")["c[1]"] == (
+            TaskStatus.SKIPPED,
+            SkipReason.UPSTREAM_DROPPED,
+        )
+        assert _clone_states(wf, "b") == {
+            "b[0]": TaskStatus.COMPLETED,
+            "b[2]": TaskStatus.COMPLETED,
+        }
+        assert _result(tmp_path, "b", "2").startswith("z>h_out_2")
+
+    @pytest.mark.parametrize("policy", ["fail", "drop"])
+    async def test_slot_missing_from_a_running_zip_source_is_a_gap(
+        self, tmp_path: Path, horus_context: HorusContext, policy: str
+    ) -> None:
+        """
+        M drops slot 2, so S, over M without chain, has no slot 2. C,
+        chained over H and pairing S while S still runs, drops C[2] as
+        dropped in S, the same as when S had finished.
+        """
+        del horus_context
+        _set(tmp_path, "exit", "m_out_2", 3)
+        _set(tmp_path, "delay", "s_out_3", 0.5)
+        c = _zip_map(tmp_path, "c", chain=True, on_item_failure=policy)
+        wf = _stages(
+            tmp_path,
+            ["w", "x", "y", "z"],
+            [
+                _stage_map(tmp_path, "m", drop_exit_codes=[3]),
+                _stage_map(tmp_path, "s"),
+            ],
+            extra_tasks=[_stage_map(tmp_path, "h"), c],
+            extra_edges=[
+                _edge("split", "batches", "h", "in"),
+                _edge("h", "out", "c", "in"),
+                _edge("s", "out", "c", "mates"),
+            ],
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert c._upstream_dropped == {"2": "s"}
+        assert _clone_states(wf, "c") == {
+            "c[0]": TaskStatus.COMPLETED,
+            "c[1]": TaskStatus.COMPLETED,
+            "c[2]": (TaskStatus.SKIPPED, SkipReason.UPSTREAM_DROPPED),
+            "c[3]": TaskStatus.COMPLETED,
+        }
+
+    @pytest.mark.parametrize("chain", [True, False])
+    async def test_items_from_two_machines_land_apart(
+        self, tmp_path: Path, horus_context: HorusContext, chain: bool
+    ) -> None:
+        """
+        A, B and C each run on their own machine. Every item of B[X] is
+        copied to its own path on B's machine, and holds its own slot.
+        """
+        del horus_context
+        wf = _zipped(
+            tmp_path,
+            ["x", "y", "z"],
+            chain=chain,
+            a={"target": _machine(tmp_path, "node_a")},
+            b={"target": _machine(tmp_path, "node_b")},
+            c={"target": _machine(tmp_path, "node_c")},
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        for slot, name in enumerate("xyz"):
+            assert _result(tmp_path, "b", str(slot)) == (
+                f"{name}>a_out_{slot}\n{name}>c_out_{slot}\n>b_out_{slot}\n"
+            )
+            clone = next(t for t in wf.tasks if t.id == f"b[{slot}]")
+            paths = {a.id: a.path for a in clone.inputs}
+            node_b = tmp_path / "node_b"
+            assert paths["item"] == (
+                node_b / (".horus_items/a" if chain else "a_out") / str(slot)
+            )
+            assert paths["mate"] == (
+                node_b / (".horus_items/c" if chain else "c_out") / str(slot)
+            )
+            for source, path in (("a", paths["item"]), ("c", paths["mate"])):
+                assert sorted(p.name for p in path.iterdir()) == ["result.txt"]
+                assert (
+                    (path / "result.txt").read_text()
+                    == (_result(tmp_path, source, str(slot)))
+                    == f"{name}>{source}_out_{slot}\n"
+                )
+
+    def test_retry_and_rerun_reopen_slots_not_asked_for(self) -> None:
+        """
+        A retried run hands its own clones and machine to the stream; a
+        slot no consumer asked for waits for the retry or a re-run, and a
+        slot a consumer asked for keeps its item.
+        """
+
+        async def check() -> None:
+            stream = _ItemStream()
+            first, retry = MagicMock(), MagicMock()
+            stream.open({"0": "x", "1": "y", "2": "z"}, {"0": first}, first)
+            for slot in "012":
+                stream.ready(slot)
+            assert (await stream.wait("0", owner="b", source="a")).state == (
+                "ready"
+            )
+
+            stream.open({"0": "x", "1": "y", "2": "z"}, {"0": retry}, retry)
+            stream.again("2")
+
+            assert stream.clones == {"0": retry}
+            assert stream.target is retry
+            assert (await stream.wait("0", owner="b", source="a")).state == (
+                "ready"
+            )
+            waiting = asyncio.ensure_future(
+                stream.wait("1", owner="b", source="a")
+            )
+            await asyncio.sleep(0)
+            assert not waiting.done()
+            stream.dropped("1", "a", "exit code 3")
+            assert (await waiting).state == "dropped"
+
+        asyncio.run(check())
+
+    def test_configuration_error_is_never_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        """``on_item_failure: drop`` does not hide a configuration error."""
+        task = _zip_map(tmp_path, "c", on_item_failure="drop")
+
+        assert task._droppable(RuntimeError("item broke"))
+        assert not task._droppable(MapConfigurationError("bad config"))
+
+    def test_r1_slot_missing_from_a_stream(self) -> None:
+        """Waiting on a slot the stream never had is a bug guard."""
+
+        async def wait() -> None:
+            stream = _ItemStream()
+            stream.open({"0": "x"}, {}, LocalTarget())
+            await stream.wait("1", owner="b", source="c")
+
+        with pytest.raises(
+            MapConfigurationError,
+            match=re.escape(
+                "Map task 'b' expected item 1 from 'c', which has no such "
+                "item."
+            ),
+        ):
+            asyncio.run(wait())
+
+
+@pytest.fixture
+def bound_failures() -> Any:
+    """What the bound-task middleware raises, by task id."""
+    failures: dict[str, BaseException] = {}
+    original = list(BoundTaskMiddleware.registry)
+
+    class _Raise(BoundTaskMiddleware):
+        async def before(self, context: BoundTaskMiddlewareContext) -> None:
+            exc = failures.get(context.task.id)
+            if exc is not None:
+                raise exc
+
+    try:
+        yield failures
+    finally:
+        BoundTaskMiddleware.registry = original
+
+
+class _Cluster(LocalTarget):
+    """A shared filesystem that is not the orchestrator's."""
+
+    add_to_registry: ClassVar[bool] = False
+    kind: str = "test_map_cluster"
+
+    @property
+    def location_id(self) -> str:
+        """One location for every task on it."""
+        return "fake://cluster"

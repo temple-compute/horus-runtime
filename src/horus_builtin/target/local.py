@@ -96,9 +96,9 @@ class LocalChannelProcess(ChannelProcess):
         pid = self._proc.pid
 
         kill_func = os.killpg if os.name == "posix" else os.kill
-        parsed_pid = os.getpgid(pid) if os.name == "posix" else pid
-
+        # The process may have exited and been reaped: then its group is gone.
         try:
+            parsed_pid = os.getpgid(pid) if os.name == "posix" else pid
             kill_func(parsed_pid, sig)
         except ProcessLookupError:
             pass

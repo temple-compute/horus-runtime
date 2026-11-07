@@ -417,6 +417,17 @@ class TestLocalTargetStream:
         code = await proc.wait()
         assert code != 0
 
+    async def test_kill_after_exit_is_a_no_op(self, tmp_path: Path) -> None:
+        """
+        kill() on a process that already exited and was reaped does not
+        raise: a cancel can land just after the command finished.
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        proc = await target.run_command("true")
+        assert await proc.wait() == 0
+
+        proc.kill()
+
     async def test_stream_does_not_deadlock_on_large_output(
         self, tmp_path: Path
     ) -> None:

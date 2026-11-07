@@ -23,6 +23,7 @@ drained and released during a run.
 import asyncio
 from pathlib import Path
 from typing import Any, ClassVar, cast
+from unittest.mock import patch
 
 import pytest
 from pydantic import PrivateAttr
@@ -944,6 +945,89 @@ class TestRelease:
 
         assert not wf.leases.has_leases
 
+    async def test_streaming_consumer_holds_source_machine_until_settled(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A chained map started on A's stream still reads A's clones after A
+        ends: A's machine waits for it to settle before it goes.
+        """
+        del horus_context, evacuator
+        batches = tmp_path / "batches"
+        batches.mkdir()
+        for name in "xyz":
+            (batches / name).write_text(name)
+        split = HorusTask(
+            id="split",
+            name="split",
+            runtime=CommandRuntime(command="true"),
+            executor=ShellExecutor(),
+            target=LocalTarget(),
+            outputs=[FolderArtifact(id="batches", path=batches)],
+        )
+        node = FakeNode(working_directory=tmp_path.as_posix(), hold_s=0)
+        released_after: list[int] = []
+
+        def _map(map_id: str, target: BaseTarget, command: str) -> MapTask:
+            return MapTask(
+                id=map_id,
+                name=map_id,
+                over=MapOver(input_id="in", item_id="item"),
+                runtime=CommandRuntime(command=command),
+                executor=ShellExecutor(),
+                target=target,
+                inputs=[FolderArtifact(id="in", path=Path(f"{map_id}_in"))],
+                outputs=[
+                    FolderArtifact(id="out", path=tmp_path / f"{map_id}_out")
+                ],
+                max_concurrency=1,
+            )
+
+        a = _map("a", node, "cp $item $out/")
+        b = _map("b", LocalTarget(), "sleep 0.1; cp -r $item/. $out/")
+        b.chain = True
+        wf = _workflow(
+            tmp_path,
+            [split, a, b],
+            [
+                WorkflowEdge(
+                    source="split",
+                    source_output="batches",
+                    target="a",
+                    target_input="in",
+                ),
+                WorkflowEdge(
+                    source="a",
+                    source_output="out",
+                    target="b",
+                    target_input="in",
+                ),
+            ],
+        )
+        release = FakeNode.release
+
+        async def record(self: FakeNode, reason: str) -> None:
+            released_after.append(
+                sum(
+                    t.status.value == "completed"
+                    for t in wf.tasks
+                    if t.id.startswith("b[")
+                )
+            )
+            await release(self, reason)
+
+        with patch.object(FakeNode, "release", record):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert (tmp_path / "b_out" / "2" / "z").read_text() == "z"
+        # Released once, and only once every B clone was done with it.
+        assert node.released == ["drained"]
+        assert released_after[0] == 3
+
 
 @pytest.mark.unit
 class TestSlotsAndCapacity:
@@ -1322,6 +1406,16 @@ class TestLostArtifacts:
         await wf.transfer_artifacts(b)
 
 
+class _Elsewhere(FakeNode):
+    """A node off the orchestrator's filesystem, so copies really move."""
+
+    add_to_registry: ClassVar[bool] = False
+
+    @property
+    def location_id(self) -> str:
+        return f"fake://{self.lease_key}"
+
+
 @pytest.mark.unit
 class TestOrchestratorEvacuator:
     """The default evacuator copies an output to the orchestrator."""
@@ -1333,14 +1427,6 @@ class TestOrchestratorEvacuator:
         source_dir = tmp_path / "node"
         source_dir.mkdir()
         (source_dir / "a.out").write_text("payload")
-
-        class _Elsewhere(FakeNode):
-            add_to_registry: ClassVar[bool] = False
-
-            @property
-            def location_id(self) -> str:
-                return f"fake://{self.lease_key}"
-
         node = _Elsewhere(working_directory=source_dir.as_posix())
         a = _step("a", node, source_dir)
         orchestrator = tmp_path / "orch"
@@ -1356,6 +1442,39 @@ class TestOrchestratorEvacuator:
         copied = orchestrator / ".evacuated" / "a" / "a.out"
         assert Path(source.artifact.path) == copied
         assert copied.read_text() == "payload"
+
+    async def test_orchestrator_recover_finds_clone_in_owner_folder(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone's lost output is its slot in the map's evacuated folder."""
+        node_dir = tmp_path / "node"
+        (node_dir / "items" / "02").mkdir(parents=True)
+        (node_dir / "items" / "02" / "x.txt").write_text("two")
+        node = _Elsewhere(working_directory=node_dir.as_posix())
+        owner = _step("m", node, node_dir)
+        owner.outputs = [FolderArtifact(id="out", path=node_dir / "items")]
+        clone = _step("m[02]", node, node_dir)
+        other = _step("n[02]", node, node_dir)
+        orchestrator = tmp_path / "orch"
+        orchestrator.mkdir()
+        wf = _workflow(orchestrator, [owner, clone, other], [])
+        horus_context.workflow = wf
+        evacuator = OrchestratorEvacuator()
+        wf.relocate_output(
+            "m", "out", await evacuator.evacuate(owner, owner.outputs[0], node)
+        )
+
+        source = await evacuator.recover(clone, clone.outputs[0])
+
+        assert source is not None
+        assert source.task_id == "m[02]"
+        assert source.artifact is not None
+        slot = orchestrator / ".evacuated" / "m" / "items" / "02"
+        assert Path(source.artifact.path) == slot
+        assert (slot / "x.txt").read_text() == "two"
+        # Not a clone, or its map was not evacuated here.
+        assert await evacuator.recover(owner, owner.outputs[0]) is None
+        assert await evacuator.recover(other, other.outputs[0]) is None
 
 
 @pytest.mark.unit

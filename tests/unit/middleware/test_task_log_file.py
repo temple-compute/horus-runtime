@@ -143,3 +143,31 @@ async def test_operator_only_lines_stay_out_of_the_task_log(
     log = (tmp_path / "my_task.log").read_text()
     assert "visible line" in log
     assert "123456789012" not in log
+
+
+@pytest.mark.unit
+async def test_task_log_keeps_tracebacks_without_variable_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A logged traceback is kept, but not the values of its frame variables:
+    they can be large or hold secrets.
+    """
+    monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+    task = _make_task()
+
+    async def call_next() -> None:
+        token = "s3cr3t-token"
+        try:
+            raise ValueError("boom" if token else "")
+        except ValueError:
+            logger.opt(exception=True).error("task failed")
+
+    with running_task(task.id):
+        await TaskLogFileMiddleware().wrap(
+            TaskMiddlewareContext(task=task), call_next
+        )
+
+    log = (tmp_path / f"{task.name}.log").read_text()
+    assert "ValueError: boom" in log
+    assert "s3cr3t-token" not in log

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-10-26 16:17+0100\n"
+"POT-Creation-Date: 2026-11-03 17:58+0100\n"
 "PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
@@ -44,24 +44,26 @@ msgstr "Se escribió %(archive)s (%(count)d archivo(s))"
 #, python-format
 msgid "%(count)d undeclared root input(s); run 'horus sanitize' to promote them"
 msgstr ""
+"%(count)d entrada(s) raíz sin declarar; ejecuta 'horus sanitize' para "
+"promoverlas"
 
 #: src/horus_runtime/cli.py:253
 #, python-format
 msgid "produced by %(producer)s; missing edge"
-msgstr ""
+msgstr "producida por %(producer)s; falta la arista"
 
 #: src/horus_runtime/cli.py:258
 msgid "No root inputs to promote."
-msgstr ""
+msgstr "No hay entradas raíz que promover."
 
 #: src/horus_runtime/cli.py:270
 msgid "Nothing promoted."
-msgstr ""
+msgstr "No se promovió nada."
 
 #: src/horus_runtime/cli.py:285
 #, python-format
 msgid "Wrote %(path)s (%(count)d root input(s))"
-msgstr ""
+msgstr "Se escribió %(path)s (%(count)d entrada(s) raíz)"
 
 #: src/horus_runtime/context.py:159
 msgid "HorusContext is not set. Did you forget to call HorusContext.boot()?"
@@ -88,51 +90,51 @@ msgstr ""
 "El flujo de trabajo referencia %(count)d archivo(s) inexistente(s):\n"
 "%(files)s"
 
-#: src/horus_runtime/secrets.py:92
+#: src/horus_runtime/secrets.py:106
 msgid "Enter a name."
 msgstr "Introduce un nombre."
 
-#: src/horus_runtime/secrets.py:94
+#: src/horus_runtime/secrets.py:108
 msgid "Use 128 characters or fewer."
 msgstr "Usa 128 caracteres o menos."
 
-#: src/horus_runtime/secrets.py:96
+#: src/horus_runtime/secrets.py:110
 msgid "Use letters, digits and _. Don't start with a digit."
 msgstr "Usa letras, dígitos y _. No empieces con un dígito."
 
-#: src/horus_runtime/secrets.py:98
+#: src/horus_runtime/secrets.py:112
 msgid "Names starting with HORUS_ are reserved."
 msgstr "Los nombres que empiezan por HORUS_ están reservados."
 
-#: src/horus_runtime/secrets.py:100
+#: src/horus_runtime/secrets.py:114
 #, python-format
 msgid "%(name)s is reserved."
 msgstr "%(name)s está reservado."
 
-#: src/horus_runtime/core/lease.py:181
+#: src/horus_runtime/core/lease.py:232
 #, python-format
 msgid "Cannot evacuate '%(out)s': no orchestrator target is set."
-msgstr ""
+msgstr "No se puede evacuar '%(out)s': no hay destino del orquestador."
 
-#: src/horus_runtime/core/lease.py:672
+#: src/horus_runtime/core/lease.py:760
 #, python-format
 msgid "Releasing machine '%(key)s' failed: %(error)s"
-msgstr ""
+msgstr "No se pudo liberar la máquina '%(key)s': %(error)s"
 
-#: src/horus_runtime/core/lease.py:715 src/horus_runtime/core/lease.py:749
+#: src/horus_runtime/core/lease.py:803 src/horus_runtime/core/lease.py:837
 #, python-format
 msgid "Evacuating from machine '%(key)s' failed: %(error)s"
-msgstr ""
+msgstr "No se pudo evacuar la máquina '%(key)s': %(error)s"
 
-#: src/horus_runtime/core/lease.py:780
+#: src/horus_runtime/core/lease.py:868
 #, python-format
 msgid "Keepalive of machine '%(key)s' failed: %(e)s"
-msgstr ""
+msgstr "Falló el keepalive de la máquina '%(key)s': %(e)s"
 
-#: src/horus_runtime/core/lease.py:823
+#: src/horus_runtime/core/lease.py:911
 #, python-format
 msgid "Releasing a machine at run end failed: %(error)s"
-msgstr ""
+msgstr "No se pudo liberar una máquina al final de la ejecución: %(error)s"
 
 #: src/horus_runtime/core/placement.py:92
 #, python-format
@@ -270,7 +272,7 @@ msgstr "Entorno de ejecución base de Horus"
 
 #: src/horus_runtime/core/target/base.py:116
 msgid "A target with 'kind' cannot also have 'ref'."
-msgstr ""
+msgstr "Un destino con 'kind' no puede tener también 'ref'."
 
 #: src/horus_runtime/core/target/base.py:331
 msgid "No task is currently running on this target."
@@ -303,12 +305,12 @@ msgstr "Cancelando la tarea '%(task_name)s' en el destino %(kind)s"
 
 #: src/horus_runtime/core/target/base.py:651
 msgid "offset must be a non-negative multiple of 1 MiB"
-msgstr ""
+msgstr "offset debe ser un múltiplo no negativo de 1 MiB"
 
 #: src/horus_runtime/core/target/base.py:665
 #, python-format
 msgid "Failed to read '%(path)s' on target (exit code %(rc)s)"
-msgstr ""
+msgstr "No se pudo leer '%(path)s' en el destino (código de salida %(rc)s)"
 
 #: src/horus_runtime/core/target/exceptions.py:44
 #, python-format
@@ -319,16 +321,16 @@ msgstr ""
 "El destino '%(kind)s' no tiene working_directory definido. Proporcione "
 "uno explícitamente o use un destino que lo derive automáticamente."
 
-#: src/horus_runtime/core/task/base.py:94
+#: src/horus_runtime/core/task/base.py:96
 msgid "Horus base task"
 msgstr "Tarea base de Horus"
 
-#: src/horus_runtime/core/task/base.py:215
+#: src/horus_runtime/core/task/base.py:218
 #, python-format
 msgid "Secret %(name)s: %(error)s"
 msgstr "Secreto %(name)s: %(error)s"
 
-#: src/horus_runtime/core/task/base.py:377
+#: src/horus_runtime/core/task/base.py:409
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
@@ -337,42 +339,42 @@ msgstr ""
 "El entorno de ejecución '%(runtime)s' no es compatible con el ejecutor "
 "'%(executor)s'. Se esperaba uno de: %(expected)s"
 
-#: src/horus_runtime/core/task/base.py:430
+#: src/horus_runtime/core/task/base.py:462
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
-msgstr ""
+msgstr "Estado de la tarea %(task_name)s → CONFIGURING"
 
-#: src/horus_runtime/core/task/base.py:511
+#: src/horus_runtime/core/task/base.py:546
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr "La tarea %(task_name)s falló"
 
-#: src/horus_runtime/core/task/base.py:514
+#: src/horus_runtime/core/task/base.py:549
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr "Estado de la tarea %(task_name)s → COMPLETED"
 
-#: src/horus_runtime/core/task/base.py:515
+#: src/horus_runtime/core/task/base.py:550
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr "Estado de la tarea %(task_name)s → FAILED"
 
-#: src/horus_runtime/core/task/base.py:516
+#: src/horus_runtime/core/task/base.py:551
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr "Estado de la tarea %(task_name)s → CANCELED"
 
-#: src/horus_runtime/core/task/base.py:583
+#: src/horus_runtime/core/task/base.py:618
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr "Se omite la tarea %(task_name)s. Ya está completada."
 
-#: src/horus_runtime/core/task/base.py:592
+#: src/horus_runtime/core/task/base.py:627
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr "Estado de la tarea %(task_name)s → SKIPPED"
 
-#: src/horus_runtime/core/task/base.py:611
+#: src/horus_runtime/core/task/base.py:646
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr "Reinicio de la tarea %(task_name)s → IDLE"
@@ -415,7 +417,7 @@ msgstr ""
 "Añadir una arista de '%(source)s.%(source_output)s' a "
 "'%(target)s.%(target_input)s' crearía un ciclo."
 
-#: src/horus_runtime/core/workflow/base.py:1354
+#: src/horus_runtime/core/workflow/base.py:1358
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
@@ -424,27 +426,27 @@ msgstr ""
 "Transfiriendo el artefacto '%(id)s' de '%(src)s' a '%(dst)s' mediante "
 "%(strategy)s."
 
-#: src/horus_runtime/core/workflow/base.py:1785
+#: src/horus_runtime/core/workflow/base.py:1793
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → RUNNING"
 
-#: src/horus_runtime/core/workflow/base.py:1805
+#: src/horus_runtime/core/workflow/base.py:1813
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → CANCELED"
 
-#: src/horus_runtime/core/workflow/base.py:1812
+#: src/horus_runtime/core/workflow/base.py:1820
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → FAILED"
 
-#: src/horus_runtime/core/workflow/base.py:1819
+#: src/horus_runtime/core/workflow/base.py:1827
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → COMPLETED"
 
-#: src/horus_runtime/core/workflow/base.py:1841
+#: src/horus_runtime/core/workflow/base.py:1849
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr "Reiniciando el flujo de trabajo %(workflow_name)s."
@@ -455,12 +457,16 @@ msgid ""
 "Condition operator '%(op)s' needs a collection to test membership "
 "against, got %(value)r."
 msgstr ""
+"El operador de condición '%(op)s' necesita una colección para comprobar "
+"la pertenencia; se recibió %(value)r."
 
 #: src/horus_runtime/core/workflow/condition.py:228
 msgid ""
 "A Python condition needs either a callable or a 'module:qualname' "
 "reference."
 msgstr ""
+"Una condición Python necesita un invocable o una referencia "
+"'module:qualname'."
 
 #: src/horus_runtime/core/workflow/exceptions.py:50
 #, python-format
@@ -527,23 +533,27 @@ msgstr "El flujo de trabajo finalizó con tarea(s) fallida(s): %(tasks)s."
 #: src/horus_runtime/core/workflow/exceptions.py:170
 #, python-format
 msgid "Task '%(task)s' refers to unknown target '%(ref)s'."
-msgstr ""
+msgstr "La tarea '%(task)s' hace referencia al destino desconocido '%(ref)s'."
 
 #: src/horus_runtime/core/workflow/exceptions.py:181
 #, python-format
 msgid "Target name '%(name)s' must be lower-case letters, digits, '-' or '_'."
 msgstr ""
+"El nombre de destino '%(name)s' solo admite minúsculas, dígitos, '-' o "
+"'_'."
 
 #: src/horus_runtime/core/workflow/exceptions.py:193
 #, python-format
 msgid "Target '%(name)s' cannot itself be a reference."
-msgstr ""
+msgstr "El destino '%(name)s' no puede ser una referencia."
 
 #: src/horus_runtime/core/workflow/exceptions.py:207
 msgid ""
 "Shared targets are not supported inside loop bodies yet; use an inline "
 "target."
 msgstr ""
+"Los destinos compartidos aún no se admiten dentro de bucles; usa un "
+"destino en línea."
 
 #: src/horus_runtime/core/workflow/exceptions.py:236
 #, python-format
@@ -551,6 +561,8 @@ msgid ""
 "Output '%(out)s' of '%(task)s' was on machine '%(ref)s' (gen %(g)s), "
 "which has been released."
 msgstr ""
+"La salida '%(out)s' de '%(task)s' estaba en la máquina '%(ref)s' (gen "
+"%(g)s), que ya se liberó."
 
 #: src/horus_runtime/event/bus.py:86
 #, python-format
@@ -565,7 +577,7 @@ msgstr "Error al publicar el evento %(event)s: %(error)s"
 #: src/horus_runtime/event/bus.py:143
 #, python-format
 msgid "Gave up flushing %(n)d unpublished event(s)."
-msgstr ""
+msgstr "Se dejó de vaciar %(n)d evento(s) sin publicar."
 
 #: src/horus_runtime/event/bus.py:164
 msgid "Event bus is already started."
@@ -682,6 +694,8 @@ msgid ""
 "Target reference '%(ref)s' can only be resolved inside a workflow that "
 "declares targets:"
 msgstr ""
+"La referencia de destino '%(ref)s' solo se resuelve dentro de un flujo de"
+" trabajo que declare targets:"
 
 #: src/horus_runtime/registry/auto_registry.py:289
 #, python-format

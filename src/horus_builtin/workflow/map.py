@@ -26,7 +26,10 @@ output.
 import asyncio
 import contextvars
 import json
+import shlex
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -36,7 +39,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.runtime.command import CommandRuntime
-from horus_builtin.runtime.substitution import placeholder_roots
+from horus_builtin.runtime.substitution import (
+    placeholder_names,
+    placeholder_roots,
+)
 from horus_builtin.task.horus_task import (
     _UNHASHABLE,
     HorusTask,
@@ -46,9 +52,18 @@ from horus_builtin.workflow.scheduler import TargetPool, execute_task
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
-from horus_runtime.core.task.base import MAX_TARGET_LOSS_RETRIES, BaseTask
-from horus_runtime.core.task.exceptions import TargetLostError
-from horus_runtime.core.task.status import TaskStatus
+from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.task.base import (
+    MAX_TARGET_LOSS_RETRIES,
+    BaseTask,
+    InputDigests,
+)
+from horus_runtime.core.task.exceptions import (
+    TargetLostError,
+    TaskExecutionError,
+    exception_leaves,
+)
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
 from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
@@ -60,9 +75,166 @@ from horus_runtime.logging import horus_logger
 _DROPS_LISTED = 20
 _ERROR_CHARS = 500
 
+# An event's `data` lists at most this many slots per list, with the full
+# count: a map of many items must not send MB-sized events.
+_EVENT_ITEMS = 100
+
+# The highest exit code a process can report.
+_MAX_EXIT_CODE = 255
+
+# Characters per `rm -rf` command line. Linux caps one argument at 128 KiB,
+# and sshd passes the whole command as one (`$SHELL -c`).
+_RM_CHARS = 32 * 1024
+
 
 class MapConfigurationError(WorkflowError):
     """Raised when a ``horus_map`` task is misconfigured."""
+
+
+@dataclass(frozen=True)
+class _Item:
+    """How one item of a map's stream settled."""
+
+    state: Literal["ready", "dropped", "failed"]
+    origin: str | None = None
+    """Dropped: the id of the map the drop started in."""
+    reason: str | None = None
+    """Dropped: the exit code or the clone's error summary."""
+
+
+class _ItemStream:
+    """
+    A map's items as its clones settle, so a chained consumer can start
+    each item without waiting for the whole map. Futures carry
+    :class:`_Item` values, never exceptions, and resolving a settled slot
+    is a no-op.
+    """
+
+    def __init__(self) -> None:
+        loop = asyncio.get_running_loop()
+        self.opened: asyncio.Future[None] = loop.create_future()
+        """Done once the slot list is known."""
+        self.closed: asyncio.Future[bool] = loop.create_future()
+        """Done once the producing run exited; ``True`` if it succeeded."""
+        self.slots: dict[str, str] = {}
+        """Slot to item label."""
+        self.clones: dict[str, BaseTask] = {}
+        """Slot to the producing clone."""
+        self.target: BaseTarget | None = None
+        """The producing map's target while it runs."""
+        self.taken: set[str] = set()
+        """Slots a consumer has asked for."""
+        self._items: dict[str, asyncio.Future[_Item]] = {}
+
+    def open(
+        self,
+        slots: dict[str, str],
+        clones: dict[str, BaseTask],
+        target: BaseTarget,
+    ) -> None:
+        """
+        Publish the slot list. A retried run keeps it, with its own clones
+        and machine: a slot no consumer asked for yet waits for that run.
+        """
+        if self.opened.done():
+            self.clones = clones
+            self.target = target
+            for slot in slots:
+                self.again(slot)
+            return
+        loop = asyncio.get_running_loop()
+        self.slots = slots
+        self.clones = clones
+        self.target = target
+        self._items = {slot: loop.create_future() for slot in slots}
+        self.opened.set_result(None)
+
+    def again(self, slot: str) -> None:
+        """*slot* runs again: a consumer that has not asked for it waits."""
+        future = self._items.get(slot)
+        if future is not None and future.done() and slot not in self.taken:
+            self._items[slot] = asyncio.get_running_loop().create_future()
+
+    def _resolve(self, slot: str, item: _Item) -> None:
+        future = self._items.get(slot)
+        if future is not None and not future.done():
+            future.set_result(item)
+
+    def ready(self, slot: str) -> None:
+        """The producing clone of *slot* succeeded or skipped complete."""
+        self._resolve(slot, _Item("ready"))
+
+    def dropped(self, slot: str, origin: str, reason: str | None) -> None:
+        """*slot* was dropped, in the map *origin*."""
+        self._resolve(slot, _Item("dropped", origin, reason))
+
+    def failed(self, slot: str | None = None) -> None:
+        """*slot*, or every slot not settled yet, will not arrive."""
+        for key in list(self._items) if slot is None else [slot]:
+            self._resolve(key, _Item("failed"))
+
+    def close(self, *, ok: bool) -> None:
+        """The producing run exited: fail every slot left."""
+        self.failed()
+        if not self.closed.done():
+            self.closed.set_result(ok)
+
+    async def wait(self, slot: str, *, owner: str, source: str) -> _Item:
+        """How *slot* settled, once it has (R1 if it is not a slot)."""
+        future = self._items.get(slot)
+        if future is None:
+            raise MapConfigurationError(
+                _(
+                    "Map task '%(id)s' expected item %(slot)s from "
+                    "'%(source)s', which has no such item."
+                )
+                % {"id": owner, "slot": slot, "source": source}
+            )
+        self.taken.add(slot)
+        # Shielded: a cancelled waiter must not cancel the shared future.
+        return await asyncio.shield(future)
+
+
+async def _gap(origin: str) -> _Item:
+    """A slot a paired input does not have: dropped in *origin*."""
+    return _Item("dropped", origin)
+
+
+async def _remove_slots(target: BaseTarget, paths: list[str]) -> None:
+    """
+    Remove the dropped slots *paths* on *target*: with its own ``remove``
+    when it has one, else with as few ``rm -rf`` commands as fit a command
+    line. A slot that stays is logged; it is still listed as dropped.
+    """
+    if type(target).remove is not BaseTarget.remove:
+        for path in paths:
+            try:
+                await target.remove(path)
+            except OSError as exc:
+                horus_logger.log.warning(
+                    _("Could not remove dropped slot %(path)s: %(error)s")
+                    % {"path": path, "error": exc}
+                )
+        return
+    chunks: list[list[str]] = []
+    size = _RM_CHARS
+    for path in map(shlex.quote, paths):
+        if size + 1 + len(path) > _RM_CHARS:
+            chunks.append([])
+            size = len("rm -rf --")
+        chunks[-1].append(path)
+        size += 1 + len(path)
+    for chunk in chunks:
+        out = await target.run_command_sync("rm -rf -- " + " ".join(chunk))
+        code = await out.wait()
+        if code != 0:
+            horus_logger.log.warning(
+                _(
+                    "Could not remove %(n)d dropped slot(s) "
+                    "(exit code %(code)d): %(paths)s"
+                )
+                % {"n": len(chunk), "code": code, "paths": " ".join(chunk)}
+            )
 
 
 class MapOver(BaseModel):
@@ -115,13 +287,28 @@ class MapTask(HorusTask):
     """
     What a failed clone means for the map. ``"fail"`` (the default) fails
     the map. ``"drop"`` removes the clone's slot from the output folder
-    and completes the map, unless every clone failed; the clone stays
+    and completes the map, unless every item was dropped; the clone stays
     FAILED, which is how a dropped item shows in the run. Only meant for
     maps whose items are independent.
     """
 
+    chain: bool = False
+    """Start each item once every chained input has that item."""
+
+    zip: list[MapOver] = Field(default_factory=list)
+    """
+    Inputs paired by item: slot X of each is bound to clone X as ``$<as>``.
+    """
+
+    drop_exit_codes: list[int] = Field(default_factory=list)
+    """
+    Exit codes that drop the item instead of failing it, whatever
+    :attr:`on_item_failure` says. The clone ends SKIPPED with
+    ``skip_reason: dropped``.
+    """
+
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
-    """Slots dropped by the current execution (``on_item_failure="drop"``)."""
+    """Slots dropped by the current execution."""
 
     _staged_dirs: list[str] = PrivateAttr(default_factory=list)
     """The output root and slot dirs of the current execution."""
@@ -132,7 +319,7 @@ class MapTask(HorusTask):
     _fan_out: (
         tuple[
             list[BaseTask],
-            Callable[[BaseTask], Coroutine[Any, Any, None]],
+            Callable[[BaseTask], Coroutine[Any, Any, BaseException | None]],
             contextvars.Context,
         ]
         | None
@@ -142,7 +329,7 @@ class MapTask(HorusTask):
     wave runs.
     """
 
-    _early_reruns: dict[int, asyncio.Task[None]] = PrivateAttr(
+    _early_reruns: dict[int, asyncio.Task[BaseException | None]] = PrivateAttr(
         default_factory=dict
     )
     """Re-runs of lost slots :meth:`_restage` started, by clone index."""
@@ -150,23 +337,129 @@ class MapTask(HorusTask):
     _input_digests: dict[str, str] = PrivateAttr(default_factory=dict)
     """The digests of this task's inputs from its last fingerprint."""
 
+    _stream: _ItemStream | None = PrivateAttr(default=None)
+    """This map's items for chained consumers, while it runs."""
+
+    _chain_memo: (
+        tuple[dict[tuple[str, str], EdgeSource], dict[str, "MapTask"]] | None
+    ) = PrivateAttr(default=None)
+    """The source map last seen, and the map feeding each chained input."""
+
+    _source_streams: dict[str, _ItemStream] = PrivateAttr(default_factory=dict)
+    """The stream of each chained input, as handed to the scheduler."""
+
+    _upstream_dropped: dict[str, str] = PrivateAttr(default_factory=dict)
+    """Slots dropped upstream in the current execution, to their origin."""
+
+    _streamed_digests: dict[str, str | None] | None = PrivateAttr(default=None)
+    """Final digests of the inputs this execution streamed, else ``None``."""
+
+    _holding: bool = PrivateAttr(default=False)
+    """Whether this execution keeps its sources' machines until it settles."""
+
+    def stream_for_consumers(self) -> _ItemStream:
+        """
+        This map's item stream, created on first ask: a consumer can ask
+        before this map runs, and the run reuses it.
+        """
+        stream = self._stream
+        if (
+            stream is None
+            or stream.opened.get_loop() is not asyncio.get_running_loop()
+        ):
+            stream = self._stream = _ItemStream()
+        return stream
+
+    def stream_sources(
+        self, source_map: dict[tuple[str, str], EdgeSource]
+    ) -> dict[str, "asyncio.Future[None]"]:
+        """
+        A chained map may start once each map feeding its ``over`` and
+        ``zip`` inputs has opened its stream.
+        """
+        if not self.chain:
+            return {}
+        sources = self._chain_sources(source_map)
+        # Kept so the run reads the streams the scheduler saw open, even if
+        # a source finishes (and resets) before then.
+        self._source_streams = {
+            input_id: source.stream_for_consumers()
+            for input_id, source in sources.items()
+        }
+        return {
+            sources[input_id].id: stream.opened
+            for input_id, stream in self._source_streams.items()
+        }
+
+    def mark_skipped_complete(self) -> None:
+        """
+        Skipped whole: a stream a consumer asked for will never open, and
+        one a retry kept open closes, its outputs complete.
+        """
+        stream = self._stream
+        if stream is not None and stream.opened.done():
+            for slot in stream.slots:
+                stream.ready(slot)
+            stream.close(ok=True)
+        self._stream = None
+        super().mark_skipped_complete()
+
+    def _chain_sources(
+        self, source_map: dict[tuple[str, str], EdgeSource]
+    ) -> dict[str, "MapTask"]:
+        """The map feeding each ``over`` and ``zip`` input, by input id."""
+        memo = self._chain_memo
+        if memo is not None and memo[0] is source_map:
+            return memo[1]
+        wf = self.workflow
+        maps = {
+            task.id: task
+            for task in (wf.tasks if wf is not None else [])
+            if isinstance(task, MapTask)
+        }
+        sources: dict[str, MapTask] = {}
+        for entry in (self.over, *self.zip):
+            source = source_map.get((self.id, entry.input_id))
+            if source is not None and source.task_id in maps:
+                sources[entry.input_id] = maps[source.task_id]
+        self._chain_memo = (source_map, sources)
+        return sources
+
+    @property
+    def streamed_inputs(self) -> frozenset[str]:
+        """The chained inputs whose source map this run started on."""
+        memo = self._chain_memo
+        if not self._streaming_from or memo is None:
+            return frozenset()
+        return frozenset(
+            input_id
+            for input_id, source in memo[1].items()
+            if source.id in self._streaming_from
+        )
+
     @property
     def _over_artifact(self) -> IterableArtifact:
         """
         Returns the input artifact to iterate over.
         """
+        return self._iterable_input(self.over.input_id)
+
+    def _iterable_input(self, input_id: str) -> IterableArtifact:
+        """
+        The input *input_id*, which must be an iterable artifact.
+        """
         input_artifact = next(
-            (inp for inp in self.inputs if inp.id == self.over.input_id), None
+            (inp for inp in self.inputs if inp.id == input_id), None
         )
         if input_artifact is None:
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' not found in task inputs.")
-                % {"id": self.over.input_id}
+                % {"id": input_id}
             )
         if not isinstance(input_artifact, IterableArtifact):
             raise MapConfigurationError(
                 _("Input artifact '%(id)s' is not iterable.")
-                % {"id": self.over.input_id}
+                % {"id": input_id}
             )
 
         return input_artifact
@@ -174,11 +467,11 @@ class MapTask(HorusTask):
     @model_validator(mode="after")
     def validate_input_artifact_iterable(self) -> "MapTask":
         """
-        Validates that the input artifact specified by `over` is an
-        IterableArtifact.
+        Validates that the input artifacts specified by `over` and `zip` are
+        IterableArtifacts.
         """
-        # Obtain the input artifact to iterate over
-        _unused = self._over_artifact
+        for over in (self.over, *self.zip):
+            self._iterable_input(over.input_id)
 
         return self
 
@@ -196,6 +489,95 @@ class MapTask(HorusTask):
                 )
                 % {"id": self.id, "item": self.over.item_id}
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_zip_bindings(self) -> "MapTask":
+        """
+        Validates that each zip entry binds a free id, and that no input is
+        iterated twice.
+        """
+        taken = {a.id for a in (*self.inputs, *self.outputs)}
+        bound = {self.over.item_id}
+        paired = {self.over.input_id}
+        for entry in self.zip:
+            item = None
+            if entry.item_id in taken or entry.item_id in bound:
+                item = entry.item_id
+            elif entry.input_id in paired:
+                item = entry.input_id
+            if item is not None:
+                raise MapConfigurationError(
+                    _("Map task '%(id)s' binds '%(item)s' twice.")
+                    % {"id": self.id, "item": item}
+                )
+            bound.add(entry.item_id)
+            paired.add(entry.input_id)
+        return self
+
+    @model_validator(mode="after")
+    def validate_chained_body(self) -> "MapTask":
+        """
+        Validates that a chained command body reads each streamed input one
+        item at a time: the whole folder is not there while it streams.
+        ``${task.inputs}`` and ``${task.inputs.<streamed id>}`` are not
+        fine; other ``${task...}`` names and inputs that do not stream are.
+        """
+        if not self.chain or not isinstance(self.runtime, CommandRuntime):
+            return self
+        names = placeholder_names(self._body_text())
+        roots = {name.split(".")[0] for name in names}
+        streamed = {
+            over.input_id: over.item_id for over in (self.over, *self.zip)
+        }
+        for input_id, item_id in streamed.items():
+            if input_id in roots:
+                self._raise_chained_read(input_id, item_id)
+        for name in sorted(names):
+            if name == "task.inputs":
+                self._raise_chained_read(name, self.over.item_id)
+            if not name.startswith("task.inputs."):
+                continue
+            input_id = name.split(".")[2]
+            if input_id in streamed:
+                self._raise_chained_read(
+                    "task.inputs." + input_id, streamed[input_id]
+                )
+        return self
+
+    def _raise_chained_read(self, input_id: str, item_id: str) -> None:
+        """Raise the V7 error for *input_id*, pointing at *item_id*."""
+        raise MapConfigurationError(
+            _(
+                "Map task '%(id)s' is chained, so it cannot read all of "
+                "'%(input)s'. Use '$%(as)s' for this item."
+            )
+            % {"id": self.id, "input": input_id, "as": item_id}
+        )
+
+    @model_validator(mode="after")
+    def validate_drop_exit_codes(self) -> "MapTask":
+        """
+        Validates that each drop code is an exit code a command can return
+        on failure.
+        """
+        for code in self.drop_exit_codes:
+            if code == 0:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' lists exit code %(code)d to drop "
+                        "items, but 0 means success."
+                    )
+                    % {"id": self.id, "code": code}
+                )
+            if not 1 <= code <= _MAX_EXIT_CODE:
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' lists exit code %(code)d to drop "
+                        "items. Use a code from 1 to 255."
+                    )
+                    % {"id": self.id, "code": code}
+                )
         return self
 
     @model_validator(mode="after")
@@ -231,30 +613,127 @@ class MapTask(HorusTask):
             )
 
         self._dropped_slots = []
+        self._upstream_dropped = {}
+        self._streamed_digests = None
+        streams = {
+            input_id: self._source_streams[input_id]
+            for input_id in self.streamed_inputs
+        }
+        stream = self.stream_for_consumers()
+        ok = keep = False
+        try:
+            await self._map_items(wf, stream, streams)
+            ok = True
+        except TargetLostError:
+            # The scheduler runs this map again: its consumers keep waiting.
+            keep = self._retry_on_target_loss
+            raise
+        finally:
+            if not keep:
+                stream.close(ok=ok)
+                self._stream = None
+                self._source_streams = {}
+            if self._holding:
+                self._holding = False
+                wf.leases.inputs_transferred(self)
 
-        items = await self._over_artifact.items(self.target)
+    async def _map_items(  # noqa: PLR0912, PLR0915
+        self,
+        wf: BaseWorkflow,
+        stream: _ItemStream,
+        streams: dict[str, _ItemStream],
+    ) -> None:
+        """
+        The body of :meth:`_execute`. *stream* is this map's own; *streams*
+        are those of the inputs it reads per item while their maps run.
+        """
+        over_stream = streams.get(self.over.input_id)
+        slots: dict[str, BaseArtifact]
+        if over_stream is not None:
+            # The source is still running: its slot list, not its folder.
+            labels = dict(over_stream.slots)
+            slots = {
+                slot: over_stream.clones[slot].outputs[0] for slot in labels
+            }
+        else:
+            items = await self._over_artifact.items(self.target)
+            # Over another map's output, keep its slot names: a slot it
+            # dropped leaves a gap instead of shifting every later item to a
+            # new slot (and a new fingerprint). Otherwise zero-padded
+            # indices, so the slots sort the same lexically and numerically.
+            width = max(1, len(str(len(items) - 1)))
+            inherit = self._over_is_map_output(wf)
+            slots = {
+                (
+                    Path(item.path).name if inherit else f"{index:0{width}d}"
+                ): item
+                for index, item in enumerate(items)
+            }
+            labels = {
+                slot: Path(item.path).name for slot, item in slots.items()
+            }
         root = Path(self.target.path_on_target(self.outputs[0]))
         await self.target.mkdir(str(root))
 
-        # Over another map's output, keep its slot names: a slot it dropped
-        # leaves a gap instead of shifting every later item to a new slot
-        # (and a new fingerprint). Otherwise zero-padded indices, so the
-        # slots sort the same lexically and numerically.
-        width = max(1, len(str(len(items) - 1)))
-        inherit = self._over_is_map_output(wf)
-        slots: dict[str, BaseArtifact] = {
-            (Path(item.path).name if inherit else f"{index:0{width}d}"): item
-            for index, item in enumerate(items)
+        # What each clone waits for before it runs, in order: its streamed
+        # items, or a gap where a paired input lacks its slot.
+        sources = wf.cached_source_map(None)[1]
+        waits: dict[str, list[Callable[[], Awaitable[_Item]]]] = {
+            slot: [] for slot in slots
         }
+        paired: dict[str, dict[str, BaseArtifact]] = {
+            slot: {} for slot in slots
+        }
+        for pair in (self.over, *self.zip):
+            source = sources.get((self.id, pair.input_id))
+            source_id = str(source.task_id if source else pair.input_id)
+            pair_stream = streams.get(pair.input_id)
+            if pair_stream is not None:
+                for slot in slots:
+                    # A slot the zip side never had is a gap, as below.
+                    if pair is not self.over and slot not in pair_stream.slots:
+                        waits[slot].append(partial(_gap, source_id))
+                        continue
+                    waits[slot].append(
+                        partial(
+                            pair_stream.wait,
+                            slot,
+                            owner=self.id,
+                            source=source_id,
+                        )
+                    )
+                    producer = pair_stream.clones.get(slot)
+                    if pair is not self.over and producer is not None:
+                        paired[slot][pair.item_id] = producer.outputs[0]
+                continue
+            if pair is self.over:
+                continue
+            # Paired by slot name. A slot the zip side lacks was dropped
+            # there; one only it has was dropped on the over side.
+            found = {
+                Path(item.path).name: item
+                for item in await self._iterable_input(pair.input_id).items(
+                    self.target
+                )
+            }
+            for slot in slots:
+                if slot in found:
+                    paired[slot][pair.item_id] = found[slot]
+                else:
+                    waits[slot].append(partial(_gap, source_id))
+
         clones: list[BaseTask] = []
         for slot, item in slots.items():
             slot_root = root / slot
             await self.target.mkdir(str(slot_root))
-            clones.append(self._clone(slot, item, slot_root))
+            clones.append(self._clone(slot, item, slot_root, paired[slot]))
         # Clone ids repeat across a map retry: a stale record must not read
-        # as this run's output.
-        for clone in clones:
-            wf.leases.forget(clone)
+        # as this run's output. A slot a consumer took keeps it, so that
+        # consumer finds the slot lost on a new machine instead of reading
+        # it half rewritten.
+        for slot, clone in zip(slots, clones, strict=True):
+            if slot not in stream.taken:
+                wf.leases.forget(clone)
         self._staged_dirs = [str(root), *(str(root / slot) for slot in slots)]
         self._staged_generation = self.target.generation
 
@@ -276,6 +755,9 @@ class MapTask(HorusTask):
             ],
             owner=self.id,
         )
+        stream.open(labels, dict(zip(slots, clones, strict=True)), self.target)
+        if streams:
+            self._emit_chained(streams, labels)
 
         # Every clone input is already materialized on `self.target` (either
         # the item, or a copy of one of this task's own already-transferred
@@ -285,8 +767,39 @@ class MapTask(HorusTask):
         # transfer via the registered strategy. Nothing needs `pinned`.
         # These hand-offs are not workflow edges, so they emit no
         # TransferEvents (one per clone x input would flood the bus).
+        # A streamed item is not here: it comes from its producing clone,
+        # a no-op on the same machine too, and reported when it crosses.
+        # Every item is named after its slot, so an item from another
+        # machine lands in a folder of its source's own.
+        per_item: dict[tuple[str, str], EdgeSource] = {}
+        for pair in (self.over, *self.zip):
+            pair_stream = streams.get(pair.input_id)
+            if pair_stream is None:
+                continue
+            crosses = (
+                pair_stream.target is not None
+                and pair_stream.target.location_id != self.target.location_id
+            )
+            source = sources[(self.id, pair.input_id)]
+            into = (
+                f"{self.target.resolved_working_directory}"
+                f"/.horus_items/{source.task_id}"
+                if crosses
+                else None
+            )
+            for slot, clone in zip(slots, clones, strict=True):
+                producer = pair_stream.clones.get(slot)
+                if producer is not None:
+                    per_item[(clone.id, pair.item_id)] = EdgeSource(
+                        pair_stream.target,
+                        producer.outputs[0],
+                        task_id=producer.id,
+                        report=crosses,
+                        into=into,
+                    )
         source_map: dict[tuple[str, str], EdgeSource] = {
-            (clone.id, artifact.id): EdgeSource(
+            (clone.id, artifact.id): per_item.get((clone.id, artifact.id))
+            or EdgeSource(
                 self.target,
                 artifact,
                 report=False,
@@ -295,6 +808,12 @@ class MapTask(HorusTask):
             for clone in clones
             for artifact in clone.inputs
         }
+
+        if streams:
+            # Keeps the sources' machines until this map settles: its
+            # clones still read from them.
+            wf.leases.repull(self)
+            self._holding = True
 
         # The clones are this task's real work, and they bypass its executor,
         # which is what flips a task from CONFIGURING to RUNNING; without
@@ -306,11 +825,16 @@ class MapTask(HorusTask):
         self.target.on_ready(self._restage)
 
         run_clone = partial(
-            execute_task,
-            wf,
-            source_map=source_map,
-            pool=TargetPool(self.max_concurrency),
-            placement=wf.placement,
+            self._run_item,
+            stream,
+            waits,
+            partial(
+                execute_task,
+                wf,
+                source_map=source_map,
+                pool=TargetPool(self.max_concurrency),
+                placement=wf.placement,
+            ),
         )
         results: list[BaseException | None]
         # Re-runs start from a ready callback; they must not inherit the
@@ -324,14 +848,17 @@ class MapTask(HorusTask):
             ):
                 # Clones are independent: one failing must not cancel the
                 # rest.
-                results = await asyncio.gather(
-                    *map(run_clone, clones), return_exceptions=True
+                results = list(
+                    await asyncio.gather(
+                        *map(run_clone, clones), return_exceptions=True
+                    )
                 )
             else:
+                # A drop returns its error, so only a fatal one cancels
+                # the rest.
                 async with asyncio.TaskGroup() as tg:
-                    for clone in clones:
-                        tg.create_task(run_clone(clone))
-                results = [None] * len(clones)
+                    runs = [tg.create_task(run_clone(c)) for c in clones]
+                results = [run.result() for run in runs]
             self._fan_out = None
             early = await asyncio.gather(
                 *self._early_reruns.values(), return_exceptions=True
@@ -346,7 +873,34 @@ class MapTask(HorusTask):
         for index, result in zip(self._early_reruns, early, strict=True):
             results[index] = result
         await self._rerun_lost(clones, results, run_clone)
-        await self._settle(root, slots, clones, results)
+        if streams:
+            # A source's folder is final once it closed (drops removed, lost
+            # slots run again); shielded, so a cancel leaves them alone.
+            closed = await asyncio.gather(
+                *(asyncio.shield(s.closed) for s in streams.values())
+            )
+            if not all(closed):
+                # shortcut: parked until the scheduler cancels this map (its
+                # source failed); revisit if a source can fail without raising.
+                await asyncio.get_running_loop().create_future()
+        await self._settle(root, labels, clones, results)
+        # This map's folder is final: its consumers need not wait for the
+        # digests below, unless a lost machine there can retry this map.
+        if not (
+            streams
+            and self._retry_on_target_loss
+            and any(
+                t is not None and t.releasable
+                for t in (self.target, *(s.target for s in streams.values()))
+            )
+        ):
+            stream.close(ok=True)
+        if streams:
+            # Fingerprinted again, now that they settled.
+            self._streaming_from = frozenset()
+            self._streamed_digests = await wf.source_digests(
+                self, wf.cached_source_map(None)[1], only=streams.keys()
+            )
 
         # Deliberately NOT merging the clones' side artifacts into this
         # task's own list: each clone's upload middleware registers them
@@ -359,6 +913,123 @@ class MapTask(HorusTask):
         horus_logger.log.debug(
             _("Map task '%(id)s' ran %(n)d clone(s).")
             % {"id": self.id, "n": len(clones)}
+        )
+
+    async def _run_item(
+        self,
+        stream: _ItemStream,
+        waits: Mapping[str, list[Callable[[], Awaitable[_Item]]]],
+        run_task: Callable[[BaseTask], Awaitable[None]],
+        clone: BaseTask,
+    ) -> BaseException | None:
+        """
+        Run *clone* once each item it *waits* for is ready, and publish how
+        it settled on *stream*. The wait comes first, so a waiting clone
+        holds no slot, placement or lease. An item dropped upstream skips
+        the clone. When it exits with one of :attr:`drop_exit_codes`, mark
+        it dropped. A droppable failure is returned, not raised, so it does
+        not cancel the siblings; :meth:`_settle` drops its slot.
+        """
+        slot = clone.id[len(self.id) + 1 : -1]
+        try:
+            for wait in waits.get(slot, []):
+                item = await wait()
+                if item.state == "dropped":
+                    self._mark_upstream_dropped(clone, slot, str(item.origin))
+                    stream.dropped(slot, str(item.origin), item.reason)
+                    return None
+                if item.state == "failed":
+                    stream.failed()
+                    # shortcut: parked until the scheduler cancels this map
+                    # (its source is failing); revisit if a source can fail
+                    # without raising.
+                    await asyncio.get_running_loop().create_future()
+            await run_task(clone)
+        except Exception as exc:
+            code = self._drop_code(exc)
+            if code is not None:
+                # shortcut: set after the run raised, so a snapshot can show
+                # FAILED for one push; mark it inside the run if that matters.
+                clone.status = TaskStatus.SKIPPED
+                clone.skip_reason = SkipReason.DROPPED
+                clone.error = _("Dropped: exit code %(code)d") % {"code": code}
+                stream.dropped(
+                    slot, self.id, _("exit code %(code)d") % {"code": code}
+                )
+                return exc
+            if self._droppable(exc):
+                stream.dropped(
+                    slot, self.id, (clone.error or "")[:_ERROR_CHARS]
+                )
+                return exc
+            stream.failed()
+            raise
+        else:
+            stream.ready(slot)
+            return None
+        finally:
+            # Cancelled, or never settled: its consumer must not wait on.
+            stream.failed(slot)
+
+    def _mark_upstream_dropped(
+        self, clone: BaseTask, slot: str, origin: str
+    ) -> None:
+        """*clone* never runs: its item was dropped in the map *origin*."""
+        clone.status = TaskStatus.SKIPPED
+        clone.skip_reason = SkipReason.UPSTREAM_DROPPED
+        clone.finished_at = datetime.now(UTC)
+        self._upstream_dropped[slot] = origin
+
+    def _emit_chained(
+        self, streams: dict[str, _ItemStream], labels: dict[str, str]
+    ) -> None:
+        """Say that this map starts each item as its sources finish it."""
+        memo = self._chain_memo
+        chain = sorted(
+            {
+                memo[1][input_id].id
+                for input_id in streams
+                if memo is not None and input_id in memo[1]
+            }
+        )
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=self.id,
+                task_name=self.name,
+                message=_(
+                    "Map %(name)s starts each item when %(sources)s "
+                    "finishes it."
+                )
+                % {"name": self.name, "sources": ", ".join(chain)},
+                data={
+                    "map": {
+                        "chain": chain,
+                        "slots": dict(list(labels.items())[:_EVENT_ITEMS]),
+                        "slot_count": len(labels),
+                    }
+                },
+            )
+        )
+
+    def _drop_code(self, exc: BaseException) -> int | None:
+        """
+        The exit code that drops the item *exc* failed, when every leaf of
+        *exc* exited with one of :attr:`drop_exit_codes`; else ``None``.
+        """
+        codes = [
+            getattr(leaf, "exit_code", None) for leaf in exception_leaves(exc)
+        ]
+        if codes and all(code in self.drop_exit_codes for code in codes):
+            return codes[0]
+        return None
+
+    def _droppable(self, exc: BaseException) -> bool:
+        """Whether a clone failing with *exc* drops its item."""
+        # A configuration error is never the item's fault.
+        if isinstance(exc, (asyncio.CancelledError, MapConfigurationError)):
+            return False
+        return (
+            self._drop_code(exc) is not None or self.on_item_failure == "drop"
         )
 
     async def _restage(self) -> None:
@@ -389,7 +1060,9 @@ class MapTask(HorusTask):
             try:
                 await wf.transfer_artifacts(self)
             finally:
-                wf.leases.inputs_transferred(self)
+                # A streaming map still reads its sources' machines.
+                if not self._holding:
+                    wf.leases.inputs_transferred(self)
             if [artifact.path for artifact in self.inputs] != paths:
                 raise RuntimeError(
                     _("The inputs of map task '%(id)s' moved.")
@@ -425,6 +1098,9 @@ class MapTask(HorusTask):
             if (
                 index not in self._early_reruns
                 and clone.status in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+                # A dropped slot has no output to lose.
+                and clone.skip_reason
+                not in (SkipReason.DROPPED, SkipReason.UPSTREAM_DROPPED)
                 and wf.leases.output_lost(
                     clone.id, clone.outputs[0].id, self.target
                 )
@@ -434,16 +1110,17 @@ class MapTask(HorusTask):
                     run_clone(clone), context=context.copy()
                 )
 
-    @staticmethod
-    def _take_rerun(clone: BaseTask) -> bool:
+    def _take_rerun(self, clone: BaseTask) -> bool:
         """
         Spend *clone*'s one re-run of a lost slot and say so; ``False`` once
         it is spent. The clone leaves a terminal status, so the event says
-        why.
+        why. A consumer that has not asked for the slot yet waits for it.
         """
         if clone._target_loss_retries >= MAX_TARGET_LOSS_RETRIES:  # noqa: SLF001
             return False
         clone._target_loss_retries += 1  # noqa: SLF001
+        if self._stream is not None:
+            self._stream.again(clone.id[len(self.id) + 1 : -1])
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=clone.id,
@@ -461,7 +1138,7 @@ class MapTask(HorusTask):
         self,
         clones: list[BaseTask],
         results: list[BaseException | None],
-        run_clone: Callable[[BaseTask], Awaitable[None]],
+        run_clone: Callable[[BaseTask], Awaitable[BaseException | None]],
     ) -> None:
         """
         Run again the succeeded clones whose slot was lost with an earlier
@@ -477,6 +1154,9 @@ class MapTask(HorusTask):
                 index
                 for index, clone in enumerate(clones)
                 if results[index] is None
+                # A dropped slot has no output to lose.
+                and clone.skip_reason
+                not in (SkipReason.DROPPED, SkipReason.UPSTREAM_DROPPED)
                 and wf.leases.output_lost(
                     clone.id, clone.outputs[0].id, target
                 )
@@ -524,57 +1204,122 @@ class MapTask(HorusTask):
     async def _settle(
         self,
         root: Path,
-        slots: dict[str, BaseArtifact],
+        labels: dict[str, str],
         clones: list[BaseTask],
         results: list[BaseException | None],
     ) -> None:
         """
         Turn the finished clones' *results* into the map's outcome: raise
-        if any clone failed, unless the map drops failed items and at least
-        one succeeded. Then remove each failed clone's slot, so nothing
-        downstream sees it, and report the drop.
+        if a clone failed and is not droppable, or if every item was
+        dropped, here or upstream. Then remove each dropped slot, so
+        nothing downstream sees it, and report the drop.
         """
         errors = [r for r in results if isinstance(r, BaseException)]
         # A cancelled clone is a cancel, not a failure: never group it.
         for error in errors:
             if isinstance(error, asyncio.CancelledError):
                 raise error
-        if not errors:
+        upstream = self._upstream_dropped
+        if not errors and not upstream:
             return
-        if self.on_item_failure == "fail" or len(errors) == len(clones):
+        fatal = [error for error in errors if not self._droppable(error)]
+        if fatal:
             raise BaseExceptionGroup(
                 _("%(n)d of %(total)d map clone(s) failed.")
-                % {"n": len(errors), "total": len(clones)},
-                errors,
+                % {"n": len(fatal), "total": len(clones)},
+                fatal,
             )
+        if len(errors) + len(upstream) == len(clones):
+            # The clone errors ride along as the cause, for the traceback.
+            cause = (
+                BaseExceptionGroup(
+                    _("%(n)d of %(total)d map clone(s) failed.")
+                    % {"n": len(errors), "total": len(clones)},
+                    errors,
+                )
+                if errors
+                else None
+            )
+            raise TaskExecutionError(
+                _("All %(n)d items were dropped in %(name)s.")
+                % {"n": len(clones), "name": self.name}
+            ) from cause
 
-        failed = [
-            (slot, item, clone)
-            for (slot, item), clone, result in zip(
-                slots.items(), clones, results, strict=True
-            )
-            if isinstance(result, BaseException)
-        ]
         lines: list[str] = []
-        for slot, item, clone in failed:
-            await self.target.remove(str(root / slot))
+        dropped: list[dict[str, str]] = []
+        for (slot, label), clone, result in zip(
+            labels.items(), clones, results, strict=True
+        ):
+            if result is None and slot not in upstream:
+                continue
             self._dropped_slots.append(slot)
+            if result is None:
+                continue
+            summary = (clone.error or "")[:_ERROR_CHARS]
+            code = self._drop_code(result)
+            dropped.append(
+                {
+                    "slot": slot,
+                    "item": label,
+                    "reason": summary
+                    if code is None
+                    else _("exit code %(code)d") % {"code": code},
+                }
+            )
             if len(lines) < _DROPS_LISTED:
-                summary = (clone.error or "")[:_ERROR_CHARS]
-                lines.append(f"{slot} ({Path(item.path).name}): {summary}")
-        if len(failed) > _DROPS_LISTED:
-            lines.append(_("+%(n)d more") % {"n": len(failed) - _DROPS_LISTED})
+                lines.append(f"{slot} ({label}): {summary}")
+        await _remove_slots(
+            self.target, [str(root / slot) for slot in self._dropped_slots]
+        )
+        if len(dropped) > _DROPS_LISTED:
+            lines.append(
+                _("+%(n)d more") % {"n": len(dropped) - _DROPS_LISTED}
+            )
+        parts = []
+        if dropped:
+            parts.append(
+                _("Map %(name)s dropped %(n)d of %(total)d item(s):")
+                % {"name": self.name, "n": len(dropped), "total": len(clones)}
+            )
+            parts.extend(lines)
+        if upstream:
+            parts.append(
+                _("%(n)d item(s) dropped upstream.") % {"n": len(upstream)}
+            )
 
+        # The message and `data` are capped; the clones hold every drop.
         HorusContext.get_context().bus.emit(
             HorusTaskEvent(
                 task_id=self.id,
                 task_name=self.name,
-                message=_("Map %(name)s dropped %(n)d of %(total)d item(s):")
-                % {"name": self.name, "n": len(failed), "total": len(clones)}
-                + "\n"
-                + "\n".join(lines),
+                level="WARNING",
+                message="\n".join(parts),
+                data={
+                    "map": {
+                        "dropped": dropped[:_EVENT_ITEMS],
+                        "dropped_count": len(dropped),
+                        "upstream_dropped": dict(
+                            sorted(upstream.items())[:_EVENT_ITEMS]
+                        ),
+                        "upstream_dropped_count": len(upstream),
+                    }
+                },
             )
         )
+
+    def _config_extra(self) -> dict[str, Any]:
+        """
+        ``zip`` and ``drop_exit_codes`` change what the map outputs; left
+        out when unset, so the hash of a map without them is unchanged.
+        """
+        extra: dict[str, Any] = {}
+        if self.zip:
+            extra["zip"] = [
+                entry.model_dump(mode="json") for entry in self.zip
+            ]
+        if self.drop_exit_codes:
+            extra["drop_exit_codes"] = self.drop_exit_codes
+        return extra
 
     async def _fingerprint(
         self, input_digests: Mapping[str, str | None] | None = None
@@ -598,10 +1343,36 @@ class MapTask(HorusTask):
         earlier manifest instead, so the next run re-enters the map and
         retries the dropped items (the others skip on their own manifests).
         """
-        if self._dropped_slots:
+        streamed = self._streamed_digests
+        if self._dropped_slots or (
+            streamed is not None and None in streamed.values()
+        ):
+            # A streamed source that cannot be digested is a miss.
             await self._remove_manifest()
-        else:
-            await super()._write_manifest(fingerprint)
+            return
+        if streamed is not None:
+            # Taken before the streamed inputs settled: take it again with
+            # their final digests, as a run that did not stream records.
+            fingerprint = await self._fingerprint(
+                {**self._input_digests, **streamed}
+            )
+        await super()._write_manifest(fingerprint)
+
+    async def is_complete(
+        self, input_digests: InputDigests | None = None
+    ) -> bool:
+        """Never complete while streaming: the inputs have not settled."""
+        if self.streamed_inputs:
+            return False
+        return await super().is_complete(input_digests)
+
+    async def manifest_matches(
+        self, manifest: bytes, input_digests: InputDigests
+    ) -> bool:
+        """Never a match while streaming: the inputs have not settled."""
+        if self.streamed_inputs:
+            return False
+        return await super().manifest_matches(manifest, input_digests)
 
     def _body_may_read(self, artifact_id: str) -> bool:
         """
@@ -612,20 +1383,29 @@ class MapTask(HorusTask):
         """
         if not isinstance(self.runtime, CommandRuntime):
             return True
-        text = json.dumps(
+        return bool(
+            placeholder_roots(self._body_text()) & {artifact_id, "task"}
+        )
+
+    def _body_text(self) -> str:
+        """The runtime and executor, as the text their placeholders are in."""
+        return json.dumps(
             [
                 self.runtime.model_dump(mode="json"),
                 self.executor.model_dump(mode="json"),
             ]
         )
-        return bool(placeholder_roots(text) & {artifact_id, "task"})
 
     def _clone(
-        self, slot: str, item: BaseArtifact, slot_root: Path
+        self,
+        slot: str,
+        item: BaseArtifact,
+        slot_root: Path,
+        paired: Mapping[str, BaseArtifact],
     ) -> BaseTask:
         """
-        One independent clone of this task for *slot*, bound to *item* and
-        rooted at *slot_root*.
+        One independent clone of this task for *slot*, bound to *item*, and
+        to each *paired* item under its id, and rooted at *slot_root*.
 
         A clone is a plain :class:`~horus_builtin.task.horus_task.HorusTask`,
         so it runs the body instead of mapping over it again.
@@ -634,8 +1414,12 @@ class MapTask(HorusTask):
         # (its transfer step ran before `_execute`), but their
         # `declared_path` still holds whatever relative value they were
         # authored with. Freeze the current absolute path onto the copy.
+        # A streamed folder is not there, and the body reads only its item.
+        streamed = self.streamed_inputs
         inputs: list[BaseArtifact] = []
         for artifact in self.inputs:
+            if artifact.id in streamed:
+                continue
             copy = artifact.model_copy(deep=True)
             copy.declared_path = copy.path
             inputs.append(copy)
@@ -644,6 +1428,10 @@ class MapTask(HorusTask):
         # addresses this one element through `$<as>` while the collection it
         # came from stays addressable through `$<input_id>`.
         inputs.append(item.model_copy(update={"id": self.over.item_id}))
+        inputs.extend(
+            artifact.model_copy(update={"id": item_id})
+            for item_id, artifact in paired.items()
+        )
 
         # The clone's output is its slot directory, so a body writing into
         # `$<output>` lands under the map's folder with no path juggling.
@@ -685,8 +1473,13 @@ class MapTask(HorusTask):
         # collection. Hashing the whole collection as well made every clone
         # read every sibling's data (quadratic in the map's size) and rerun
         # when any other item changed. Keep it only when the body names it.
-        if not self._body_may_read(self.over.input_id):
-            clone.unfingerprinted_inputs = [self.over.input_id]
+        # A zip folder likewise: its item fingerprints the clone.
+        clone.unfingerprinted_inputs = [
+            pair.input_id
+            for pair in (self.over, *self.zip)
+            if pair.input_id not in streamed
+            and not self._body_may_read(pair.input_id)
+        ]
 
         # The shared inputs are the copies this task just digested (a
         # digest does not depend on the path): the clone hashes its item
@@ -697,9 +1490,11 @@ class MapTask(HorusTask):
         # middleware persists it to S3 under the clone's own task id and the
         # UI can inspect exactly what this one run of the body received. The
         # item is an input transfer, not an output of the body, so without
-        # this it would never be uploaded at all.
-        clone.side_artifacts.append(
-            item.model_copy(update={"id": f"{clone.id}_item"})
-        )
+        # this it would never be uploaded at all. A streamed item is the
+        # producing clone's output, already uploaded under that clone.
+        if self.over.input_id not in streamed:
+            clone.side_artifacts.append(
+                item.model_copy(update={"id": f"{clone.id}_item"})
+            )
 
         return clone

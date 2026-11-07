@@ -34,7 +34,7 @@ import asyncio
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import nullcontext
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -125,7 +125,10 @@ class EdgeSource(NamedTuple):
     :class:`TransferEvent`. ``digest`` is the output's content digest, as
     :meth:`ArtifactStore.digest` would compute it, when it is known without
     reading the bytes (e.g. a cached output kept in storage);
-    :meth:`BaseWorkflow.source_digests` then uses it as is.
+    :meth:`BaseWorkflow.source_digests` then uses it as is. ``into`` is
+    the folder a copy from another machine lands in, instead of the
+    consumer target's working directory: a copy lands at
+    ``<folder>/<name>``, so two inputs that share a name need two folders.
     """
 
     target: BaseTarget | None
@@ -133,6 +136,7 @@ class EdgeSource(NamedTuple):
     task_id: str | None = None
     report: bool = True
     digest: str | None = None
+    into: str | None = None
 
 
 class BaseWorkflow(AutoRegistry, entry_point="workflow"):
@@ -1075,8 +1079,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         self.tasks[:] = combined_tasks
         self.artifacts[:] = combined_artifacts
         self.edges[:] = combined_edges
+        # Once per batch, not per task: a map fan-out adds thousands.
+        produced = self._produced_declared_paths()
         for task in new_tasks:
-            self._anchor_task(task)
+            self._anchor_task(task, produced)
         # Runs after edges are appended so a new task wired by one of the
         # batch's own edges (e.g. a map/loop clone, or a fan-in join fed by
         # its producers) is recognised as already-ordered and left ungated.
@@ -1240,8 +1246,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             self._build_source_map() if source_map is None else source_map
         )
         # A pinned input is already materialized in place by an expander
-        # (map/loop): not a transfer edge and not a root input either.
-        inputs = [a for a in task.inputs if not a.pinned]
+        # (map/loop): not a transfer edge and not a root input either. A
+        # streamed input arrives per item while the task runs.
+        streamed = task.streamed_inputs
+        inputs = [
+            a for a in task.inputs if not a.pinned and a.id not in streamed
+        ]
         if self._destinations_overlap(task, inputs, sources):
             # A folder transfer replaces its whole directory: a nested
             # input transferred alongside it would race its delete.
@@ -1316,7 +1326,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         :meth:`transfer_artifacts`), resolving its source when its turn
         comes, so a relocation recorded meanwhile is followed.
         """
-        source = self._relocated(source_map.get((task.id, artifact.id)))
+        edge = source_map.get((task.id, artifact.id))
+        source = self._relocated(edge)
         source_target, src_artifact = self._resolve_source(
             task, artifact, source
         )
@@ -1387,8 +1398,12 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             if source is None or source.report
             else nullcontext()
         )
+        destination = task.target
+        if edge is not None and edge.into is not None:
+            destination = task.target.idle_copy()
+            destination.working_directory = edge.into
         with scope:
-            await strategy.transfer(transfer_art, source_target, task.target)
+            await strategy.transfer(transfer_art, source_target, destination)
         artifact.path = transfer_art.path
 
     def _relocated(self, source: EdgeSource | None) -> EdgeSource | None:
@@ -1505,11 +1520,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         self,
         task: BaseTask,
         source_map: dict[tuple[str, str], EdgeSource] | None = None,
+        *,
+        only: Collection[str] | None = None,
     ) -> dict[str, str | None]:
         """
         Digest every fingerprinted input of *task* where
         :meth:`transfer_artifacts` would read it from, without transferring
-        anything.
+        anything. With *only*, digest just the inputs with those ids.
 
         A digest does not depend on the path (a file's is its content's
         sha256, a directory's lists relative paths), so it equals the digest
@@ -1522,6 +1539,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         digests: dict[str, str | None] = {}
         for artifact in task.fingerprinted_inputs:
+            if only is not None and artifact.id not in only:
+                continue
             if artifact.pinned:
                 digests[artifact.id] = await ArtifactStore(task.target).digest(
                     artifact
@@ -1636,7 +1655,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         root = run_root if declared in produced else base
         artifact.path = (root / declared).resolve()
 
-    def _anchor_task(self, task: BaseTask) -> None:
+    def _anchor_task(
+        self, task: BaseTask, produced: set[Path] | None = None
+    ) -> None:
         """
         Anchor one task's declared artifact paths, local runtime paths, and
         working directory to this workflow's run layout.
@@ -1671,11 +1692,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
           state.
 
         Every step here only rewrites still-relative/unset state, so calling
-        this more than once for the same task is safe.
+        this more than once for the same task is safe. *produced* is
+        :meth:`_produced_declared_paths`, passed by a caller anchoring many
+        tasks so it is built once.
         """
         base = self._effective_base
         run_root = self.run_directory
-        produced = self._produced_declared_paths()
+        if produced is None:
+            produced = self._produced_declared_paths()
 
         for artifact in (*task.inputs, *task.outputs):
             self._anchor_artifact(
@@ -1720,10 +1744,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if self.orchestrator_target is not None:
             self.orchestrator_target.working_directory = run_root.as_posix()
 
-        for task in self.tasks:
-            self._anchor_task(task)
-
         produced = self._produced_declared_paths()
+        for task in self.tasks:
+            self._anchor_task(task, produced)
+
         for artifact in self.artifacts:
             self._anchor_artifact(
                 artifact, base=base, run_root=run_root, produced=produced
@@ -1749,8 +1773,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             return
         if self.orchestrator_target.working_directory is None:
             return
+        produced = self._produced_declared_paths()
         for task in self.tasks:
-            self._anchor_task(task)
+            self._anchor_task(task, produced)
 
     async def run(self, trigger_id: str) -> None:
         """

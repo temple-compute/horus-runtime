@@ -151,6 +151,15 @@ class TestBaseTask:
         assert not task.outputs
         assert task.kind == "test_task"
 
+    def test_streams_nothing_by_default(self) -> None:
+        """A task streams no input, so every input is fingerprinted."""
+        task = _make_concrete_task()
+        task.inputs = [FileArtifact(id="a", path=Path("a.txt"))]
+        assert task.stream_sources({}) == {}
+        assert task.streamed_inputs == frozenset()
+        assert task._streaming_from == frozenset()
+        assert [a.id for a in task.fingerprinted_inputs] == ["a"]
+
     async def test_manifest_matches_defaults_to_false(self) -> None:
         """A task without a manifest format never matches one."""
 

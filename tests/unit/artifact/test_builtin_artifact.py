@@ -19,7 +19,9 @@
 Unit tests for artifact_registry module.
 """
 
+import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -246,19 +248,128 @@ class TestFolderArtifact:
         assert "-C /work/data ." in cmd
         assert "/tmp/data.horuspkg" in cmd
 
-    def test_unpack_command_extracts_into_fresh_dest(self) -> None:
+    def test_unpack_command_extracts_into_fresh_dest(
+        self, tmp_path: Path
+    ) -> None:
         """
-        A folder's unpack command recreates the destination and extracts the
-        tarball into it.
+        A folder's unpack command extracts the tarball into the destination,
+        creating its parents, and leaves no temporary trees behind.
         """
-        artifact = FolderArtifact(id="f", path=Path("/work/data"))
+        pkg = _folder_pkg(tmp_path, "v1")
+        dest = tmp_path / "w" / "data"
 
-        cmd = artifact.unpack_command("/tmp/data.horuspkg", "/dest/data")
+        _sh(
+            FolderArtifact(id="f", path=dest).unpack_command(
+                str(pkg), str(dest)
+            )
+        )
 
-        assert cmd is not None
-        assert "rm -rf /dest/data" in cmd
-        assert "mkdir -p /dest/data" in cmd
-        assert "tar xzf /tmp/data.horuspkg -C /dest/data" in cmd
+        assert (dest / "sub" / "f0").read_text() == "v1"
+        assert sorted(p.name for p in dest.parent.iterdir()) == [
+            ".data.horus-sha256",
+            "data",
+        ]
+
+    def test_unpack_same_package_leaves_dest_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Unpacking a package whose digest matches the marker skips the
+        extraction, so a file a reader added stays.
+        """
+        pkg = _folder_pkg(tmp_path, "v1")
+        dest = tmp_path / "data"
+        cmd = FolderArtifact(id="f", path=dest).unpack_command(
+            str(pkg), str(dest)
+        )
+        _sh(cmd)
+        (dest / "sentinel").write_text("x")
+
+        _sh(cmd)
+
+        assert (dest / "sentinel").exists()
+
+    def test_unpack_changed_package_replaces_dest(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A package with another digest replaces the folder's contents and
+        updates the marker.
+        """
+        dest = tmp_path / "data"
+        artifact = FolderArtifact(id="f", path=dest)
+        _sh(
+            artifact.unpack_command(
+                str(_folder_pkg(tmp_path, "v1")), str(dest)
+            )
+        )
+        (dest / "sentinel").write_text("x")
+        marker = (tmp_path / ".data.horus-sha256").read_text()
+
+        _sh(
+            artifact.unpack_command(
+                str(_folder_pkg(tmp_path, "v2")), str(dest)
+            )
+        )
+
+        assert (dest / "sub" / "f0").read_text() == "v2"
+        assert not (dest / "sentinel").exists()
+        assert (tmp_path / ".data.horus-sha256").read_text() != marker
+
+    def test_reunpack_never_hides_files_from_a_reader(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        A second consumer unpacking the same folder input while the first
+        reads it never makes the folder's files disappear.
+        """
+        pkg = _folder_pkg(tmp_path, "v1", files=300)
+        dest = tmp_path / "data"
+        cmd = FolderArtifact(id="f", path=dest).unpack_command(
+            str(pkg), str(dest)
+        )
+        _sh(cmd)
+        probe = dest / "sub" / "f299"
+        stop = threading.Event()
+        missing: list[int] = []
+
+        def read() -> None:
+            while not stop.is_set():
+                if not probe.exists():
+                    missing.append(1)
+
+        reader = threading.Thread(target=read)
+        reader.start()
+        try:
+            for _ in range(20):
+                _sh(cmd)
+        finally:
+            stop.set()
+            reader.join()
+
+        assert not missing
+
+
+def _folder_pkg(tmp_path: Path, text: str, files: int = 3) -> Path:
+    """
+    Pack a folder of *files* files holding *text* with the folder's own pack
+    command, and return the package path.
+    """
+    src = tmp_path / f"src-{text}"
+    (src / "sub").mkdir(parents=True)
+    for i in range(files):
+        (src / "sub" / f"f{i}").write_text(text)
+    pkg = tmp_path / f"{text}.horuspkg"
+    _sh(FolderArtifact(id="f", path=src).pack_command(str(src), str(pkg)))
+    return pkg
+
+
+def _sh(cmd: str | None) -> None:
+    """
+    Run *cmd* with ``sh``, as targets do, and fail on a non-zero exit.
+    """
+    assert cmd is not None
+    subprocess.run(["sh", "-c", cmd], check=True)
 
 
 class ConcreteLocalArtifact(BaseArtifact):
