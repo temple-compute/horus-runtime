@@ -262,6 +262,75 @@ class TestArtifactStore:
             assert (dest / "nested" / "b.txt").read_text() == "B"
 
 
+_HOOK_CALLS: list[str] = []
+
+
+class _HookTarget(LocalTarget):
+    """A local target that records which file hooks the store calls."""
+
+    add_to_registry = False
+
+    async def digest(self, path: str, mode: CacheMode = "deep") -> str | None:
+        _HOOK_CALLS.append("digest")
+        return await super().digest(path, mode)
+
+    async def pack_folder(self, src: str, pkg: str) -> None:
+        _HOOK_CALLS.append("pack_folder")
+        await super().pack_folder(src, pkg)
+
+    async def unpack_folder(self, pkg: str, dest: str) -> None:
+        _HOOK_CALLS.append("unpack_folder")
+        await super().unpack_folder(pkg, dest)
+
+    async def move(self, src: str, dst: str) -> None:
+        _HOOK_CALLS.append("move")
+        await super().move(src, dst)
+
+
+@pytest.mark.unit
+class TestTargetFileHooks:
+    """The store reaches the target's files only through its hooks."""
+
+    async def test_store_routes_through_target_hooks(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Digest, folder pack/unpack and file moves each call one hook."""
+        del horus_context
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.txt").write_text("A")
+        target = _HookTarget(working_directory=str(tmp_path))
+        _HOOK_CALLS.clear()
+        store = ArtifactStore(target)
+
+        assert await store.digest(FolderArtifact(id="d", path=src))
+        pkg = await store.package(FolderArtifact(id="d", path=src))
+        await store.unpackage(FolderArtifact(id="d", path=tmp_path / "o"), pkg)
+        moved = tmp_path / "m.txt"
+        moved.write_text("M")
+        await store.unpackage(
+            FileArtifact(id="f", path=tmp_path / "x" / "f.txt"), str(moved)
+        )
+
+        assert _HOOK_CALLS == [
+            "digest",
+            "pack_folder",
+            "unpack_folder",
+            "move",
+        ]
+        assert (tmp_path / "o" / "a.txt").read_text() == "A"
+        assert (tmp_path / "x" / "f.txt").read_text() == "M"
+
+    async def test_default_file_size_and_failure(self, tmp_path: Path) -> None:
+        """``file_size`` counts bytes; a failed default hook raises."""
+        target = LocalTarget(working_directory=str(tmp_path))
+        (tmp_path / "f").write_bytes(b"12345")
+
+        assert await target.file_size(str(tmp_path / "f")) == 5
+        with pytest.raises(RuntimeError, match="exit code"):
+            await target.file_size(str(tmp_path / "missing"))
+
+
 _MODES: tuple[CacheMode, ...] = ("deep", "fast")
 _BIG = 2 * SMALL_FILE
 

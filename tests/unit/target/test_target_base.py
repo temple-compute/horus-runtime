@@ -36,6 +36,7 @@ from horus_runtime.core.target.channel import (
     RemoteDirEntry,
 )
 from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
+from horus_runtime.core.task.base import BaseTask
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 
@@ -66,6 +67,7 @@ class ConcreteTestTarget(BaseTarget):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         detach: bool | None = None,
+        task: BaseTask | None = None,
     ) -> ChannelProcess:
         """
         Stub channel method — not used in base-class tests.

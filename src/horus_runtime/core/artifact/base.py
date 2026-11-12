@@ -79,6 +79,14 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     kind_description: ClassVar[str] = ""
     """Description of this artifact kind."""
 
+    pack_format: ClassVar[str | None] = None
+    """
+    ``"tar.gz"`` when the package is a gzipped tarball of a directory's
+    contents: the store then packs and unpacks it with the target's
+    ``pack_folder`` / ``unpack_folder`` instead of :meth:`pack_command` /
+    :meth:`unpack_command`.
+    """
+
     id: str
     """
     The artifact's stable ID.
