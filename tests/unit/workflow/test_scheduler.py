@@ -1056,8 +1056,9 @@ class TestPreRunFailureIsAttributed:
 class _FarLocalTarget(LocalTarget):
     """
     A local target that pretends to live on its own machine: a distinct
-    ``location_id`` keeps transfers from short-circuiting, and artifacts live
-    at ``working_directory/<name>`` the way they do on an SSH target.
+    ``location_id`` keeps transfers from short-circuiting, and artifacts
+    outside ``working_directory`` live at ``working_directory/<name>`` the
+    way they do on an SSH target.
     """
 
     add_to_registry = False
@@ -1067,7 +1068,10 @@ class _FarLocalTarget(LocalTarget):
         return f"far://{self.resolved_working_directory}"
 
     def path_on_target(self, artifact: BaseArtifact) -> str:
-        return f"{self.resolved_working_directory}/{Path(artifact.path).name}"
+        path = Path(artifact.path)
+        if path.is_relative_to(self.resolved_working_directory):
+            return path.as_posix()
+        return f"{self.resolved_working_directory}/{path.name}"
 
 
 @pytest.mark.unit
@@ -1105,9 +1109,7 @@ class TestSkipBeforeTransfer:
             name="consumer",
             inputs=[FileArtifact(id="inp", path=Path("data.txt"))],
             outputs=[FileArtifact(id="result", path=Path("result.txt"))],
-            runtime=CommandRuntime(
-                command=f"cp {dst}/data.txt {dst}/result.txt"
-            ),
+            runtime=CommandRuntime(command=f"cp $inp {dst}/result.txt"),
             executor=ShellExecutor(),
             target=_FarLocalTarget(working_directory=dst.as_posix()),
         )
@@ -1197,9 +1199,7 @@ class TestSkipBeforeTransfer:
                     name=f"c{i}",
                     inputs=[FolderArtifact(id="inp", path=Path("data"))],
                     outputs=[FileArtifact(id="out", path=Path("out.txt"))],
-                    runtime=CommandRuntime(
-                        command=f"ls {dst}/data > {dst}/out.txt"
-                    ),
+                    runtime=CommandRuntime(command=f"ls $inp > {dst}/out.txt"),
                     executor=ShellExecutor(),
                     target=_FarLocalTarget(working_directory=dst.as_posix()),
                 )
@@ -1223,7 +1223,7 @@ class TestSkipBeforeTransfer:
 
         assert wf.status == WorkflowStatus.COMPLETED
         for i in range(3):
-            assert (tmp_path / f"dst{i}" / "data" / "f").exists()
+            assert (tmp_path / f"dst{i}" / ".horus_in" / "data" / "f").exists()
         assert digested == [f"{src}/data"]
 
 
