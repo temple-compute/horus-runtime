@@ -193,6 +193,17 @@ class TestInProcessScope:
         assert scope.kind == "in_process"
         assert scope.pid == os.getpid()
 
+    def test_in_process_flag_matches_the_registry(self) -> None:
+        """Hosts read the class flag without building a task."""
+        flagged = {
+            kind
+            for kind, cls in BaseExecutor.registry.items()
+            if cls.in_process
+        }
+        assert {"python", "python_function"} <= flagged
+        assert not ShellExecutor.in_process
+        assert not BaseExecutor.registry["python_function_external"].in_process
+
 
 class TestScopeVocabulary:
     """Scopes name a kind of place, and stay comparable as values."""

@@ -28,6 +28,8 @@ import os
 import signal
 from contextlib import aclosing
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -100,6 +102,36 @@ class TestLocalDetachedExecution:
         )
         out, _ = await proc.communicate()
         assert out == b"hello in work\n"
+
+    async def test_env_values_stay_off_the_command_line(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Env values reach the job through a private file in the job dir, not
+        through the process arguments other local users can read.
+        """
+        target = LocalTarget(working_directory=tmp_path.as_posix())
+        job_dir = tmp_path / "job"
+        launched: list[str] = []
+        real_shell = asyncio.create_subprocess_shell
+
+        async def spy(cmd: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            launched.append(cmd)
+            return await real_shell(cmd, **kwargs)
+
+        with patch("asyncio.create_subprocess_shell", new=spy):
+            handle = await target.launch(
+                'echo "$TOKEN"; test -e env || echo gone',
+                cwd=job_dir.as_posix(),
+                env={"TOKEN": "s3cr3t-value"},
+                job_dir=job_dir.as_posix(),
+            )
+        proc = PollingChannelProcess(target, handle)
+        out, _ = await proc.communicate()
+
+        assert "s3cr3t-value" not in launched[0]
+        assert out == b"s3cr3t-value\ngone\n"
+        assert not (job_dir / "env").exists()
 
     async def test_stream_yields_lines(self, tmp_path: Path) -> None:
         """stream() yields captured stdout/stderr lines with labels."""

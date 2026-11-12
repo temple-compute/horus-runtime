@@ -97,6 +97,13 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     handle any runtime type.
     """
 
+    in_process: ClassVar[bool] = False
+    """
+    True when the executor runs task code inside the runtime's own process
+    rather than through the task's target. Hosts that isolate task code from
+    the runtime check this to refuse such executors.
+    """
+
     _side_landing: dict[str, Path] = PrivateAttr(default_factory=dict)
     """
     Local landing directory per task id for collected side artifacts.

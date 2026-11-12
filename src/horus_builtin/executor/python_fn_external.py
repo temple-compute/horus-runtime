@@ -40,6 +40,7 @@ would silently go nowhere, this executor refuses such a function up front.
 """
 
 import asyncio
+import json
 import shlex
 import sys
 from contextlib import aclosing
@@ -47,9 +48,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import cloudpickle
+from pydantic import TypeAdapter
 
+from horus_builtin.executor._remote_function_call import ARTIFACT_KEY
 from horus_builtin.executor.python_fn import parse_result_artifacts
 from horus_builtin.runtime.python import PythonFunctionRuntime
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
@@ -65,7 +69,17 @@ if TYPE_CHECKING:
 _LAUNCHER_SOURCE = Path(__file__).with_name("_remote_function_call.py")
 _LAUNCHER_NAME = ".horus_function_call.py"
 _PAYLOAD_NAME = ".horus_function_payload.pkl"
-_RESULT_NAME = ".horus_function_result.pkl"
+_RESULT_NAME = ".horus_function_result.json"
+_ARTIFACT_ADAPTER: TypeAdapter[BaseArtifact] = TypeAdapter(BaseArtifact)
+
+
+def _decode(value: Any) -> Any:
+    """Rebuild the artifacts the launcher tagged in a JSON return value."""
+    if isinstance(value, dict) and value.keys() == {ARTIFACT_KEY}:
+        return _ARTIFACT_ADAPTER.validate_python(value[ARTIFACT_KEY])
+    if isinstance(value, list):
+        return [_decode(item) for item in value]
+    return value
 
 
 class ExternalPythonFunctionExecutor(BaseExecutor):
@@ -83,7 +97,8 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
 
     python: str | None = None
     """
-    Interpreter used on the target. It needs ``cloudpickle`` importable, plus
+    Interpreter used on the target, a single executable path or name (it is
+    shell-quoted, not split). It needs ``cloudpickle`` importable, plus
     whatever the function itself imports, including ``horus_runtime`` if the
     function takes or returns artifacts.
 
@@ -147,7 +162,7 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         await task.target.put_file(_LAUNCHER_SOURCE, launcher)
 
         command = (
-            f"{self._interpreter(task)} {shlex.quote(launcher)} "
+            f"{shlex.quote(self._interpreter(task))} {shlex.quote(launcher)} "
             f"{shlex.quote(payload)} {shlex.quote(result_path)}"
         )
         horus_logger.log.debug(
@@ -179,7 +194,7 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         await proc.wait()
 
         outcome = await self._read_outcome(task, result_path, proc.returncode)
-        await parse_result_artifacts(task, outcome["value"])
+        await parse_result_artifacts(task, _decode(outcome["value"]))
 
     async def _read_outcome(
         self, task: "BaseTask", result_path: str, returncode: int | None
@@ -188,14 +203,15 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         Read the launcher's outcome file and re-raise a remote failure here.
 
         The exit code is only a fallback: what the caller needs is the
-        exception the function raised, with its own traceback. When it made it
-        back it is re-raised as itself, so ``except MyError`` around a workflow
-        run still catches what it always caught, with the target-side frames
-        attached as a note.
+        target-side traceback of the exception the function raised. The file
+        is JSON, never a pickle: it was written on the target and decoding it
+        must not run code here.
         """
         try:
             raw = await task.target.get_file(result_path)
-            outcome: dict[str, Any] = cloudpickle.loads(raw)
+            outcome = json.loads(raw)
+            if not isinstance(outcome, dict):
+                raise ValueError(_("malformed outcome file"))
         except TargetLostError:
             # The machine is gone, not the outcome: keep the type so the
             # scheduler can retry.
@@ -217,20 +233,10 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
                 }
             ) from exc
 
-        if outcome["ok"]:
+        if outcome.get("ok") is True:
             return outcome
 
-        remote_traceback = outcome["traceback"] or ""
-        exception = outcome["exception"]
-        if isinstance(exception, BaseException):
-            exception.add_note(
-                _("Raised on target %(target)s:\n%(traceback)s")
-                % {
-                    "target": task.target.location_id,
-                    "traceback": remote_traceback,
-                }
-            )
-            raise exception
+        remote_traceback = outcome.get("traceback") or ""
         raise TaskExecutionError(
             _("Function failed on target %(target)s:\n%(traceback)s")
             % {

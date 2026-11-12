@@ -59,6 +59,7 @@ from horus_runtime.core.workflow.condition import (
 )
 from horus_runtime.core.workflow.exceptions import WorkflowError
 from horus_runtime.i18n import tr as _
+from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
@@ -260,6 +261,15 @@ async def evaluate_condition(
         )
 
     if isinstance(condition, PythonCondition):
+        if not runtime_settings.ALLOW_PYTHON_CONDITIONS:
+            raise ConditionEvaluationError(
+                _(
+                    "Python condition on edge '%(source)s' -> '%(target)s' "
+                    "is disabled on this runtime. Use a declarative "
+                    "condition instead."
+                )
+                % {"source": edge.source, "target": edge.target}
+            )
         func = condition.func
         if func is None:
             if condition.ref is None:

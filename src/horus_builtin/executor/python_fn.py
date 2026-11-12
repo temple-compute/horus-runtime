@@ -86,6 +86,7 @@ class PythonFunctionExecutor(BaseExecutor):
     )
 
     runtimes: ClassVar[RuntimeFilterType] = (PythonFunctionRuntime,)
+    in_process: ClassVar[bool] = True
 
     async def resource_scope(
         self, task: "BaseTask", process: ChannelProcess | None = None

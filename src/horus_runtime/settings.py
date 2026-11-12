@@ -44,6 +44,13 @@ class HorusRuntimeSettings(BaseSettings):
     backpressure is applied to the target channel.
     """
 
+    ALLOW_PYTHON_CONDITIONS: bool = True
+    """
+    Whether ``python`` edge conditions may run. Hosts that do not trust the
+    workflow author with code in the runtime process set
+    ``HORUS_RUNTIME_ALLOW_PYTHON_CONDITIONS=false``.
+    """
+
 
 runtime_settings = HorusRuntimeSettings()
 

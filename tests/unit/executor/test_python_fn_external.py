@@ -24,6 +24,7 @@ and the whole point of this executor is that the work leaves the process.
 """
 
 import os
+import pickle
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -111,25 +112,72 @@ class TestExternalPythonFunctionExecutor:
 
         assert target_file.read_text() == "42"
 
-    async def test_failure_surfaces_original_exception(
+    async def test_failure_surfaces_remote_traceback(
         self, tmp_path: Path
     ) -> None:
         """
-        A raising function fails the task with its own exception type and
-        message, plus the target-side traceback.
+        A raising function fails the task with the exception type, message
+        and target-side traceback as text.
         """
 
         def work() -> None:
             raise KeyError("missing-thing")
 
         task = make_task(tmp_path, work)
-        with pytest.raises(KeyError) as excinfo:
+        with pytest.raises(TaskExecutionError) as excinfo:
             await task.executor.execute(task)
 
-        assert "missing-thing" in str(excinfo.value)
-        notes = "".join(getattr(excinfo.value, "__notes__", []))
-        assert "KeyError: 'missing-thing'" in notes
-        assert "in work" in notes
+        assert "KeyError: 'missing-thing'" in str(excinfo.value)
+        assert "in work" in str(excinfo.value)
+
+    async def test_non_json_return_fails_clearly(self, tmp_path: Path) -> None:
+        """A return value that cannot travel as JSON fails the task."""
+
+        def work() -> object:
+            return object()
+
+        task = make_task(tmp_path, work)
+        with pytest.raises(TaskExecutionError, match="not JSON-serialisable"):
+            await task.executor.execute(task)
+
+    async def test_result_file_is_never_unpickled(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Bytes read back from the target are decoded as data only, so a pickle
+        written there cannot run code in the orchestrator.
+        """
+        marker = tmp_path / "unpickled"
+
+        class Evil:
+            def __reduce__(self) -> tuple[Any, ...]:
+                return (marker.write_text, ("x",))
+
+        task = make_task(tmp_path, lambda: None)
+        with (
+            patch.object(
+                LocalTarget,
+                "get_file",
+                new=AsyncMock(return_value=pickle.dumps(Evil())),
+            ),
+            pytest.raises(TaskExecutionError, match="produced no result"),
+        ):
+            await task.executor.execute(task)
+
+        assert not marker.exists()
+
+    async def test_interpreter_is_not_a_shell_fragment(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``python`` field is one quoted word, never extra shell."""
+        marker = tmp_path / "injected"
+        task = make_task(tmp_path, lambda: None)
+        assert isinstance(task.executor, ExternalPythonFunctionExecutor)
+        task.executor.python = f"touch {marker} #"
+        with pytest.raises(TaskExecutionError, match="produced no result"):
+            await task.executor.execute(task)
+
+        assert not marker.exists()
 
     async def test_rejects_a_function_that_wants_the_live_task(
         self, tmp_path: Path
