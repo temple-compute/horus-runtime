@@ -4537,10 +4537,14 @@ class TestZip:
             paths = {a.id: a.path for a in clone.inputs}
             node_b = tmp_path / "node_b"
             assert paths["item"] == (
-                node_b / (".horus_items/a" if chain else "a_out") / str(slot)
+                node_b
+                / (".horus_items/a" if chain else ".horus_in/a_out")
+                / str(slot)
             )
             assert paths["mate"] == (
-                node_b / (".horus_items/c" if chain else "c_out") / str(slot)
+                node_b
+                / (".horus_items/c" if chain else ".horus_in/c_out")
+                / str(slot)
             )
             for source, path in (("a", paths["item"]), ("c", paths["mate"])):
                 assert sorted(p.name for p in path.iterdir()) == ["result.txt"]
@@ -4593,6 +4597,55 @@ class TestZip:
 
         assert task._droppable(RuntimeError("item broke"))
         assert not task._droppable(MapConfigurationError("bad config"))
+
+    async def test_folder_from_another_machine_named_like_the_map(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Map ``ganon`` on node B, over folder ``jobs/ganon`` made on node A,
+        sees exactly A's items: the copy never lands where the map's own
+        working dir (``<wd>/ganon/<run>``) is made.
+        """
+        del horus_context
+        jobs = tmp_path / "node_a" / "jobs" / "ganon"
+        plan = HorusTask(
+            id="plan",
+            name="plan",
+            runtime=CommandRuntime(
+                command="mkdir -p $j && for n in x y z; do "
+                "echo $n > $j/$n; done"
+            ),
+            executor=ShellExecutor(),
+            target=_machine(tmp_path, "node_a"),
+            outputs=[FolderArtifact(id="j", path=jobs)],
+        )
+        ganon = MapTask(
+            id="ganon",
+            name="ganon",
+            over=MapOver(input_id="in", item_id="item"),
+            runtime=CommandRuntime(command="cp $item $out/result.txt"),
+            executor=ShellExecutor(),
+            inputs=[FolderArtifact(id="in", path=Path("ganon_in"))],
+            outputs=[FolderArtifact(id="out", path=tmp_path / "ganon_out")],
+            target=_machine(tmp_path, "node_b"),
+            max_concurrency=0,
+        )
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[plan, ganon],
+            edges=[_edge("plan", "j", "ganon", "in")],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="plan"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert sorted(
+            (p.name, p.joinpath("result.txt").read_text())
+            for p in (tmp_path / "ganon_out").iterdir()
+        ) == [("0", "x\n"), ("1", "y\n"), ("2", "z\n")]
 
     def test_r1_slot_missing_from_a_stream(self) -> None:
         """Waiting on a slot the stream never had is a bug guard."""
