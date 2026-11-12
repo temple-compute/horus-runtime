@@ -170,3 +170,78 @@ class TestPlacementManagerGating:
             timeout=5,
         )
         assert max_seen == 2
+
+
+@pytest.mark.unit
+class TestPlacementPriority:
+    """Freed room goes to the highest-priority waiter that fits first."""
+
+    async def test_higher_priority_waiter_wins_over_earlier_one(
+        self,
+    ) -> None:
+        """A higher-priority request queued later is granted first."""
+        manager = PlacementManager({"loc": ResourceCapacity(memory_gb=1)})
+        one = ResourceRequest(memory_gb=1)
+        await manager.acquire("holder", "loc", one)
+        low = asyncio.ensure_future(
+            manager.acquire("a[1]", "loc", one, priority=1)
+        )
+        await asyncio.sleep(0)
+        high = asyncio.ensure_future(
+            manager.acquire("b[0]", "loc", one, priority=2)
+        )
+        await asyncio.sleep(0)
+
+        await manager.release("loc", one)
+        await asyncio.wait_for(high, timeout=1)
+        assert not low.done()
+
+        await manager.release("loc", one)
+        await asyncio.wait_for(low, timeout=1)
+
+    async def test_equal_priority_is_first_come_first_served(self) -> None:
+        """Waiters of one depth are granted in arrival order."""
+        manager = PlacementManager({"loc": ResourceCapacity(memory_gb=1)})
+        one = ResourceRequest(memory_gb=1)
+        await manager.acquire("holder", "loc", one)
+        first = asyncio.ensure_future(manager.acquire("x", "loc", one))
+        await asyncio.sleep(0)
+        second = asyncio.ensure_future(manager.acquire("y", "loc", one))
+        await asyncio.sleep(0)
+
+        await manager.release("loc", one)
+        await asyncio.wait_for(first, timeout=1)
+        assert not second.done()
+        second.cancel()
+
+    async def test_waiter_that_does_not_fit_blocks_no_smaller_one(
+        self,
+    ) -> None:
+        """A large urgent request waits, holding back no one that fits."""
+        manager = PlacementManager({"loc": ResourceCapacity(memory_gb=4)})
+        await manager.acquire("holder", "loc", ResourceRequest(memory_gb=3))
+        big = asyncio.ensure_future(
+            manager.acquire("big", "loc", ResourceRequest(memory_gb=4), 9)
+        )
+        await asyncio.sleep(0)
+
+        small = ResourceRequest(memory_gb=1)
+        await asyncio.wait_for(manager.acquire("s", "loc", small), timeout=1)
+        assert not big.done()
+        big.cancel()
+
+    async def test_cancelled_after_grant_hands_the_room_on(self) -> None:
+        """Room granted to a waiter cancelled before it resumed is not lost."""
+        manager = PlacementManager({"loc": ResourceCapacity(memory_gb=1)})
+        one = ResourceRequest(memory_gb=1)
+        await manager.acquire("holder", "loc", one)
+        doomed = asyncio.ensure_future(manager.acquire("d", "loc", one))
+        await asyncio.sleep(0)
+        nxt = asyncio.ensure_future(manager.acquire("n", "loc", one))
+        await asyncio.sleep(0)
+
+        await manager.release("loc", one)  # grants `doomed`...
+        doomed.cancel()  # ...which is cancelled before it resumes
+        await asyncio.wait_for(nxt, timeout=1)
+        with pytest.raises(asyncio.CancelledError):
+            await doomed

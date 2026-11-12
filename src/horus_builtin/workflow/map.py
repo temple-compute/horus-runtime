@@ -844,6 +844,8 @@ class MapTask(HorusTask):
         # pending clones run on it.
         self.target.on_ready(self._restage)
 
+        for clone in clones:
+            clone._depth = self._depth  # noqa: SLF001
         modes = self._consumer_modes(wf)
         run_clone = partial(
             self._run_item,

@@ -342,6 +342,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     they finished.
     """
 
+    _depth: int = PrivateAttr(default=0)
+    """
+    Set by the scheduler at dispatch: the task's depth in the DAG (a map's
+    clones take the map's). The shallowest waiter gets placement room
+    first.
+    """
+
     @property
     def streamed_inputs(self) -> frozenset[str]:
         """

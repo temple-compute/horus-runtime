@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -3155,6 +3156,31 @@ def _stages(
     )
 
 
+def _late_branch(
+    tmp_path: Path, delay: float, resources: ResourceRequest
+) -> tuple[HorusTask, MapTask, list[WorkflowEdge]]:
+    """
+    ``split -> gate -> late``: a one-item map whose clone asks for room
+    *delay* seconds in, and the edges wiring it.
+    """
+    gate = HorusTask(
+        id="gate",
+        name="gate",
+        runtime=CommandRuntime(
+            command=f"sleep {delay} && echo g > $batches/g"
+        ),
+        executor=ShellExecutor(),
+        target=LocalTarget(),
+        outputs=[FolderArtifact(id="batches", path=tmp_path / "gate")],
+    )
+    late = _stage_map(tmp_path, "late", resources=resources)
+    edges = [
+        WorkflowEdge(source="split", target="gate"),
+        _edge("gate", "batches", "late", "in"),
+    ]
+    return gate, late, edges
+
+
 def _clone_states(wf: BaseWorkflow, map_id: str) -> dict[str, Any]:
     """Status, and skip reason when skipped, of each clone of *map_id*."""
     return {
@@ -4081,6 +4107,107 @@ class TestChain:
         assert all(
             end <= start for (_, end), (start, _) in itertools.pairwise(spans)
         )
+
+    async def test_clone_waiting_on_its_cap_holds_no_memory(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A clone queued on its map's ``max_concurrency`` reserves no memory,
+        so another map's clone takes the free room at once (#683).
+        """
+        del horus_context
+        _set(tmp_path, "delay", "a_out_0", 0.6)
+        gb = ResourceRequest(memory_gb=1)
+        gate, late, edges = _late_branch(tmp_path, 0.2, gb)
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [_stage_map(tmp_path, "a", resources=gb, max_concurrency=1)],
+            extra_tasks=[gate, late],
+            extra_edges=edges,
+            capacity={
+                LocalTarget().location_id: ResourceCapacity(memory_gb=2)
+            },
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "late_out_0", "start") < _when(
+            tmp_path, "a_out_0", "end"
+        )
+
+    async def test_upstream_clone_gets_room_before_queued_downstream_one(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        With room for one clone, a shallower clone queued later runs before
+        a deeper chained clone that queued first (#683).
+        """
+        del horus_context
+        _set(tmp_path, "delay", "a_out_0", 0.05)
+        _set(tmp_path, "delay", "a_out_1", 1.0)
+        gb = ResourceRequest(memory_gb=1)
+        gate, late, edges = _late_branch(tmp_path, 0.4, gb)
+        wf = _stages(
+            tmp_path,
+            ["x", "y"],
+            [
+                _stage_map(tmp_path, "a", resources=gb),
+                # Ungated, so C[0] queues while A[1] still holds the room.
+                _stage_map(tmp_path, "b", chain=True),
+                _stage_map(tmp_path, "c", chain=True, resources=gb),
+            ],
+            extra_tasks=[gate, late],
+            extra_edges=edges,
+            capacity={
+                LocalTarget().location_id: ResourceCapacity(memory_gb=1)
+            },
+        )
+
+        await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert wf.status.value == "completed"
+        assert _when(tmp_path, "late_out_0", "start") < _when(
+            tmp_path, "c_out_0", "start"
+        )
+
+    async def test_chained_is_not_slower_than_barrier(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        Three stages with room for half the items: chaining finishes no
+        later than running stage by stage (#683).
+        """
+        del horus_context
+        delays = {"a": [0.1] * 5 + [0.5], "b": [0.2] * 6, "c": [0.3] * 6}
+        walls = {}
+        for chain in (False, True):
+            run_dir = tmp_path / str(chain)
+            run_dir.mkdir()
+            for map_id, seconds in delays.items():
+                for slot, delay in enumerate(seconds):
+                    _set(run_dir, "delay", f"{map_id}_out_{slot}", delay)
+            gb = ResourceRequest(memory_gb=1)
+            wf = _stages(
+                run_dir,
+                [f"s{i}" for i in range(6)],
+                [
+                    _stage_map(
+                        run_dir, map_id, chain=chain and k > 0, resources=gb
+                    )
+                    for k, map_id in enumerate(delays)
+                ],
+                capacity={
+                    LocalTarget().location_id: ResourceCapacity(memory_gb=3)
+                },
+            )
+            started = time.perf_counter()
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=20)
+            walls[chain] = time.perf_counter() - started
+            assert wf.status.value == "completed"
+
+        assert walls[True] <= walls[False]
 
     async def test_stream_future_reused_then_reset_per_run(
         self, tmp_path: Path, horus_context: HorusContext
