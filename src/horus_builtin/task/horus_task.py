@@ -19,9 +19,10 @@
 Default Horus task implementation.
 """
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -30,8 +31,12 @@ from pydantic import BaseModel, Field
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.context import HorusContext
+from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.exceptions import ArtifactDoesNotExistError
-from horus_runtime.core.artifact.store import ArtifactStore
+from horus_runtime.core.artifact.store import (
+    MAX_CONCURRENT_DIGESTS,
+    ArtifactStore,
+)
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.exceptions import WorkingDirectoryNotSetError
 from horus_runtime.core.target.ref import target_or_ref_schema
@@ -42,6 +47,19 @@ if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
 
 _UNHASHABLE = "unhashable"
+
+
+async def _all_exist(
+    store: ArtifactStore, artifacts: Sequence[BaseArtifact]
+) -> list[bool]:
+    """Whether each of *artifacts* exists, a few checked at once."""
+    slots = asyncio.Semaphore(MAX_CONCURRENT_DIGESTS)
+
+    async def one(artifact: BaseArtifact) -> bool:
+        async with slots:
+            return await store.exists(artifact)
+
+    return list(await asyncio.gather(*(one(a) for a in artifacts)))
 
 
 def _digest_file(path: Path) -> str:
@@ -110,10 +128,11 @@ class HorusTask(BaseTask):
 
         # Gather inputs. A streamed input arrives per item while it runs.
         streamed = self.streamed_inputs
-        for artifact in self.inputs:
-            if artifact.id in streamed:
-                continue
-            if not await store.exists(artifact):
+        inputs = [a for a in self.inputs if a.id not in streamed]
+        for artifact, found in zip(
+            inputs, await _all_exist(store, inputs), strict=True
+        ):
+            if not found:
                 raise ArtifactDoesNotExistError(
                     _("Input artifact '%(input_id)s' does not exist")
                     % {"input_id": artifact.id}
@@ -134,7 +153,15 @@ class HorusTask(BaseTask):
         # A command can exit 0 without writing what it declared (a wrong path,
         # a tool that appends its own extension). Fail here, not in whichever
         # task reads the output next.
-        missing = [a.id for a in self.outputs if not await store.exists(a)]
+        missing = [
+            a.id
+            for a, found in zip(
+                self.outputs,
+                await _all_exist(store, self.outputs),
+                strict=True,
+            )
+            if not found
+        ]
         if missing:
             raise ArtifactDoesNotExistError(
                 _("Task finished without writing output(s): %(ids)s")

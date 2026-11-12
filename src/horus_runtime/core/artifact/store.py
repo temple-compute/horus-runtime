@@ -51,6 +51,12 @@ CACHE_MODES: tuple[CacheMode, ...] = ("deep", "fast")
 SMALL_FILE = 1 << 20
 """``fast`` hashes files with a size below this by content."""
 
+MAX_CONCURRENT_DIGESTS = 4
+"""
+How many artifacts one task digests or checks at once: each is a command on
+its target, and an SSH host caps its sessions (sshd ``MaxSessions``).
+"""
+
 _PREFIX: dict[CacheMode, str] = {"deep": "deep:", "fast": "fast:"}
 _TREE_TAG = b"horus-tree\n"
 _STAT_TAG = b"horus-stat\n"
