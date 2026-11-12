@@ -123,6 +123,13 @@ at once: enough to overlap per-transfer latency (a round trip, a remote
 pack) without flooding the source or the link.
 """
 
+STAGED_INPUTS = ".horus_in"
+"""
+Folder under a consumer target's working directory that inputs copied from
+another machine land in, so they never share a path with a task's working
+directory (``<wd>/<task id>/...``).
+"""
+
 
 class EdgeSource(NamedTuple):
     """
@@ -141,9 +148,10 @@ class EdgeSource(NamedTuple):
     :meth:`BaseWorkflow.source_digests` uses it as is when it was taken in
     the consumer's cache mode (its prefix says which, see
     :func:`digest_mode`), and reads the source otherwise. ``into`` is
-    the folder a copy from another machine lands in, instead of the
-    consumer target's working directory: a copy lands at
-    ``<folder>/<name>``, so two inputs that share a name need two folders.
+    the folder a copy from another machine lands in, instead of
+    :data:`STAGED_INPUTS` under the consumer target's working directory: a
+    copy lands at ``<folder>/<name>``, so two inputs that share a name need
+    two folders.
     """
 
     target: BaseTarget | None
@@ -1568,9 +1576,20 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             else nullcontext()
         )
         destination = task.target
-        if edge is not None and edge.into is not None:
+        into = edge.into if edge is not None else None
+        # Judged on the edge, not on where a relocation or recovery reads
+        # from: a same-machine input brought back must land where it was.
+        origin = edge.target if edge is not None else None
+        if origin is None:
+            origin = source_target
+        if into is None and origin.location_id != task.target.location_id:
+            # Not `<wd>/<name>`: that is also `<wd>/<task id>/...`, the
+            # working dir of a task named like the input (a map would then
+            # list its own run dir as an item).
+            into = f"{task.target.resolved_working_directory}/{STAGED_INPUTS}"
+        if into is not None:
             destination = task.target.idle_copy()
-            destination.working_directory = edge.into
+            destination.working_directory = into
         with scope:
             await strategy.transfer(transfer_art, source_target, destination)
         artifact.path = transfer_art.path
