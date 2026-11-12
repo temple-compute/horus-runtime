@@ -33,6 +33,8 @@ concurrency governed exactly as before by :class:`TargetPool` and
 """
 
 import asyncio
+import bisect
+import itertools
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -148,7 +150,12 @@ class PlacementManager:
             }
             for location_id, cap in self._total.items()
         }
-        self._condition = asyncio.Condition()
+        # Waiters, highest priority first, then by arrival: (-priority,
+        # arrival, location_id, requested, future).
+        self._waiters: list[
+            tuple[int, int, str, dict[str, int], asyncio.Future[None]]
+        ] = []
+        self._arrivals = itertools.count()
 
     def declare(self, location_id: str, capacity: ResourceCapacity) -> None:
         """
@@ -172,14 +179,49 @@ class PlacementManager:
             if dim in remaining
         )
 
+    def _take(self, location_id: str, requested: dict[str, int]) -> None:
+        remaining = self._remaining[location_id]
+        for dim, amount in requested.items():
+            if dim in remaining:
+                remaining[dim] -= amount
+
+    def _give(self, location_id: str, requested: dict[str, int]) -> None:
+        remaining = self._remaining[location_id]
+        for dim, amount in requested.items():
+            if dim in remaining:
+                remaining[dim] += amount
+        self._admit()
+
+    def _admit(self) -> None:
+        """
+        Grant every waiter that fits, in priority order. One that does not
+        fit never blocks a lower-priority one that does.
+        """
+        kept = []
+        for waiter in self._waiters:
+            _, _, location_id, requested, future = waiter
+            if future.done():
+                continue
+            if self._fits(location_id, requested):
+                self._take(location_id, requested)
+                future.set_result(None)
+            else:
+                kept.append(waiter)
+        self._waiters = kept
+
     async def acquire(
         self,
         task_name: str,
         location_id: str,
         resources: ResourceRequest | None,
+        priority: int = 0,
     ) -> None:
         """
         Wait until *location_id* has room for *resources*, then reserve it.
+
+        When room frees up, the waiting request with the highest *priority*
+        (then the earliest) that fits is granted first, so the scheduler can
+        order work by its depth in the DAG.
 
         A no-op whenever *resources* is ``None`` or *location_id* has no
         declared capacity: such tasks are never gated, so behavior stays
@@ -209,14 +251,26 @@ class PlacementManager:
                     task_name, location_id, dim, amount, dim_total
                 )
 
-        async with self._condition:
-            await self._condition.wait_for(
-                lambda: self._fits(location_id, requested)
-            )
-            remaining = self._remaining[location_id]
-            for dim, amount in requested.items():
-                if dim in remaining:
-                    remaining[dim] -= amount
+        # Every waiter that fits was granted on the last release, so one
+        # that fits now jumps no waiter that could run.
+        if self._fits(location_id, requested):
+            self._take(location_id, requested)
+            return
+        future: asyncio.Future[None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        bisect.insort(
+            self._waiters,
+            (-priority, next(self._arrivals), location_id, requested, future),
+            key=lambda waiter: waiter[:2],
+        )
+        try:
+            await future
+        except asyncio.CancelledError:
+            # Granted just before the cancel: hand the room on.
+            if future.done() and not future.cancelled():
+                self._give(location_id, requested)
+            raise
 
     async def release(
         self,
@@ -232,9 +286,4 @@ class PlacementManager:
         if not requested:
             return
 
-        async with self._condition:
-            remaining = self._remaining[location_id]
-            for dim, amount in requested.items():
-                if dim in remaining:
-                    remaining[dim] += amount
-            self._condition.notify_all()
+        self._give(location_id, requested)

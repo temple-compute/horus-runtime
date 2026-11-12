@@ -37,6 +37,7 @@ from horus_builtin.workflow.dag import (
     UnknownTaskError,
     build_dependencies,
     descendants,
+    task_depths,
     topological_sort,
     trigger_scope,
 )
@@ -179,11 +180,12 @@ async def execute_task(
     back (the task's own declared target in the common case, or an idle
     clone under contention).
 
-    ``placement.acquire`` waits until the task's declared target's location
-    has room for ``task.resources`` (immediately, when the task or location
-    isn't resource-gated at all — see :class:`PlacementManager`), so a
-    resource-constrained fan-out can genuinely hold this coroutine here
-    without ever occupying a pool slot.
+    The pool slot comes first, then ``placement.acquire``, which waits
+    until the task's declared target's location has room for
+    ``task.resources`` (immediately, when the task or location isn't
+    resource-gated at all — see :class:`PlacementManager`). A task waiting
+    on its ``max_concurrency`` cap so holds no room, and room goes to the
+    shallowest waiter first (``task._depth``).
 
     Shared by :func:`run_schedule`'s ready-set loop and by any composite task
     that dispatches its own sub-tasks directly (e.g. a ``horus_map`` task
@@ -255,11 +257,19 @@ async def _execute_on_target(
     # starve the tasks they wait on.
     gated = not task.dispatches_children
     resources = None if task.dispatches_children else task.resources
-    await placement.acquire(task.name, location_id, resources)
+    if gated and pool.full:
+        workflow.leases.member_queued(task)
+    # The slot first: a task waiting on its own cap holds no room that
+    # another map's ready work could use.
+    target = await pool.acquire(declared_target, gated=gated)
     try:
-        if gated and pool.full:
-            workflow.leases.member_queued(task)
-        target = await pool.acquire(declared_target, gated=gated)
+        await placement.acquire(
+            task.name,
+            location_id,
+            resources,
+            # Shallowest first: see `_run_ready_set`.
+            priority=-task._depth,  # noqa: SLF001
+        )
         # `transfer_artifacts` and `dispatch` both operate off `task.target`,
         # so point it at the target we actually acquired for the duration of
         # the run and restore it afterwards, leaving the task's declared
@@ -324,12 +334,12 @@ async def _execute_on_target(
         finally:
             task._retry_on_target_loss = False  # noqa: SLF001
             task.target = declared_target
-            pool.release(declared_target, target, gated=gated)
+            await placement.release(location_id, resources)
     except Exception as exc:
         _record_failure(task, exc)
         raise
     finally:
-        await placement.release(location_id, resources)
+        pool.release(declared_target, target, gated=gated)
 
 
 def _record_failure(task: "BaseTask", exc: Exception) -> None:
@@ -641,6 +651,7 @@ def _dispatch_ready(
     workflow: BaseWorkflow,
     tasks_by_id: dict[str, "BaseTask"],
     deps: dict[str, set[str]],
+    depths: dict[str, int],
     initial_task_ids: set[str],
     dispatched: set[str],
     completed: set[str],
@@ -673,6 +684,7 @@ def _dispatch_ready(
         # flip it mid-run. Empty for a normal start, which also resets a
         # task reused from an earlier run.
         task._streaming_from = frozenset(deps[task_id] - completed)  # noqa: SLF001
+        task._depth = depths[task_id]  # noqa: SLF001
         wrapper = asyncio.create_task(
             _execute_ready_task(
                 workflow,
@@ -903,6 +915,13 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             tasks_by_id=tasks_by_id,
             source_map=source_map_cache[1],
         )
+        # Shallowest first, then id. Upstream work keeps the room, as in a
+        # barrier run, and downstream work backfills the rest. On a
+        # synthetic 3-stage chained map (#683), depth-first started a long
+        # upstream item late and chained ran 6% slower than barrier;
+        # shallowest-first was never slower.
+        depths = task_depths(scope, deps)
+        ready.sort(key=depths.__getitem__)
 
         # Tasks left neither completed, blocked, nor failed, with nothing
         # ready or in flight to get them there, are stuck on each other
@@ -940,6 +959,7 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
                 workflow=workflow,
                 tasks_by_id=tasks_by_id,
                 deps=deps,
+                depths=depths,
                 initial_task_ids=initial_task_ids,
                 dispatched=dispatched,
                 completed=completed,
