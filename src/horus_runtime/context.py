@@ -43,10 +43,12 @@ _current_task_id: ContextVar[str | None] = ContextVar(
 """
 Id of the task currently executing in this (async) context, or ``None`` when
 no task is running. Set by :meth:`BaseTask.run` for the duration of a task's
-execution so code invoked from inside a task — notably the runtime DAG-mutation
-API (``BaseWorkflow.add_task``) — can discover which task created it and gate
-the new task behind that creator. Being a :class:`~contextvars.ContextVar`, it
-is naturally isolated per concurrently running task.
+execution so code invoked from inside a task — notably the runtime
+DAG-mutation API (``BaseWorkflow.add_task``) — can discover which task created
+it and gate the new task behind that creator. Also set while the task's inputs
+are staged, so the target operations of a transfer carry the task they serve.
+Being a :class:`~contextvars.ContextVar`, it is naturally isolated per
+concurrently running task.
 """
 
 

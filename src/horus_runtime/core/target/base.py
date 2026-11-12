@@ -59,6 +59,7 @@ _MIB = 1024 * 1024
 
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
+    from horus_runtime.core.artifact.store import CacheMode
     from horus_runtime.core.placement import ResourceCapacity
     from horus_runtime.core.task.base import BaseTask
     from horus_runtime.core.transfer.strategy import BaseTransferStrategy
@@ -510,6 +511,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         detach: bool | None = None,
+        task: "BaseTask | None" = None,
     ) -> ChannelProcess:
         """
         Run *cmd* on the target and return a :class:`.ChannelProcess` handle.
@@ -517,6 +519,10 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         The command is routed through the ``TargetCommandMiddleware`` chain
         first, so middleware may rewrite it (e.g. wrap it in an instrumentation
         tool) before it is dispatched.
+
+        Executors pass *task* when *cmd* is that task's main command, so a
+        target can launch it from the task's definition instead of the
+        rendered string.
         """
         # The running task's secrets go under the caller's own variables.
         task_secrets = current_task_env()
@@ -528,6 +534,7 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             cwd=cwd,
             env=env,
             detach=detach,
+            task=task,
         )
         return await TargetCommandMiddleware.call_with_middleware(
             ctx,
@@ -715,3 +722,78 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         out = await self.run_command_sync(f"rm -rf {shlex.quote(path)}")
         await out.wait()
+
+    async def digest(
+        self, path: str, mode: "CacheMode" = "deep"
+    ) -> str | None:
+        """
+        Digest of *path* in cache *mode*, or ``None`` when it cannot be taken
+        (see :meth:`.ArtifactStore.digest`). The default hashes over a shell
+        channel; targets that can hash natively should override it.
+        """
+        # Imported here: the store module imports this one.
+        from horus_runtime.core.artifact.store import (  # noqa: PLC0415
+            shell_digest,
+        )
+
+        return await shell_digest(self, path, mode)
+
+    async def pack_folder(self, src: str, pkg: str) -> None:
+        """
+        Archive the contents of the folder *src* into the gzipped tarball
+        *pkg*. The default runs ``tar`` over a shell channel.
+        """
+        # Imported here: the folder module imports this one.
+        from horus_builtin.artifact.folder import (  # noqa: PLC0415
+            tar_pack_command,
+        )
+
+        await self._run_checked(tar_pack_command(src, pkg), src)
+
+    async def unpack_folder(self, pkg: str, dest: str) -> None:
+        """
+        Extract the gzipped tarball *pkg* into the folder *dest*, replacing
+        it. The default runs ``tar`` over a shell channel.
+        """
+        # Imported here: the folder module imports this one.
+        from horus_builtin.artifact.folder import (  # noqa: PLC0415
+            tar_unpack_command,
+        )
+
+        await self._run_checked(tar_unpack_command(pkg, dest), dest)
+
+    async def move(self, src: str, dst: str) -> None:
+        """
+        Move the file *src* to *dst*, replacing it and creating missing
+        parents. The default runs ``mv`` over a shell channel.
+        """
+        parent = shlex.quote(str(Path(dst).parent))
+        await self._run_checked(
+            f"mkdir -p {parent} && "
+            f"mv -f {shlex.quote(src)} {shlex.quote(dst)}",
+            dst,
+        )
+
+    async def file_size(self, path: str) -> int:
+        """
+        Size of the file *path* in bytes. The default runs ``wc -c`` over a
+        shell channel.
+        """
+        out = await self._run_checked(f"wc -c < {shlex.quote(path)}", path)
+        return int(out)
+
+    async def _run_checked(self, cmd: str, path: str) -> bytes:
+        """
+        Run *cmd* over a shell channel and return its stdout; raise
+        :class:`RuntimeError` with the tail of its stderr when it fails.
+        """
+        proc = await self.run_command_sync(cmd)
+        out, stderr = await proc.communicate()
+        rc = await proc.wait()
+        if rc != 0:
+            msg = _(
+                "Command on '%(path)s' failed on target (exit code %(rc)s)"
+            ) % {"path": path, "rc": rc}
+            tail = stderr.decode(errors="replace").strip()[-2000:]
+            raise RuntimeError(f"{msg}: {tail}" if tail else msg)
+        return out
