@@ -75,6 +75,7 @@ from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import (
     CACHE_MODES,
+    MAX_CONCURRENT_DIGESTS,
     ArtifactStore,
     CacheMode,
     digest_mode,
@@ -1719,7 +1720,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         target. A source that carries its digest (:attr:`EdgeSource.digest`)
         in the task's cache mode is not read. ``None`` marks an input that
         could not be digested. Digests go through :meth:`digest`, so a run
-        reads each input once.
+        reads each input once, :data:`MAX_CONCURRENT_DIGESTS` at a time.
         """
         if source_map is None:
             source_map = self._build_source_map()
@@ -1732,20 +1733,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             )
             % {"task_name": task.name, "mode": mode}
         )
-        digests: dict[str, str | None] = {}
-        for artifact in task.fingerprinted_inputs:
-            if only is not None and artifact.id not in only:
-                continue
+        slots = asyncio.Semaphore(MAX_CONCURRENT_DIGESTS)
+
+        async def one(artifact: BaseArtifact) -> str | None:
             if artifact.pinned:
-                digests[artifact.id] = await self.digest(
-                    task.target, artifact, mode
-                )
-                continue
+                async with slots:
+                    return await self.digest(task.target, artifact, mode)
             source = self._relocated(source_map.get((task.id, artifact.id)))
             if source is not None and source.digest is not None:
                 if digest_mode(source.digest) == mode:
-                    digests[artifact.id] = source.digest
-                    continue
+                    return source.digest
             source_target, src_artifact = self._resolve_source(
                 task, artifact, source
             )
@@ -1756,17 +1753,24 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             ):
                 # Never touch a lost machine: a miss, so the transfer
                 # recovers the output and the run digests the staged copy.
-                digests[artifact.id] = None
-                continue
+                return None
             try:
-                digests[artifact.id] = await self.digest(
-                    source_target, src_artifact or artifact, mode
-                )
+                async with slots:
+                    return await self.digest(
+                        source_target, src_artifact or artifact, mode
+                    )
             except NotImplementedError:
                 # A storage-only source (e.g. an evacuated output) has no
                 # shell to hash with: a miss, so the task just runs.
-                digests[artifact.id] = None
-        return digests
+                return None
+
+        inputs = [
+            artifact
+            for artifact in task.fingerprinted_inputs
+            if only is None or artifact.id in only
+        ]
+        values = await asyncio.gather(*(one(a) for a in inputs))
+        return {a.id: v for a, v in zip(inputs, values, strict=True)}
 
     def adopt_values(
         self,
