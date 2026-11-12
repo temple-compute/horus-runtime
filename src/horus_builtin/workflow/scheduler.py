@@ -769,14 +769,21 @@ def _reconcile_leases(
 async def run_schedule(workflow: BaseWorkflow, trigger_id: str) -> None:
     """
     Execute *workflow* from *trigger_id* (see :func:`_run_ready_set`), then
-    release every machine the run's lease manager still holds. On any
-    failure or cancellation they are released at once, without evacuation.
+    release every machine the run's lease manager still holds, once its
+    holds (e.g. background uploads) end. On any failure or cancellation
+    they are released without evacuation; on a cancellation, at once.
     """
     try:
         await _run_ready_set(workflow, trigger_id)
-    except BaseException:
-        # Shielded: a second cancel must not leave machines running.
-        await asyncio.shield(workflow.leases.aclose(abort=True))
+    except BaseException as exc:
+        # Shielded: a second cancel must not leave machines running. A
+        # failed (not cancelled) run still keeps the finished tasks' outputs.
+        await asyncio.shield(
+            workflow.leases.aclose(
+                abort=True,
+                wait_holds=not isinstance(exc, asyncio.CancelledError),
+            )
+        )
         raise
     try:
         await workflow.leases.aclose(abort=False)

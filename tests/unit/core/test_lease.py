@@ -1029,6 +1029,154 @@ class TestRelease:
         assert released_after[0] == 3
 
 
+class _Uploads(_Step):
+    """
+    A step that, like the side-product upload middleware, hands its
+    output's upload to the background under a hold on its machine.
+    """
+
+    upload_s: float = 0.3
+    events: ClassVar[list[str]] = []
+    uploads: ClassVar[list["asyncio.Task[None]"]] = []
+
+    async def _run(self) -> None:
+        await super()._run()
+        self.events.append(f"{self.id} done")
+        workflow = HorusContext.get_context().workflow
+        assert workflow is not None
+        target = self.target
+        hold = workflow.leases.holding(target)
+        hold.__enter__()
+
+        async def upload() -> None:
+            try:
+                await asyncio.sleep(self.upload_s)
+                # Raises if the machine was released under the upload.
+                await target.path_exists(str(target.working_directory))
+                self.events.append(f"{self.id} uploaded")
+            finally:
+                hold.__exit__(None, None, None)
+
+        self.uploads.append(asyncio.create_task(upload()))
+
+
+def _uploads(task_id: str, node: BaseTarget, tmp_path: Path) -> _Uploads:
+    return _Uploads(
+        id=task_id,
+        name=task_id,
+        runtime=CommandRuntime(command="true"),
+        executor=ShellExecutor(),
+        target=node,
+        outputs=[FileArtifact(id="out", path=tmp_path / f"{task_id}.out")],
+    )
+
+
+@pytest.fixture
+def uploads() -> type[_Uploads]:
+    """Fresh upload records."""
+    _Uploads.events = []
+    _Uploads.uploads = []
+    return _Uploads
+
+
+@pytest.mark.unit
+class TestHolding:
+    """``LeaseManager.holding`` keeps a machine for background work."""
+
+    async def test_run_end_waits_for_a_held_upload(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+        uploads: type[_Uploads],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The last member's upload outlives it: the machine is released only
+        after it, and is pinged meanwhile.
+        """
+        del horus_context, evacuator
+        monkeypatch.setattr(
+            lease_module.LeaseManager, "keepalive_interval_s", 0.01
+        )
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        wf = _workflow(tmp_path, [_uploads("a", node, tmp_path)], [])
+
+        await wf.run(trigger_id="a")
+
+        upload = uploads.uploads[0]
+        assert upload.done()
+        assert upload.exception() is None
+        assert uploads.events == ["a done", "a uploaded"]
+        assert node.released == ["done"]
+        assert node._node["keepalives"] > 0
+
+    async def test_downstream_member_starts_before_the_upload_ends(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+        uploads: type[_Uploads],
+    ) -> None:
+        """A consumer on the same machine does not wait for the upload."""
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _uploads("a", node, tmp_path)
+        b = _uploads("b", node, tmp_path)
+        b.inputs = [FileArtifact(id="x", path=tmp_path / "x.in")]
+        b.upload_s = 0.0
+        wf = _workflow(tmp_path, [a, b], [_edge("a", "b", "x")])
+
+        await wf.run(trigger_id="a")
+
+        assert uploads.events.index("b done") < uploads.events.index(
+            "a uploaded"
+        )
+        assert node.released == ["done"]
+        assert all(u.exception() is None for u in uploads.uploads)
+
+    async def test_failed_run_still_waits_for_a_held_upload(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+        uploads: type[_Uploads],
+    ) -> None:
+        """A fail-fast abort keeps a finished task's output upload."""
+        del horus_context, evacuator
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        a = _uploads("a", node, tmp_path)
+        late = _step("late", node, tmp_path, delay=5)
+        f = _step("f", LocalTarget(), tmp_path, delay=0.05, fail=True)
+        start = _step("start", LocalTarget(), tmp_path)
+        wf = _workflow(tmp_path, [start, a, late, f], [])
+        wf.edges += [
+            WorkflowEdge(source="start", target=t) for t in ("a", "late", "f")
+        ]
+
+        with pytest.raises(RuntimeError, match="f failed"):
+            await wf.run(trigger_id="start")
+
+        assert uploads.events == ["a done", "a uploaded"]
+        assert node.released == ["abort"]
+
+    async def test_cancel_does_not_wait_for_holds(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """An abort for a cancel releases at once; a late exit is harmless."""
+        del horus_context
+        node = FakeNode(working_directory=tmp_path.as_posix())
+        wf = _workflow(tmp_path, [_step("a", node, tmp_path)], [])
+        leases = wf.leases
+        assert leases._open_lease(node) is not None
+        node._node["live"] = True
+
+        with leases.holding(node):
+            await asyncio.wait_for(leases.aclose(abort=True), 1)
+            assert node.released == ["abort"]
+        assert leases._reading == {}
+
+
 @pytest.mark.unit
 class TestSlotsAndCapacity:
     """``max_parallel`` and the machine's declared capacity."""

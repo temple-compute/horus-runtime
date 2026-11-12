@@ -468,6 +468,30 @@ class LeaseManager:
         finally:
             self._done_pulling(task)
 
+    @contextmanager
+    def holding(self, target: BaseTarget) -> Iterator[None]:
+        """
+        Keep *target*'s machine inside the block (e.g. while a finished
+        task's outputs upload in the background): neither a release during
+        the run nor :meth:`aclose` destroys it before the block ends, and
+        it gets keepalives meanwhile. Enter it before the work is handed
+        off, so the run cannot end in between.
+        """
+        key = target.lease_key
+        reading = self._reading  # the dict of this run, even after aclose
+        reading[key] = reading.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            reading[key] -= 1
+            self._pulled.set()
+
+    async def _holds_done(self) -> None:
+        """Wait until no :meth:`holding` or :meth:`read_output` is open."""
+        while any(self._reading.values()):
+            self._pulled.clear()
+            await self._pulled.wait()
+
     def inputs_transferred(self, task: "BaseTask") -> None:
         """*task* no longer needs any other machine's outputs."""
         self._inputs_done.add(task.id)
@@ -616,17 +640,12 @@ class LeaseManager:
         key = (task.id, artifact.id)
         if key in self._snapshots:
             return self._snapshots[key]
-        lease_key = task.target.lease_key
         # A release waits for reads in progress (see `_release`).
-        self._reading[lease_key] = self._reading.get(lease_key, 0) + 1
-        try:
+        with self.holding(task.target):
             path = task.target.path_on_target(artifact)
             if not await task.target.path_exists(path):
                 return None
             return await task.target.get_file(path)
-        finally:
-            self._reading[lease_key] -= 1
-            self._pulled.set()
 
     def _needed(
         self, lease: Lease, state: LeaseState, pending: set[str]
@@ -853,7 +872,11 @@ class LeaseManager:
                     self._ping(lease)
                     for lease in list(self._leases.values())
                     if lease.target.is_live
-                    and (lease.running or lease.timer is not None)
+                    and (
+                        lease.running
+                        or lease.timer is not None
+                        or self._reading.get(lease.key)
+                    )
                 )
             )
 
@@ -871,12 +894,19 @@ class LeaseManager:
 
     # Run end
 
-    async def aclose(self, *, abort: bool) -> None:
+    async def aclose(
+        self, *, abort: bool, wait_holds: bool | None = None
+    ) -> None:
         """
-        End of run: stop timers, finish (or, on *abort*, cancel) in-flight
-        drains, then release every machine, without evacuation. A cold one
-        may still be destroying a lost generation in the background.
+        End of run: wait for every :meth:`holding` (with *wait_holds*; by
+        default unless *abort*), stop timers, finish (or, on *abort*,
+        cancel) in-flight drains, then release every machine, without
+        evacuation. A cold one may still be destroying a lost generation in
+        the background.
         """
+        if (not abort) if wait_holds is None else wait_holds:
+            # Before the keeper stops: a held machine keeps getting pinged.
+            await self._holds_done()
         background: list[asyncio.Task[None]] = []
         if self._keeper is not None:
             background.append(self._keeper)
@@ -917,7 +947,7 @@ class LeaseManager:
         self._inputs_done.clear()
         self._pulling.clear()
         self._queued.clear()
-        self._reading.clear()
+        self._reading = {}  # a hold still open decrements the old one
         self._snapshots.clear()
         self._pulled = asyncio.Event()
         self._produced.clear()
