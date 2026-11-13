@@ -86,6 +86,7 @@ from horus_runtime.core.workflow.edge import WorkflowEdge
 from horus_runtime.core.workflow.exceptions import WorkflowError
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
+from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.workflow.base import BaseWorkflow
@@ -273,6 +274,14 @@ class BranchRouter(HorusTask):
         process holds the real function, and re-importing it would be both
         pointless and wrong for a closure that never had an importable name.
         """
+        if not runtime_settings.python_callables_allowed():
+            raise BranchConfigurationError(
+                _(
+                    "Branch router '%(id)s' is disabled on this runtime. Use "
+                    "declarative edge conditions instead."
+                )
+                % {"id": self.id}
+            )
         func = self.func
         if func is None:
             if self.ref is None:
