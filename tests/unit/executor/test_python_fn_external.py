@@ -23,6 +23,7 @@ real cloudpickle payload. Mocking the subprocess away would test the mock,
 and the whole point of this executor is that the work leaves the process.
 """
 
+import json
 import os
 import pickle
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.executor.python_fn_external import (
     ExternalPythonFunctionExecutor,
 )
@@ -53,6 +55,7 @@ def make_task(
     func: Callable[..., Any],
     *,
     inputs: list[BaseArtifact] | None = None,
+    outputs: list[BaseArtifact] | None = None,
 ) -> FunctionTask:
     """Build a FunctionTask wired to the out-of-process executor."""
     return FunctionTask(
@@ -62,7 +65,19 @@ def make_task(
         executor=ExternalPythonFunctionExecutor(),
         target=LocalTarget(working_directory=tmp_path.as_posix()),
         inputs=inputs or [],
+        outputs=outputs or [],
     )
+
+
+def file_output(tmp_path: Path) -> list[BaseArtifact]:
+    """A declared file output, which is what allows returning files."""
+    return [FileArtifact(id="declared", path=tmp_path / "declared.txt")]
+
+
+def forged(descriptor: object) -> AsyncMock:
+    """A ``get_file`` that hands back an outcome naming *descriptor*."""
+    outcome = {"ok": True, "value": {"__horus_artifact__": descriptor}}
+    return AsyncMock(return_value=json.dumps(outcome).encode())
 
 
 @pytest.mark.unit
@@ -85,11 +100,15 @@ class TestExternalPythonFunctionExecutor:
             out.write_text(f"{os.getpid()}:{Path(data.path).read_text()}")
             return FileArtifact(id="result", path=out.resolve())
 
-        task = make_task(tmp_path, work, inputs=[artifact])
+        task = make_task(
+            tmp_path, work, inputs=[artifact], outputs=file_output(tmp_path)
+        )
         await task.executor.execute(task)
 
         results = [a for a in task.side_artifacts if a.id == "result"]
         assert len(results) == 1
+        # A local copy, not the path the target named.
+        assert Path(results[0].path) != Path(task.working_dir) / "out.txt"
         child_pid, _, content = (
             Path(results[0].path).read_text().partition(":")
         )
@@ -139,6 +158,91 @@ class TestExternalPythonFunctionExecutor:
         task = make_task(tmp_path, work)
         with pytest.raises(TaskExecutionError, match="not JSON-serialisable"):
             await task.executor.execute(task)
+
+    async def test_returned_folder_comes_back(self, tmp_path: Path) -> None:
+        """A declared folder kind can be returned and is pulled back."""
+
+        def work() -> FolderArtifact:
+            Path("plots").mkdir()
+            Path("plots/a.txt").write_text("a")
+            return FolderArtifact(id="plots", path=Path("plots").resolve())
+
+        task = make_task(
+            tmp_path,
+            work,
+            outputs=[FolderArtifact(id="out", path=tmp_path / "out")],
+        )
+        await task.executor.execute(task)
+
+        (plots,) = [a for a in task.side_artifacts if a.id == "plots"]
+        assert (Path(plots.path) / "a.txt").read_text() == "a"
+
+    async def test_returned_file_outside_working_dir_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """A function cannot name an arbitrary file as its result."""
+
+        def work() -> FileArtifact:
+            return FileArtifact(id="x", path=Path("/etc/passwd"))
+
+        task = make_task(tmp_path, work, outputs=file_output(tmp_path))
+        with pytest.raises(TaskExecutionError, match="not accepted"):
+            await task.executor.execute(task)
+        assert task.side_artifacts == []
+
+    async def test_returned_kind_must_be_declared(
+        self, tmp_path: Path
+    ) -> None:
+        """Without a declared file output, returning a file is refused."""
+
+        def work() -> FileArtifact:
+            Path("out.txt").write_text("x")
+            return FileArtifact(id="x", path=Path("out.txt").resolve())
+
+        task = make_task(tmp_path, work)
+        with pytest.raises(TaskExecutionError, match="not accepted"):
+            await task.executor.execute(task)
+
+    @pytest.mark.parametrize(
+        "descriptor",
+        [
+            {"kind": "file", "id": "x", "path": "/proc/self/environ"},
+            {"kind": "file", "id": "x", "path": "../../etc/passwd"},
+            {"kind": "file", "id": "x", "path": "a/../../x"},
+            {"kind": "pickle", "id": "x", "path": "out.pkl"},
+            {"kind": "file", "id": 3, "path": "out.txt"},
+            {"kind": "file", "id": "x"},
+            {"kind": ["file"], "id": "x", "path": "out.txt"},
+            "not-a-dict",
+        ],
+    )
+    async def test_forged_descriptors_are_refused(
+        self, tmp_path: Path, descriptor: object
+    ) -> None:
+        """An outcome written on the target cannot name orchestrator files."""
+        task = make_task(tmp_path, lambda: None, outputs=file_output(tmp_path))
+        with (
+            patch.object(LocalTarget, "get_file", new=forged(descriptor)),
+            pytest.raises(TaskExecutionError, match="not accepted"),
+        ):
+            await task.executor.execute(task)
+        assert task.side_artifacts == []
+
+    async def test_symlinked_result_is_refused(self, tmp_path: Path) -> None:
+        """A relative path that is a symlink out of the workdir is refused."""
+        task = make_task(tmp_path, lambda: None, outputs=file_output(tmp_path))
+        workdir = Path(task.working_dir)
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "link.txt").symlink_to("/etc/passwd")
+        (workdir / "sub").symlink_to("/etc")
+        for path in ("link.txt", "sub/passwd"):
+            descriptor = {"kind": "file", "id": "x", "path": path}
+            with (
+                patch.object(LocalTarget, "get_file", new=forged(descriptor)),
+                pytest.raises(TaskExecutionError, match="does not exist"),
+            ):
+                await task.executor.execute(task)
+        assert task.side_artifacts == []
 
     async def test_result_file_is_never_unpickled(
         self, tmp_path: Path

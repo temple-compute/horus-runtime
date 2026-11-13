@@ -31,7 +31,8 @@ Protocol, both halves of which are hard-coded here and in the executor:
 - ``argv[1]``: cloudpickled ``(func, kwargs)`` payload to read.
 - ``argv[2]``: where to write the JSON outcome.
 - outcome: ``{"ok": bool, "value": ..., "traceback": str | None}``. Artifacts
-  in ``value`` are encoded as ``{"__horus_artifact__": <model dump>}``.
+  in ``value`` are encoded as ``{"__horus_artifact__": <model dump>}``, with
+  a path under the cwd sent relative.
 
 The outcome is plain JSON, never a pickle: the orchestrator reads it back from
 the target and must not run code while decoding it.
@@ -44,6 +45,7 @@ useless thing to hand a scientist whose function raised on line 40.
 import asyncio
 import inspect
 import json
+import os
 import sys
 import traceback
 from collections.abc import Awaitable
@@ -55,10 +57,24 @@ ARTIFACT_KEY = "__horus_artifact__"
 
 
 def _encode(value: Any) -> Any:
-    """Tag artifacts so the executor can rebuild them; the rest stays as is."""
+    """
+    Tag artifacts so the executor can rebuild them; the rest stays as is.
+
+    Artifacts resolve their path to an absolute one, but the executor only
+    accepts paths relative to the working directory (this process's cwd), so
+    paths under it are sent relative.
+    """
     base = sys.modules.get("horus_runtime.core.artifact.base")
     if base is not None and isinstance(value, base.BaseArtifact):
-        return {ARTIFACT_KEY: value.model_dump(mode="json")}
+        dump = value.model_dump(mode="json")
+        path = dump.get("path")
+        # Both spellings of the cwd: artifacts may store it symlink-resolved.
+        for cwd in (os.getcwd(), os.path.realpath(os.getcwd())):
+            if isinstance(path, str) and os.path.isabs(path):
+                if os.path.commonpath([path, cwd]) == cwd:
+                    dump["path"] = os.path.relpath(path, cwd)
+                    break
+        return {ARTIFACT_KEY: dump}
     if isinstance(value, list):
         return [_encode(item) for item in value]
     return value
@@ -83,9 +99,10 @@ def _write_outcome(result_path: str, outcome: dict[str, Any]) -> None:
                 "value": None,
                 "traceback": (
                     "Could not send the result back to the orchestrator: "
-                    "the return value is not JSON-serialisable. Return an "
-                    "artifact, a list of artifacts, None, or plain JSON "
-                    "data.\n"
+                    f"the return value ({type(outcome['value']).__name__}) "
+                    "is not JSON-serialisable. Return a file or folder "
+                    "artifact, a list of them, None, or plain JSON data; "
+                    "write anything else to a file.\n"
                     f"{traceback.format_exc()}"
                 ),
             }

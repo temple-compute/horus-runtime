@@ -261,7 +261,7 @@ async def evaluate_condition(
         )
 
     if isinstance(condition, PythonCondition):
-        if not runtime_settings.ALLOW_PYTHON_CONDITIONS:
+        if not runtime_settings.python_callables_allowed():
             raise ConditionEvaluationError(
                 _(
                     "Python condition on edge '%(source)s' -> '%(target)s' "

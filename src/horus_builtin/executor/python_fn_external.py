@@ -43,18 +43,24 @@ import asyncio
 import json
 import shlex
 import sys
+import tempfile
 from contextlib import aclosing
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard
 
 import cloudpickle
-from pydantic import TypeAdapter
 
+from horus_builtin.artifact.file import FileArtifact
+from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.executor._remote_function_call import ARTIFACT_KEY
 from horus_builtin.executor.python_fn import parse_result_artifacts
 from horus_builtin.runtime.python import PythonFunctionRuntime
 from horus_runtime.core.artifact.base import BaseArtifact
-from horus_runtime.core.executor.base import BaseExecutor, RuntimeFilterType
+from horus_runtime.core.executor.base import (
+    BaseExecutor,
+    RuntimeFilterType,
+    _is_safe_component,
+)
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
     TaskExecutionError,
@@ -70,16 +76,15 @@ _LAUNCHER_SOURCE = Path(__file__).with_name("_remote_function_call.py")
 _LAUNCHER_NAME = ".horus_function_call.py"
 _PAYLOAD_NAME = ".horus_function_payload.pkl"
 _RESULT_NAME = ".horus_function_result.json"
-_ARTIFACT_ADAPTER: TypeAdapter[BaseArtifact] = TypeAdapter(BaseArtifact)
+_RETURNABLE: dict[str, type[FileArtifact] | type[FolderArtifact]] = {
+    "file": FileArtifact,
+    "folder": FolderArtifact,
+}
 
 
-def _decode(value: Any) -> Any:
-    """Rebuild the artifacts the launcher tagged in a JSON return value."""
-    if isinstance(value, dict) and value.keys() == {ARTIFACT_KEY}:
-        return _ARTIFACT_ADAPTER.validate_python(value[ARTIFACT_KEY])
-    if isinstance(value, list):
-        return [_decode(item) for item in value]
-    return value
+def _is_tagged(value: Any) -> TypeGuard[dict[str, Any]]:
+    """True for an artifact descriptor the launcher tagged."""
+    return isinstance(value, dict) and value.keys() == {ARTIFACT_KEY}
 
 
 class ExternalPythonFunctionExecutor(BaseExecutor):
@@ -194,7 +199,101 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         await proc.wait()
 
         outcome = await self._read_outcome(task, result_path, proc.returncode)
-        await parse_result_artifacts(task, _decode(outcome["value"]))
+        value = outcome.get("value")
+        if _is_tagged(value):
+            value = await self._fetch_returned(task, value[ARTIFACT_KEY])
+        elif isinstance(value, list) and value and all(map(_is_tagged, value)):
+            value = [
+                await self._fetch_returned(task, item[ARTIFACT_KEY])
+                for item in value
+            ]
+        await parse_result_artifacts(task, value)
+
+    async def _fetch_returned(
+        self, task: "BaseTask", descriptor: Any
+    ) -> BaseArtifact:
+        """
+        Bring back one artifact the function returned, trusting nothing in it
+        but a relative path and an id.
+
+        The descriptor was written on the target. Only ``file`` and ``folder``
+        kinds the task declares as outputs are accepted, the path must be
+        relative to the task working directory with no ``..``, and every
+        component is looked up with ``list_dir`` (which skips symlinks). The
+        data is then pulled over the channel into a local directory, and that
+        copy is what gets registered, never the path the target sent.
+        """
+        declared = {artifact.kind for artifact in task.outputs}
+        kind = descriptor.get("kind") if isinstance(descriptor, dict) else None
+        artifact_cls = (
+            _RETURNABLE.get(kind)
+            if isinstance(kind, str) and kind in declared
+            else None
+        )
+        raw_path = descriptor.get("path") if artifact_cls else None
+        artifact_id = descriptor.get("id") if artifact_cls else None
+        rel = PurePosixPath(raw_path) if isinstance(raw_path, str) else None
+        if (
+            artifact_cls is None
+            or not isinstance(artifact_id, str)
+            or rel is None
+            or rel.is_absolute()
+            or not rel.parts
+            or not all(_is_safe_component(part) for part in rel.parts)
+        ):
+            raise TaskExecutionError(
+                _(
+                    "Task %(task_id)s returned an artifact that is not "
+                    "accepted. A returned artifact must be a file or folder "
+                    "kind the task declares as an output, with a path "
+                    "relative to the task working directory and no '..'."
+                )
+                % {"task_id": task.id}
+            )
+
+        # shortcut: a target that swaps a checked path for a symlink between
+        # list_dir and the copy wins the race; hosts that need more copy as
+        # the target's own uid.
+        current = str(task.working_dir)
+        entry = None
+        for index, part in enumerate(rel.parts):
+            entries = await task.target.list_dir(current)
+            entry = next((e for e in entries if e.name == part), None)
+            if entry is None or (
+                index < len(rel.parts) - 1 and not entry.is_dir
+            ):
+                entry = None
+                break
+            current = entry.path
+        if entry is None or entry.is_dir != (artifact_cls is FolderArtifact):
+            raise TaskExecutionError(
+                _(
+                    "Task %(task_id)s returned %(kind)s artifact '%(path)s', "
+                    "which does not exist in its working directory."
+                )
+                % {"task_id": task.id, "kind": kind, "path": rel}
+            )
+
+        cap = runtime_settings.MAX_SIDE_ARTIFACT_BYTES
+        local = Path(tempfile.mkdtemp(prefix="horus-returned-")) / rel.name
+        if entry.is_dir:
+            await self._pull_tree(task, entry.path, local, cap)
+        elif entry.size > cap:
+            raise TaskExecutionError(
+                _(
+                    "Task %(task_id)s returned file '%(path)s' of %(size)d "
+                    "bytes, over the %(cap)d byte limit."
+                )
+                % {
+                    "task_id": task.id,
+                    "path": rel,
+                    "size": entry.size,
+                    "cap": cap,
+                }
+            )
+        else:
+            await task.target.get_file_to(entry.path, local)
+        return artifact_cls(id=artifact_id, path=local)
 
     async def _read_outcome(
         self, task: "BaseTask", result_path: str, returncode: int | None

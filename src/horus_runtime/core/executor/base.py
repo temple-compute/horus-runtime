@@ -35,6 +35,7 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.resources import ProcessTreeScope, ResourceScope
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -100,8 +101,8 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
     in_process: ClassVar[bool] = False
     """
     True when the executor runs task code inside the runtime's own process
-    rather than through the task's target. Hosts that isolate task code from
-    the runtime check this to refuse such executors.
+    rather than through the task's target. :meth:`execute` refuses such an
+    executor when ``HORUS_RUNTIME_ALLOW_IN_PROCESS=false``.
     """
 
     _side_landing: dict[str, Path] = PrivateAttr(default_factory=dict)
@@ -159,6 +160,15 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         subclasses should implement the `_execute` method, which contains the
         specific execution logic for different types of executors.
         """
+        if self.in_process and not runtime_settings.ALLOW_IN_PROCESS:
+            raise TaskExecutionError(
+                _(
+                    "Task %(task_id)s uses the in-process '%(kind)s' "
+                    "executor, which is disabled on this runtime."
+                )
+                % {"task_id": task.id, "kind": self.kind}
+            )
+
         # Create the side-artifacts directory through the channel so the same
         # code works on both local and remote targets (M2.3).
         await task.target.mkdir(task.side_artifacts_dir)

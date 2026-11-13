@@ -617,15 +617,19 @@ class TestPythonCondition:
         ):
             await evaluate_condition(wf, edge)
 
+    @pytest.mark.parametrize(
+        "switch", ["ALLOW_PYTHON_CONDITIONS", "ALLOW_IN_PROCESS"]
+    )
     async def test_host_can_disable_python_conditions(
         self,
         tmp_path: Path,
         horus_context: HorusContext,
         monkeypatch: pytest.MonkeyPatch,
+        switch: str,
     ) -> None:
-        """With the switch off, no referenced callable is imported or run."""
+        """With either switch off, no referenced callable is imported."""
         del horus_context
-        monkeypatch.setattr(runtime_settings, "ALLOW_PYTHON_CONDITIONS", False)
+        monkeypatch.setattr(runtime_settings, switch, False)
         wf = HorusWorkflow(
             name="wf",
             tasks=[_decider(tmp_path, {"metrics": {"accuracy": 0.95}})],
