@@ -48,7 +48,7 @@ from horus_builtin.workflow.scheduler import (
     TargetPool,
     _ready,
 )
-from horus_runtime.context import HorusContext
+from horus_runtime.context import HorusContext, current_op_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.lease import LeaseManager, _FairSlots
@@ -2640,3 +2640,35 @@ class TestMapsTakeNoPoolSlot:
         assert seen[0] is not seen[1]
         assert shared in seen
         assert all(m.target is shared for m in maps)
+
+
+@pytest.mark.unit
+async def test_pre_run_ops_serve_the_task(tmp_path: Path) -> None:
+    """The completion check and staging of a task carry its id."""
+    task = HorusTask(
+        id="t",
+        name="t",
+        runtime=CommandRuntime(command="true"),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=tmp_path.as_posix()),
+    )
+    seen: list[str | None] = []
+
+    async def record(*_args: object) -> bool:
+        seen.append(current_op_task_id())
+        return False
+
+    with (
+        patch.object(HorusTask, "is_complete_before_transfer", new=record),
+        patch.object(scheduler_mod, "_transfer_and_run", new=record),
+    ):
+        await scheduler_mod._skip_or_run(
+            cast(HorusWorkflow, None),
+            task,
+            task.target,
+            {},
+            cast(scheduler_mod._Once, None),
+        )
+
+    assert seen == ["t", "t"]
+    assert current_op_task_id() is None

@@ -157,6 +157,8 @@ class TestShellExecutor:
         assert kwargs["env"][runtime_settings.SIDE_ARTIFACTS_DIR_ENV].endswith(
             "side-artifacts"
         )
+        # The task rides along so a target can launch it from its definition.
+        assert kwargs["task"] is hello_world_task
 
 
 @pytest.mark.unit

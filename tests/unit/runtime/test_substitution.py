@@ -27,13 +27,14 @@ import pytest
 
 from horus_builtin.artifact.boolean import BooleanArtifact
 from horus_builtin.artifact.json import JSONArtifact
+from horus_builtin.artifact.list import ListArtifact
 from horus_builtin.artifact.number import NumberArtifact
 from horus_builtin.artifact.string import StringArtifact
 from horus_builtin.executor.python_exec import PythonExecExecutor
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.runtime.python_string import PythonCodeStringRuntime
-from horus_builtin.runtime.substitution import substitute
+from horus_builtin.runtime.substitution import Binding, bindings, substitute
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 
@@ -226,3 +227,50 @@ def test_file_artifact_still_renders_path(tmp_path: Path) -> None:
     task = _shell_task(tmp_path, "cat $result", f)
 
     assert substitute("cat $result", task) == f"cat {f.path}"
+
+
+def test_bindings_render_like_substitute(tmp_path: Path) -> None:
+    """Quoting the bindings and filling them in gives the quoted render."""
+    template = (
+        "run $n --flag ${flag} --s $s --tags $tags > ${result} "
+        "${task.name} ${n.value} $HOME $$x"
+    )
+    task = _value_task(
+        tmp_path,
+        [
+            NumberArtifact(id="n", path=tmp_path / "n.json", value=1.5),
+            BooleanArtifact(id="flag", path=tmp_path / "f.json", value=False),
+            StringArtifact(id="s", path=tmp_path / "s.txt", value="a b;c"),
+            ListArtifact(
+                id="tags", path=tmp_path / "t.json", value=["x y", 2]
+            ),
+        ],
+        template,
+    )
+
+    found = bindings(template, task)
+
+    assert found == {
+        "n": {"value": "1.5"},
+        "flag": {"value": "false"},
+        "s": {"value": "a b;c"},
+        "tags": {"value": ["x y", "2"]},
+        "result": {"path": task.target.path_on_target(task.outputs[0])},
+    }
+
+    def quoted(binding: Binding) -> str:
+        value = binding.get("path", binding.get("value"))
+        if isinstance(value, list):
+            return " ".join(shlex.quote(v) for v in value)
+        return shlex.quote(str(value))
+
+    rendered = template
+    for name, binding in found.items():
+        for form in (f"${{{name}}}", f"${name}"):
+            rendered = rendered.replace(form, quoted(binding))
+    rendered = rendered.replace(
+        "${task.name}", shlex.quote(task.name)
+    ).replace("${n.value}", "1.5")
+    assert rendered.replace("$$", "$") == substitute(
+        template, task, quote=True
+    )

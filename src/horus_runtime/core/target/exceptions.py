@@ -19,6 +19,7 @@
 Exceptions related to task targets in the Horus runtime.
 """
 
+from horus_runtime.core.task.exceptions import TaskExecutionError
 from horus_runtime.i18n import tr as _
 
 
@@ -47,3 +48,11 @@ class WorkingDirectoryNotSetError(BaseTargetError):
             % {"kind": kind}
         )
         self.kind = kind
+
+
+class OperationRefusedError(TaskExecutionError):
+    """
+    Raised by a target that refuses an operation by its own policy (e.g. a
+    machine that does not let files leave it). Callers that can do without
+    the operation catch it and carry on; others let it fail the task.
+    """

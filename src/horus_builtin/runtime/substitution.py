@@ -222,3 +222,36 @@ def substitute(template: str, task: "BaseTask", *, quote: bool = False) -> str:
             )
         )
     return _DotTemplate(template).safe_substitute(_Resolver(task, quote=quote))
+
+
+Binding = dict[str, str | list[str]]
+"""One placeholder unrendered: ``{"path": str}`` or ``{"value": str}``, a list
+value as ``{"value": list[str]}``."""
+
+
+def bindings(template: str, task: "BaseTask") -> dict[str, Binding]:
+    """
+    What :func:`substitute` renders for each ``$id`` / ``${id}`` placeholder
+    of *template* that names an artifact of *task*, before quoting: the
+    artifact's path on the task's target, or its authored value (a list kept
+    as its items' texts). ``task.*``, ``${id.attr}`` and unknown names are
+    left out.
+
+    Quoting each value (a list item by item, joined by spaces) and
+    substituting it gives ``substitute(template, task, quote=True)``, so a
+    target can render the command itself from the template and these.
+    """
+    artifacts = {a.id: a for a in (*task.inputs, *task.outputs)}
+    out: dict[str, Binding] = {}
+    for name in placeholder_names(template):
+        artifact = artifacts.get(name)
+        if artifact is None:
+            continue
+        value = getattr(artifact, "value", None)
+        if isinstance(value, list):
+            out[name] = {"value": [option_text(v) for v in value]}
+        elif value is not None:
+            out[name] = {"value": str(_ArtifactRef(artifact, task.target))}
+        else:
+            out[name] = {"path": task.target.path_on_target(artifact)}
+    return out

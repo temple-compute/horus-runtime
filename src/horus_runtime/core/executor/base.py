@@ -35,6 +35,7 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_runtime.core.resources import ProcessTreeScope, ResourceScope
 from horus_runtime.core.runtime.base import BaseRuntime
 from horus_runtime.core.target.channel import ChannelProcess
+from horus_runtime.core.target.exceptions import OperationRefusedError
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -239,12 +240,19 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
         try:
             entries = await task.target.list_dir(task.side_artifacts_dir)
         except Exception as exc:
-            horus_logger.log.warning(
+            message = (
                 _(
+                    "Side artifacts of task %(task_id)s kept on the target: "
+                    "%(err)s"
+                )
+                if isinstance(exc, OperationRefusedError)
+                else _(
                     "Failed to list side artifacts for task "
                     "%(task_id)s: %(err)s"
                 )
-                % {"task_id": task.id, "err": exc}
+            )
+            horus_logger.log.warning(
+                message % {"task_id": task.id, "err": exc}
             )
             return
 
@@ -300,6 +308,13 @@ class BaseExecutor(AutoRegistry, entry_point="executor"):
                             FileArtifact(id=artifact_id, path=local_path)
                         )
                         known.add(artifact_id)
+            except OperationRefusedError as exc:
+                # The target keeps this file by its own policy: not an error
+                # of the task, so the rest are still collected.
+                horus_logger.log.warning(
+                    _("Side artifact %(name)s kept on the target: %(err)s")
+                    % {"name": entry.name, "err": exc}
+                )
             except Exception as exc:
                 horus_logger.log.warning(
                     _("Failed to collect side artifact %(name)s: %(err)s")

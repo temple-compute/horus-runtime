@@ -30,12 +30,12 @@ import os
 import re
 import secrets
 import shlex
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
-from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.base import STDERR_TAIL, BaseTarget
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
@@ -104,9 +104,6 @@ elif [ -f "$p" ]; then
 else exit 1; fi""",
 }
 """Per-mode part of the digest command, run on the path in ``$p``."""
-
-_STDERR_TAIL = 2000
-"""Max characters of a failed command's stderr kept in the error message."""
 
 
 def digest_mode(digest: str) -> CacheMode:
@@ -238,6 +235,30 @@ def _parse_digest(mode: CacheMode, out: bytes) -> str | None:
     return _tree_digest(mode, leaves)
 
 
+async def shell_digest(
+    target: BaseTarget, path: str, mode: CacheMode
+) -> str | None:
+    """
+    Digest of *path* on *target* (see :meth:`ArtifactStore.digest`), taken in
+    one command over the shell channel, like
+    :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
+    works for any target without a new primitive. ``shasum``, BSD ``stat``
+    and a per-file loop are the fallbacks for macOS and busybox.
+    """
+    # ponytail: empty directories, symlinks inside a folder and file
+    # modes are not part of a folder's digest, only regular files.
+    script = f"p={shlex.quote(path)}\n{_DIGEST_PRELUDE}{_DIGEST_BODY[mode]}"
+    proc = await target.run_command_sync(f"{{ {script}\n}} 2>/dev/null")
+    out, _stderr = await proc.communicate()
+    if await proc.wait() != 0:
+        return None
+    try:
+        # Off the event loop: ~3-5 us per file, seconds at 1M files.
+        return await asyncio.to_thread(_parse_digest, mode, out)
+    except (ValueError, IndexError):
+        return None
+
+
 class ArtifactStore:
     """
     Performs artifact lifecycle operations against the filesystem of a specific
@@ -273,26 +294,12 @@ class ArtifactStore:
 
         A folder's digest equals :func:`compose_folder_digest` of its
         entries' digests, and never depends on its own path. Hashing happens
-        target-side through the shell channel in one command, like
-        :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
-        works for any target without a new primitive. ``shasum``, BSD
-        ``stat`` and a per-file loop are the fallbacks for macOS and busybox.
+        target-side through
+        :meth:`~horus_runtime.core.target.base.BaseTarget.path_digest`.
         """
-        path = shlex.quote(self.target.path_on_target(artifact))
-        # ponytail: empty directories, symlinks inside a folder and file
-        # modes are not part of a folder's digest, only regular files.
-        script = f"p={path}\n{_DIGEST_PRELUDE}{_DIGEST_BODY[mode]}"
-        proc = await self.target.run_command_sync(
-            f"{{ {script}\n}} 2>/dev/null"
+        return await self.target.path_digest(
+            self.target.path_on_target(artifact), mode
         )
-        out, _stderr = await proc.communicate()
-        if await proc.wait() != 0:
-            return None
-        try:
-            # Off the event loop: ~3-5 us per file, seconds at 1M files.
-            return await asyncio.to_thread(_parse_digest, mode, out)
-        except (ValueError, IndexError):
-            return None
 
     async def delete(self, artifact: "BaseArtifact") -> None:
         """
@@ -313,16 +320,21 @@ class ArtifactStore:
 
         Single-file artifacts (``pack_command`` returns ``None``) are their
         own package, so the artifact's own path is returned untouched.
-        Otherwise the artifact's pack command runs on the target to build a
-        package under the target's working directory.
+        Otherwise the package is built under the target's working directory
+        by the target's ``pack_folder`` (``pack_format == "tar.gz"``) or the
+        artifact's pack command.
         """
         src = self.target.path_on_target(artifact)
         pkg = self._package_path(src)
-        cmd = artifact.pack_command(src, pkg)
-        if cmd is None:
-            return src
-
-        await self._run(cmd, artifact, "package")
+        if artifact.pack_format == "tar.gz":
+            await self._hook(
+                self.target.pack_folder(src, pkg), artifact, "package"
+            )
+        else:
+            cmd = artifact.pack_command(src, pkg)
+            if cmd is None:
+                return src
+            await self._run(cmd, artifact, "package")
         artifact.emit_event(ArtifactEventsEnum.PACKAGE)
         return pkg
 
@@ -334,22 +346,27 @@ class ArtifactStore:
         *package_path*.
 
         Single-file artifacts (``unpack_command`` returns ``None``) are moved
-        into place; others run their unpack command on the target.
+        into place with the target's ``move_file``; folders (``pack_format ==
+        "tar.gz"``) go through its ``unpack_folder``, others run their unpack
+        command on the target.
         """
         dest = self.target.path_on_target(artifact)
-        cmd = artifact.unpack_command(package_path, dest)
-        if cmd is None:
-            # Compare normalized paths: "wd//f" and "wd/f" are the same file
-            # and ``mv`` refuses to move a file onto itself.
-            if PurePosixPath(package_path) != PurePosixPath(dest):
-                parent = str(PurePosixPath(dest).parent)
-                cmd = (
-                    f"mkdir -p {shlex.quote(parent)} && "
-                    f"mv -f {shlex.quote(package_path)} {shlex.quote(dest)}"
-                )
-                await self._run(cmd, artifact, "unpackage")
-        else:
+        if artifact.pack_format == "tar.gz":
+            await self._hook(
+                self.target.unpack_folder(package_path, dest),
+                artifact,
+                "unpackage",
+            )
+        elif (cmd := artifact.unpack_command(package_path, dest)) is not None:
             await self._run(cmd, artifact, "unpackage")
+        # Compare normalized paths: "wd//f" and "wd/f" are the same file
+        # and ``mv`` refuses to move a file onto itself.
+        elif PurePosixPath(package_path) != PurePosixPath(dest):
+            await self._hook(
+                self.target.move_file(package_path, dest),
+                artifact,
+                "unpackage",
+            )
 
         artifact.emit_event(ArtifactEventsEnum.UNPACKAGE)
 
@@ -362,6 +379,21 @@ class ArtifactStore:
         name = PurePosixPath(src).name
         base = PurePosixPath(self.target.resolved_working_directory)
         return str(base / f"{name}.{secrets.token_hex(4)}.horuspkg")
+
+    async def _hook(
+        self, call: Awaitable[None], artifact: "BaseArtifact", op: str
+    ) -> None:
+        """
+        Await the target hook *call*, naming *artifact* when it fails.
+        """
+        try:
+            await call
+        except RuntimeError as exc:
+            msg = _("Failed to %(op)s artifact '%(id)s' on target") % {
+                "op": op,
+                "id": artifact.id,
+            }
+            raise RuntimeError(f"{msg}: {exc}") from exc
 
     async def _run(self, cmd: str, artifact: "BaseArtifact", op: str) -> None:
         """
@@ -377,5 +409,5 @@ class ArtifactStore:
                 "Failed to %(op)s artifact '%(id)s' on target "
                 "(exit code %(rc)s)"
             ) % {"op": op, "id": artifact.id, "rc": rc}
-            tail = stderr.decode(errors="replace").strip()[-_STDERR_TAIL:]
+            tail = stderr.decode(errors="replace").strip()[-STDERR_TAIL:]
             raise RuntimeError(f"{msg}: {tail}" if tail else msg)

@@ -85,6 +85,7 @@ class ShellExecutor(BaseExecutor):
             prepared_command,
             cwd=task.working_dir,
             env=env,
+            task=task,
         )
 
         try:
