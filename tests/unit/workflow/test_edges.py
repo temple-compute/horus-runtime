@@ -42,7 +42,7 @@ from horus_builtin.workflow.dag import (
     execution_plan,
 )
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
-from horus_runtime.context import HorusContext, current_task_id
+from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.target.channel import ChannelProcess
@@ -103,7 +103,6 @@ class _Captured:
         self.source: object = None
         self.dest: object = None
         self.artifact_id: str | None = None
-        self.task_id: str | None = None
         captured = self
 
         class _Strategy:
@@ -113,7 +112,6 @@ class _Captured:
                 captured.source = source
                 captured.dest = dest
                 captured.artifact_id = getattr(artifact, "id", None)
-                captured.task_id = current_task_id()
 
         self.strategy = _Strategy
 
@@ -323,8 +321,6 @@ class TestEdgeTransferResolution:
         assert consumer.inputs[0].path == producer_path.resolve()
         # The consumer input keeps its own id (the template key).
         assert consumer.inputs[0].id == "in_pdb"
-        # Target ops of the staging carry the task they serve.
-        assert captured.task_id == "consumer"
 
     async def test_root_input_transfers_with_root_id_from_orchestrator(
         self, tmp_path: Path

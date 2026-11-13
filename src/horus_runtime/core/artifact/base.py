@@ -84,7 +84,8 @@ class BaseArtifact[T: Any = Any](AutoRegistry, entry_point="artifact"):
     ``"tar.gz"`` when the package is a gzipped tarball of a directory's
     contents: the store then packs and unpacks it with the target's
     ``pack_folder`` / ``unpack_folder`` instead of :meth:`pack_command` /
-    :meth:`unpack_command`.
+    :meth:`unpack_command`. A subclass that overrides those commands sets
+    it back to ``None`` to keep them.
     """
 
     id: str
