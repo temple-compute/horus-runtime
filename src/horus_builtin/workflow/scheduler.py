@@ -40,7 +40,7 @@ from horus_builtin.workflow.dag import (
     topological_sort,
     trigger_scope,
 )
-from horus_runtime.context import HorusContext
+from horus_runtime.context import HorusContext, serving_task
 from horus_runtime.core.lease import LeaseState
 from horus_runtime.core.placement import PlacementManager
 from horus_runtime.core.target.base import BaseTarget
@@ -387,16 +387,20 @@ async def _skip_or_run(
     input_digests: "_Once",
 ) -> None:
     """Skip *task* if already complete, else transfer and run it."""
-    # A task already complete is skipped before any of its inputs is
-    # transferred, judged from their digests at the source. A miss
-    # falls through to the transfer and `run()`'s own check.
-    if task.skip_if_complete and await task.is_complete_before_transfer(
-        input_digests
-    ):
-        workflow.adopt_values(task, source_map)
-        task.mark_skipped_complete()
-        return
-    await _transfer_and_run(workflow, task, target, source_map, input_digests)
+    # Its completion check, input digests and staging serve *task* too.
+    with serving_task(task.id):
+        # A task already complete is skipped before any of its inputs is
+        # transferred, judged from their digests at the source. A miss
+        # falls through to the transfer and `run()`'s own check.
+        if task.skip_if_complete and await task.is_complete_before_transfer(
+            input_digests
+        ):
+            workflow.adopt_values(task, source_map)
+            task.mark_skipped_complete()
+            return
+        await _transfer_and_run(
+            workflow, task, target, source_map, input_digests
+        )
 
 
 async def _transfer_and_run(

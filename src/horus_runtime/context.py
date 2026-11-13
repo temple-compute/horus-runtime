@@ -45,10 +45,9 @@ Id of the task currently executing in this (async) context, or ``None`` when
 no task is running. Set by :meth:`BaseTask.run` for the duration of a task's
 execution so code invoked from inside a task — notably the runtime
 DAG-mutation API (``BaseWorkflow.add_task``) — can discover which task created
-it and gate the new task behind that creator. Also set while the task's inputs
-are staged, so the target operations of a transfer carry the task they serve.
-Being a :class:`~contextvars.ContextVar`, it is naturally isolated per
-concurrently running task.
+it and gate the new task behind that creator. Being a
+:class:`~contextvars.ContextVar`, it is naturally isolated per concurrently
+running task.
 """
 
 
@@ -62,12 +61,43 @@ def running_task(task_id: str) -> Iterator[None]:
     """
     Mark *task_id* as the task executing in the current context for the
     duration of the ``with`` block, restoring the previous value on exit.
+    It is also the task the block's target operations serve.
     """
     token = _current_task_id.set(task_id)
     try:
-        yield
+        with serving_task(task_id):
+            yield
     finally:
         _current_task_id.reset(token)
+
+
+_current_op_task_id: ContextVar[str | None] = ContextVar(
+    "horus_current_op_task_id", default=None
+)
+"""
+Id of the task the target operations in this context serve: its run, and
+also its pre-run completion check, input digests and staging, which happen
+before the task is current. ``None`` for run-level operations. A target may
+send it along with each operation.
+"""
+
+
+def current_op_task_id() -> str | None:
+    """Return the id of the task the current target operations serve."""
+    return _current_op_task_id.get()
+
+
+@contextmanager
+def serving_task(task_id: str) -> Iterator[None]:
+    """
+    Attribute the target operations of the ``with`` block to *task_id*,
+    restoring the previous value on exit.
+    """
+    token = _current_op_task_id.set(task_id)
+    try:
+        yield
+    finally:
+        _current_op_task_id.reset(token)
 
 
 _current_task_env: ContextVar[dict[str, str] | None] = ContextVar(

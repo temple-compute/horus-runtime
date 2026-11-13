@@ -25,7 +25,7 @@ import shlex
 import socket
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, ClassVar, Self, final
 from uuid import uuid4
 
@@ -56,6 +56,9 @@ from horus_runtime.middleware.target_command import (
 from horus_runtime.registry.auto_registry import AutoRegistry
 
 _MIB = 1024 * 1024
+
+STDERR_TAIL = 2000
+"""Max characters of a failed command's stderr kept in the error message."""
 
 if TYPE_CHECKING:
     from horus_runtime.core.artifact.base import BaseArtifact
@@ -723,13 +726,17 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         out = await self.run_command_sync(f"rm -rf {shlex.quote(path)}")
         await out.wait()
 
-    async def digest(
+    async def path_digest(
         self, path: str, mode: "CacheMode" = "deep"
     ) -> str | None:
         """
         Digest of *path* in cache *mode*, or ``None`` when it cannot be taken
         (see :meth:`.ArtifactStore.digest`). The default hashes over a shell
         channel; targets that can hash natively should override it.
+
+        The file hooks (:meth:`path_digest`, :meth:`pack_folder`,
+        :meth:`unpack_folder`, :meth:`move_file`, :meth:`file_size`) raise
+        :class:`.OperationRefusedError` when the target refuses the operation.
         """
         # Imported here: the store module imports this one.
         from horus_runtime.core.artifact.store import (  # noqa: PLC0415
@@ -754,6 +761,11 @@ class BaseTarget(AutoRegistry, entry_point="target"):
         """
         Extract the gzipped tarball *pkg* into the folder *dest*, replacing
         it. The default runs ``tar`` over a shell channel.
+
+        A native override must refuse absolute members, ``..``, links that
+        point outside *dest* and device files, and keep the marker and rename
+        swap of :func:`~horus_builtin.artifact.folder.tar_unpack_command`, so
+        readers of an unchanged *dest* are never disturbed.
         """
         # Imported here: the folder module imports this one.
         from horus_builtin.artifact.folder import (  # noqa: PLC0415
@@ -762,15 +774,15 @@ class BaseTarget(AutoRegistry, entry_point="target"):
 
         await self._run_checked(tar_unpack_command(pkg, dest), dest)
 
-    async def move(self, src: str, dst: str) -> None:
+    async def move_file(self, src: str, dst: str) -> None:
         """
         Move the file *src* to *dst*, replacing it and creating missing
         parents. The default runs ``mv`` over a shell channel.
         """
-        parent = shlex.quote(str(Path(dst).parent))
+        parent = shlex.quote(str(PurePosixPath(dst).parent))
         await self._run_checked(
-            f"mkdir -p {parent} && "
-            f"mv -f {shlex.quote(src)} {shlex.quote(dst)}",
+            f"mkdir -p -- {parent} && "
+            f"mv -f -- {shlex.quote(src)} {shlex.quote(dst)}",
             dst,
         )
 
@@ -794,6 +806,6 @@ class BaseTarget(AutoRegistry, entry_point="target"):
             msg = _(
                 "Command on '%(path)s' failed on target (exit code %(rc)s)"
             ) % {"path": path, "rc": rc}
-            tail = stderr.decode(errors="replace").strip()[-2000:]
+            tail = stderr.decode(errors="replace").strip()[-STDERR_TAIL:]
             raise RuntimeError(f"{msg}: {tail}" if tail else msg)
         return out

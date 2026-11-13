@@ -30,12 +30,12 @@ import os
 import re
 import secrets
 import shlex
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from horus_builtin.event.artifact_event import ArtifactEventsEnum
-from horus_runtime.core.target.base import BaseTarget
+from horus_runtime.core.target.base import STDERR_TAIL, BaseTarget
 from horus_runtime.i18n import tr as _
 
 if TYPE_CHECKING:
@@ -104,9 +104,6 @@ elif [ -f "$p" ]; then
 else exit 1; fi""",
 }
 """Per-mode part of the digest command, run on the path in ``$p``."""
-
-_STDERR_TAIL = 2000
-"""Max characters of a failed command's stderr kept in the error message."""
 
 
 def digest_mode(digest: str) -> CacheMode:
@@ -297,12 +294,10 @@ class ArtifactStore:
 
         A folder's digest equals :func:`compose_folder_digest` of its
         entries' digests, and never depends on its own path. Hashing happens
-        target-side through the shell channel in one command, like
-        :meth:`~horus_runtime.core.target.base.BaseTarget.path_exists`, so it
-        works for any target without a new primitive. ``shasum``, BSD
-        ``stat`` and a per-file loop are the fallbacks for macOS and busybox.
+        target-side through
+        :meth:`~horus_runtime.core.target.base.BaseTarget.path_digest`.
         """
-        return await self.target.digest(
+        return await self.target.path_digest(
             self.target.path_on_target(artifact), mode
         )
 
@@ -332,7 +327,9 @@ class ArtifactStore:
         src = self.target.path_on_target(artifact)
         pkg = self._package_path(src)
         if artifact.pack_format == "tar.gz":
-            await self.target.pack_folder(src, pkg)
+            await self._hook(
+                self.target.pack_folder(src, pkg), artifact, "package"
+            )
         else:
             cmd = artifact.pack_command(src, pkg)
             if cmd is None:
@@ -349,19 +346,27 @@ class ArtifactStore:
         *package_path*.
 
         Single-file artifacts (``unpack_command`` returns ``None``) are moved
-        into place with the target's ``move``; folders (``pack_format ==
+        into place with the target's ``move_file``; folders (``pack_format ==
         "tar.gz"``) go through its ``unpack_folder``, others run their unpack
         command on the target.
         """
         dest = self.target.path_on_target(artifact)
         if artifact.pack_format == "tar.gz":
-            await self.target.unpack_folder(package_path, dest)
+            await self._hook(
+                self.target.unpack_folder(package_path, dest),
+                artifact,
+                "unpackage",
+            )
         elif (cmd := artifact.unpack_command(package_path, dest)) is not None:
             await self._run(cmd, artifact, "unpackage")
         # Compare normalized paths: "wd//f" and "wd/f" are the same file
         # and ``mv`` refuses to move a file onto itself.
         elif PurePosixPath(package_path) != PurePosixPath(dest):
-            await self.target.move(package_path, dest)
+            await self._hook(
+                self.target.move_file(package_path, dest),
+                artifact,
+                "unpackage",
+            )
 
         artifact.emit_event(ArtifactEventsEnum.UNPACKAGE)
 
@@ -374,6 +379,21 @@ class ArtifactStore:
         name = PurePosixPath(src).name
         base = PurePosixPath(self.target.resolved_working_directory)
         return str(base / f"{name}.{secrets.token_hex(4)}.horuspkg")
+
+    async def _hook(
+        self, call: Awaitable[None], artifact: "BaseArtifact", op: str
+    ) -> None:
+        """
+        Await the target hook *call*, naming *artifact* when it fails.
+        """
+        try:
+            await call
+        except RuntimeError as exc:
+            msg = _("Failed to %(op)s artifact '%(id)s' on target") % {
+                "op": op,
+                "id": artifact.id,
+            }
+            raise RuntimeError(f"{msg}: {exc}") from exc
 
     async def _run(self, cmd: str, artifact: "BaseArtifact", op: str) -> None:
         """
@@ -389,5 +409,5 @@ class ArtifactStore:
                 "Failed to %(op)s artifact '%(id)s' on target "
                 "(exit code %(rc)s)"
             ) % {"op": op, "id": artifact.id, "rc": rc}
-            tail = stderr.decode(errors="replace").strip()[-_STDERR_TAIL:]
+            tail = stderr.decode(errors="replace").strip()[-STDERR_TAIL:]
             raise RuntimeError(f"{msg}: {tail}" if tail else msg)

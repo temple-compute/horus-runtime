@@ -71,11 +71,7 @@ from horus_builtin.workflow.loop import (
     lower_loop_entry,
 )
 from horus_builtin.workflow.subworkflow.lowering import lower_subworkflow_entry
-from horus_runtime.context import (
-    HorusContext,
-    current_task_id,
-    running_task,
-)
+from horus_runtime.context import HorusContext, current_task_id
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import (
     CACHE_MODES,
@@ -1574,8 +1570,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         if edge is not None and edge.into is not None:
             destination = task.target.idle_copy()
             destination.working_directory = edge.into
-        # Target ops of the staging carry the task they serve.
-        with scope, running_task(task.id):
+        with scope:
             await strategy.transfer(transfer_art, source_target, destination)
         artifact.path = transfer_art.path
         if source_target.location_id != task.target.location_id:
