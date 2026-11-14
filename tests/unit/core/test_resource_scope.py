@@ -42,6 +42,8 @@ from horus_runtime.core.resources import (
 )
 from horus_runtime.core.target.base import orchestrator_location_id
 from horus_runtime.core.target.channel import JobHandle, PollingChannelProcess
+from horus_runtime.core.task.exceptions import TaskExecutionError
+from horus_runtime.settings import runtime_settings
 
 
 def _task(tmp_path: object) -> HorusTask:
@@ -192,6 +194,32 @@ class TestInProcessScope:
         assert isinstance(scope, InProcessScope)
         assert scope.kind == "in_process"
         assert scope.pid == os.getpid()
+
+    @pytest.mark.parametrize(
+        "executor", [PythonFunctionExecutor(), PythonExecExecutor()]
+    )
+    @pytest.mark.asyncio
+    async def test_refused_when_the_host_disables_in_process(
+        self,
+        executor: BaseExecutor,
+        tmp_path: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The switch is enforced when the executor runs, not by a walk."""
+        monkeypatch.setattr(runtime_settings, "ALLOW_IN_PROCESS", False)
+        with pytest.raises(TaskExecutionError, match="disabled"):
+            await executor.execute(_task(tmp_path))
+
+    def test_in_process_flag_matches_the_registry(self) -> None:
+        """Hosts read the class flag without building a task."""
+        flagged = {
+            kind
+            for kind, cls in BaseExecutor.registry.items()
+            if cls.in_process
+        }
+        assert {"python", "python_function"} <= flagged
+        assert not ShellExecutor.in_process
+        assert not BaseExecutor.registry["python_function_external"].in_process
 
 
 class TestScopeVocabulary:

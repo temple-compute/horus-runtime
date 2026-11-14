@@ -225,12 +225,26 @@ class LocalTarget(BaseTarget):
         Launch *cmd* detached: nohup'd, redirected to log files under
         *job_dir*, surviving the orchestrator process.
         """
-        exports = "".join(
-            f"export {k}={shlex.quote(v)}; " for k, v in (env or {}).items()
-        )
-        inner = f"{exports}{cmd}"
+        inner = cmd
         if cwd is not None:
             inner = f"cd {shlex.quote(cwd)} && {inner}"
+        if env:
+            # Values go through a private file, never argv: the job's command
+            # line is readable by every local user for as long as it runs.
+            env_file = Path(job_dir) / "env"
+            env_file.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(
+                env_file,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                0o600,
+            )
+            with os.fdopen(fd, "w") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                fh.writelines(
+                    f"export {k}={shlex.quote(v)}\n" for k, v in env.items()
+                )
+            q = shlex.quote(str(env_file))
+            inner = f". {q} && rm -f {q} && {inner}"
         wrapper = build_detach_command(inner, job_dir)
 
         # The launcher shell backgrounds the job and returns immediately; the

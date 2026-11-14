@@ -44,6 +44,26 @@ class HorusRuntimeSettings(BaseSettings):
     backpressure is applied to the target channel.
     """
 
+    ALLOW_PYTHON_CONDITIONS: bool = True
+    """
+    Whether ``python`` edge conditions and ``branch_router`` deciders may run.
+    Hosts that do not trust the workflow author with code in the runtime
+    process set ``HORUS_RUNTIME_ALLOW_PYTHON_CONDITIONS=false``.
+    """
+
+    ALLOW_IN_PROCESS: bool = True
+    """
+    Whether workflow code may run inside the runtime process at all: in-process
+    executors (``in_process = True``), ``python`` edge conditions and
+    ``branch_router`` deciders. Checked when each one runs, so it also covers
+    map clones, loop iterations and subworkflows. Hosts that isolate workflow
+    code set ``HORUS_RUNTIME_ALLOW_IN_PROCESS=false``.
+    """
+
+    def python_callables_allowed(self) -> bool:
+        """True when workflow-named Python callables may run in-process."""
+        return self.ALLOW_IN_PROCESS and self.ALLOW_PYTHON_CONDITIONS
+
 
 runtime_settings = HorusRuntimeSettings()
 

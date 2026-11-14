@@ -29,9 +29,13 @@ cloudpickle).
 Protocol, both halves of which are hard-coded here and in the executor:
 
 - ``argv[1]``: cloudpickled ``(func, kwargs)`` payload to read.
-- ``argv[2]``: where to write the cloudpickled outcome.
-- outcome: ``{"ok": bool, "value": ..., "traceback": str | None,
-  "exception": BaseException | None}``.
+- ``argv[2]``: where to write the JSON outcome.
+- outcome: ``{"ok": bool, "value": ..., "traceback": str | None}``. Artifacts
+  in ``value`` are encoded as ``{"__horus_artifact__": <model dump>}``, with
+  a path under the cwd sent relative.
+
+The outcome is plain JSON, never a pickle: the orchestrator reads it back from
+the target and must not run code while decoding it.
 
 The outcome file, not the exit code, is what the executor believes: an exit
 code can only say *that* something failed, and "subprocess exited 1" is a
@@ -40,12 +44,40 @@ useless thing to hand a scientist whose function raised on line 40.
 
 import asyncio
 import inspect
+import json
+import os
 import sys
 import traceback
 from collections.abc import Awaitable
 from typing import Any
 
 import cloudpickle
+
+ARTIFACT_KEY = "__horus_artifact__"
+
+
+def _encode(value: Any) -> Any:
+    """
+    Tag artifacts so the executor can rebuild them; the rest stays as is.
+
+    Artifacts resolve their path to an absolute one, but the executor only
+    accepts paths relative to the working directory (this process's cwd), so
+    paths under it are sent relative.
+    """
+    base = sys.modules.get("horus_runtime.core.artifact.base")
+    if base is not None and isinstance(value, base.BaseArtifact):
+        dump = value.model_dump(mode="json")
+        path = dump.get("path")
+        # Both spellings of the cwd: artifacts may store it symlink-resolved.
+        for cwd in (os.getcwd(), os.path.realpath(os.getcwd())):
+            if isinstance(path, str) and os.path.isabs(path):
+                if os.path.commonpath([path, cwd]) == cwd:
+                    dump["path"] = os.path.relpath(path, cwd)
+                    break
+        return {ARTIFACT_KEY: dump}
+    if isinstance(value, list):
+        return [_encode(item) for item in value]
+    return value
 
 
 async def _resolve(awaitable: Awaitable[Any]) -> Any:
@@ -55,29 +87,27 @@ async def _resolve(awaitable: Awaitable[Any]) -> Any:
 
 def _write_outcome(result_path: str, outcome: dict[str, Any]) -> None:
     """
-    Write *outcome* to *result_path*, degrading to text if it will not pickle.
-
-    A return value or an exception can be unpicklable (an open file handle
-    captured in ``__init__``, say). Losing the object is survivable; losing
-    the traceback that explains the run is not, so the fallback keeps the
-    text.
+    Write *outcome* to *result_path* as JSON, failing the call with a clear
+    message when the return value is not JSON-serialisable.
     """
     try:
-        data = cloudpickle.dumps(outcome)
+        data = json.dumps({**outcome, "value": _encode(outcome["value"])})
     except Exception:
-        data = cloudpickle.dumps(
+        data = json.dumps(
             {
                 "ok": False,
                 "value": None,
-                "exception": None,
                 "traceback": (
-                    f"{outcome.get('traceback') or ''}\n"
-                    f"Could not send the result back to the orchestrator:\n"
+                    "Could not send the result back to the orchestrator: "
+                    f"the return value ({type(outcome['value']).__name__}) "
+                    "is not JSON-serialisable. Return a file or folder "
+                    "artifact, a list of them, None, or plain JSON data; "
+                    "write anything else to a file.\n"
                     f"{traceback.format_exc()}"
-                ).strip(),
+                ),
             }
         )
-    with open(result_path, "wb") as fh:
+    with open(result_path, "w", encoding="utf-8") as fh:
         fh.write(data)
 
 
@@ -95,17 +125,11 @@ def main(payload_path: str, result_path: str) -> int:
         # body must keep working here.
         if inspect.isawaitable(value):
             value = asyncio.run(_resolve(value))
-        outcome = {
-            "ok": True,
-            "value": value,
-            "exception": None,
-            "traceback": None,
-        }
-    except Exception as exc:
+        outcome = {"ok": True, "value": value, "traceback": None}
+    except Exception:
         outcome = {
             "ok": False,
             "value": None,
-            "exception": exc,
             "traceback": traceback.format_exc(),
         }
 

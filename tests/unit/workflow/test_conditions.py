@@ -46,6 +46,7 @@ from horus_runtime.core.workflow.condition import (
     PythonCondition,
 )
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.settings import runtime_settings
 
 
 def _decider(
@@ -614,6 +615,37 @@ class TestPythonCondition:
         with pytest.raises(
             ConditionEvaluationError, match="cannot be imported"
         ):
+            await evaluate_condition(wf, edge)
+
+    @pytest.mark.parametrize(
+        "switch", ["ALLOW_PYTHON_CONDITIONS", "ALLOW_IN_PROCESS"]
+    )
+    async def test_host_can_disable_python_conditions(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+        switch: str,
+    ) -> None:
+        """With either switch off, no referenced callable is imported."""
+        del horus_context
+        monkeypatch.setattr(runtime_settings, switch, False)
+        wf = HorusWorkflow(
+            name="wf",
+            tasks=[_decider(tmp_path, {"metrics": {"accuracy": 0.95}})],
+            orchestrator_target=LocalTarget(
+                working_directory=tmp_path.as_posix()
+            ),
+        )
+        edge = WorkflowEdge(
+            source="check",
+            source_output="decision",
+            target="b",
+            target_input="signal",
+            transfer=False,
+            condition=PythonCondition(ref="os:abort"),
+        )
+        with pytest.raises(ConditionEvaluationError, match="disabled"):
             await evaluate_condition(wf, edge)
 
     async def test_callable_receives_the_source_document(

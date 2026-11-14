@@ -43,6 +43,7 @@ from horus_runtime.core.task.base import BaseTask
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.condition import EdgeCondition
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.settings import runtime_settings
 
 
 def _marker(tmp_path: Path, task_id: str) -> HorusTask:
@@ -340,6 +341,22 @@ class TestDecision:
         del horus_context
         router = await self._route(tmp_path, _pick_own_id, ["b", "c"])
         assert _sentinel_of(router) == {"routes": ["b"]}
+
+    @pytest.mark.parametrize(
+        "switch", ["ALLOW_PYTHON_CONDITIONS", "ALLOW_IN_PROCESS"]
+    )
+    async def test_host_can_disable_routers(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        monkeypatch: pytest.MonkeyPatch,
+        switch: str,
+    ) -> None:
+        """With either switch off, the decision function is never called."""
+        del horus_context
+        monkeypatch.setattr(runtime_settings, switch, False)
+        with pytest.raises(BranchConfigurationError, match="disabled"):
+            await self._route(tmp_path, _pick_unknown, ["b", "c"])
 
     async def test_undeclared_route_is_rejected(
         self, tmp_path: Path, horus_context: HorusContext
