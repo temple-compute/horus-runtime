@@ -41,6 +41,7 @@ from horus_runtime.core.artifact.store import (
     _tree_digest,
     compose_folder_digest,
 )
+from horus_runtime.core.target.exceptions import OperationRefusedError
 from horus_runtime.core.transfer.generic import GenericTransfer
 
 
@@ -260,6 +261,98 @@ class TestArtifactStore:
 
             assert (dest / "a.txt").read_text() == "A"
             assert (dest / "nested" / "b.txt").read_text() == "B"
+
+
+_HOOK_CALLS: list[str] = []
+
+
+class _HookTarget(LocalTarget):
+    """A local target that records which file hooks the store calls."""
+
+    add_to_registry = False
+
+    async def path_digest(
+        self, path: str, mode: CacheMode = "deep"
+    ) -> str | None:
+        _HOOK_CALLS.append("path_digest")
+        return await super().path_digest(path, mode)
+
+    async def pack_folder(self, src: str, pkg: str) -> None:
+        _HOOK_CALLS.append("pack_folder")
+        await super().pack_folder(src, pkg)
+
+    async def unpack_folder(self, pkg: str, dest: str) -> None:
+        _HOOK_CALLS.append("unpack_folder")
+        await super().unpack_folder(pkg, dest)
+
+    async def move_file(self, src: str, dst: str) -> None:
+        _HOOK_CALLS.append("move_file")
+        await super().move_file(src, dst)
+
+
+@pytest.mark.unit
+class TestTargetFileHooks:
+    """The store reaches the target's files only through its hooks."""
+
+    async def test_store_routes_through_target_hooks(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Digest, folder pack/unpack and file moves each call one hook."""
+        del horus_context
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.txt").write_text("A")
+        target = _HookTarget(working_directory=str(tmp_path))
+        _HOOK_CALLS.clear()
+        store = ArtifactStore(target)
+
+        assert await store.digest(FolderArtifact(id="d", path=src))
+        pkg = await store.package(FolderArtifact(id="d", path=src))
+        await store.unpackage(FolderArtifact(id="d", path=tmp_path / "o"), pkg)
+        moved = tmp_path / "m.txt"
+        moved.write_text("M")
+        await store.unpackage(
+            FileArtifact(id="f", path=tmp_path / "x" / "f.txt"), str(moved)
+        )
+
+        assert _HOOK_CALLS == [
+            "path_digest",
+            "pack_folder",
+            "unpack_folder",
+            "move_file",
+        ]
+        assert (tmp_path / "o" / "a.txt").read_text() == "A"
+        assert (tmp_path / "x" / "f.txt").read_text() == "M"
+
+    async def test_hook_failure_names_artifact_refusal_passes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A failed hook names the artifact; a refusal keeps its type."""
+        del horus_context
+        target = LocalTarget(working_directory=str(tmp_path))
+        store = ArtifactStore(target)
+        artifact = FileArtifact(id="f", path=tmp_path / "x" / "f.txt")
+
+        with pytest.raises(
+            RuntimeError, match=r"unpackage artifact 'f'.*exit code"
+        ):
+            await store.unpackage(artifact, str(tmp_path / "missing"))
+
+        async def refuse(src: str, dst: str) -> None:
+            raise OperationRefusedError(f"{src} -> {dst}")
+
+        object.__setattr__(target, "move_file", refuse)
+        with pytest.raises(OperationRefusedError):
+            await store.unpackage(artifact, str(tmp_path / "missing"))
+
+    async def test_default_file_size_and_failure(self, tmp_path: Path) -> None:
+        """``file_size`` counts bytes; a failed default hook raises."""
+        target = LocalTarget(working_directory=str(tmp_path))
+        (tmp_path / "f").write_bytes(b"12345")
+
+        assert await target.file_size(str(tmp_path / "f")) == 5
+        with pytest.raises(RuntimeError, match="exit code"):
+            await target.file_size(str(tmp_path / "missing"))
 
 
 _MODES: tuple[CacheMode, ...] = ("deep", "fast")

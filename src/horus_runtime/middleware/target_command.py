@@ -31,6 +31,7 @@ from horus_runtime.middleware.auto_middleware import AutoMiddleware
 
 if TYPE_CHECKING:
     from horus_runtime.core.target.base import BaseTarget
+    from horus_runtime.core.task.base import BaseTask
 
 
 @dataclass
@@ -47,6 +48,8 @@ class TargetCommandMiddlewareContext:
     cwd: str | None
     env: dict[str, str] | None
     detach: bool | None
+    task: "BaseTask | None" = None
+    """The task whose main command this is, when an executor says so."""
 
 
 class TargetCommandMiddleware(

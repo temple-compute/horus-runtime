@@ -42,6 +42,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from horus_runtime.context import serving_task
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.i18n import tr as _
 from horus_runtime.logging import horus_logger
@@ -247,7 +248,8 @@ class OrchestratorEvacuator(BaseEvacuator):
             if strategy_cls is not None
             else source.fallback_transfer()
         )
-        await strategy.transfer(copy, source, destination)
+        with serving_task(task.id):
+            await strategy.transfer(copy, source, destination)
         return EdgeSource(destination, copy, task.id)
 
     async def recover(

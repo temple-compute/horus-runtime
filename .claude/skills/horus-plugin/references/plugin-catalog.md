@@ -227,13 +227,21 @@ async def list_dir(self, path: str) -> list[RemoteDirEntry]: ...
 ```
 
 `ClassVar`s: `poll_interval` (default `1.0`), `detach_by_default` (default `True`).
-Provided by the base: `run_command` (template method over `run_command_sync` /
-`launch`, routed through `TargetCommandMiddleware`), `bind`, `dispatch`
+Provided by the base: `run_command(cmd, *, cwd, env, detach, task=None)`
+(template method over `run_command_sync` / `launch`, routed through
+`TargetCommandMiddleware`; executors pass `task` for a task's main command and
+middleware sees it as `ctx.task`), `bind`, `dispatch`
 (`@final`), `_dispatch`, `wait`, `cancel`, `get_status`, `recover` (default
 `False`), `path_on_target`, `resource_scope`, `idle_copy`, `is_colocated_with`,
 `resolved_working_directory` (raises when `working_directory` is unset).
 Overridable defaults built on the shell channel: `get_file_to`, `read_range`,
-`path_exists`, `remove`, and `fallback_transfer()` (→ `GenericTransfer`).
+`path_exists`, `remove`, `path_digest(path, mode)`, `pack_folder(src, pkg)`,
+`unpack_folder(pkg, dest)` (used for artifacts with `pack_format = "tar.gz"`,
+e.g. `FolderArtifact`), `move_file(src, dst)`, `file_size(path)`, and
+`fallback_transfer()` (→ `GenericTransfer`). A target that refuses an
+operation by policy raises `OperationRefusedError`
+(`horus_runtime.core.target.exceptions`); side-artifact collection skips the
+file. Avoid model fields named like these methods.
 
 Lease hooks (for a machine the target can destroy; see "Releasable targets and
 leases" in `references/architecture.md`): `releasable` ClassVar,

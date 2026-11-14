@@ -38,6 +38,7 @@ from horus_runtime.core.target.channel import (
     JobHandle,
     RemoteDirEntry,
 )
+from horus_runtime.core.target.exceptions import OperationRefusedError
 from horus_runtime.settings import runtime_settings
 from tests.conftest import MakeTaskType
 
@@ -48,6 +49,27 @@ class TestCollectLocalSideArtifacts:
     Collection from a ``LocalTarget``, exercising the full channel path
     (``list_dir`` + ``get_file`` into a temp landing dir).
     """
+
+    async def test_refused_file_is_kept_and_rest_collected(
+        self, make_shell_task: MakeTaskType
+    ) -> None:
+        """A file the target refuses to hand over is skipped, not fatal."""
+        task = make_shell_task()
+        sad = Path(task.side_artifacts_dir)
+        sad.mkdir(parents=True)
+        (sad / "data.bin").write_text("x")
+        (sad / "log.txt").write_text("hello")
+        get_file_to = task.target.get_file_to
+
+        async def refuse_data(remote_path: str, local_path: Path) -> None:
+            if remote_path.endswith("data.bin"):
+                raise OperationRefusedError(remote_path)
+            await get_file_to(remote_path, local_path)
+
+        object.__setattr__(task.target, "get_file_to", refuse_data)
+        await task.executor.collect_side_artifacts(task)
+
+        assert {a.id for a in task.side_artifacts} == {"test_task_id_log.txt"}
 
     async def test_collects_files_and_folders(
         self, make_shell_task: MakeTaskType
