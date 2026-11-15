@@ -213,6 +213,23 @@ def topological_sort(
     return result
 
 
+def task_depths(
+    task_ids: set[str],
+    dependencies: dict[str, set[str]],
+) -> dict[str, int]:
+    """
+    The longest path from a root to each of *task_ids*: ``0`` for a task
+    with no dependency among them. Higher is further downstream.
+    """
+    depths: dict[str, int] = {}
+    for task_id in topological_sort(task_ids, dependencies):
+        depths[task_id] = max(
+            (depths[dep] + 1 for dep in dependencies[task_id] & task_ids),
+            default=0,
+        )
+    return depths
+
+
 def execution_plan(
     tasks: list["BaseTask"],
     trigger_id: str,
