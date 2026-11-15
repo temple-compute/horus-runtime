@@ -34,11 +34,12 @@ from horus_builtin.artifact.folder import FolderArtifact
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
-from horus_builtin.task.horus_task import HorusTask
+from horus_builtin.task.horus_task import HorusTask, _all_exist
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import (
+    MAX_CONCURRENT_DIGESTS,
     SMALL_FILE,
     ArtifactStore,
     CacheMode,
@@ -203,6 +204,93 @@ class TestDigestCache:
 
         assert reads == ["deep", "deep"]
         assert wf._digests == {}
+
+
+def _wide_task(tmp_path: Path, inputs: int) -> HorusTask:
+    """A task on the local machine with *inputs* file inputs, all present."""
+    files = []
+    for i in range(inputs):
+        path = tmp_path / f"in{i}.txt"
+        path.write_text(f"input {i}")
+        files.append(FileArtifact(id=f"in{i}", path=path))
+    return HorusTask(
+        id="wide",
+        name="wide",
+        runtime=CommandRuntime(command="true"),
+        executor=ShellExecutor(),
+        target=LocalTarget(working_directory=tmp_path.as_posix()),
+        inputs=cast(list[BaseArtifact], files),
+        outputs=[FileArtifact(id="out", path=tmp_path / "out.txt")],
+    )
+
+
+@pytest.mark.unit
+class TestConcurrentChecks:
+    """A task's inputs are digested and checked a few at a time."""
+
+    async def test_source_digests_run_concurrently_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        """Bounded concurrency, results keyed in declaration order."""
+        task = _wide_task(tmp_path, 3 * MAX_CONCURRENT_DIGESTS)
+        wf = HorusWorkflow(name="wide", tasks=[task])
+        wf.status = WorkflowStatus.RUNNING
+        live, peak = [0], [0]
+
+        async def slow(
+            store: ArtifactStore, artifact: BaseArtifact, mode: CacheMode
+        ) -> str | None:
+            del store, mode
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+            await asyncio.sleep(0.01)
+            live[0] -= 1
+            return f"d-{artifact.id}"
+
+        with patch.object(ArtifactStore, "digest", slow):
+            digests = await wf.source_digests(task)
+
+        assert list(digests) == [a.id for a in task.inputs]
+        assert digests == {a.id: f"d-{a.id}" for a in task.inputs}
+        assert peak[0] == MAX_CONCURRENT_DIGESTS
+
+    @pytest.mark.parametrize("mode", ["deep", "fast"])
+    async def test_source_digests_match_one_by_one(
+        self, tmp_path: Path, mode: CacheMode
+    ) -> None:
+        """The digests are the ones each input gets on its own."""
+        task = _wide_task(tmp_path, 6)
+        wf = HorusWorkflow(name="wide", tasks=[task], cache=mode)
+        wf.status = WorkflowStatus.RUNNING
+        store = ArtifactStore(task.target)
+
+        digests = await wf.source_digests(task)
+
+        assert digests == {
+            a.id: await store.digest(a, mode) for a in task.inputs
+        }
+        assert None not in digests.values()
+
+    async def test_exists_checks_run_concurrently(
+        self, tmp_path: Path
+    ) -> None:
+        """Inputs and outputs are checked a few at a time."""
+        task = _wide_task(tmp_path, 3 * MAX_CONCURRENT_DIGESTS)
+        live, peak = [0], [0]
+
+        async def slow(store: ArtifactStore, artifact: BaseArtifact) -> bool:
+            del store
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+            await asyncio.sleep(0.01)
+            live[0] -= 1
+            return artifact.id != "in5"
+
+        with patch.object(ArtifactStore, "exists", slow):
+            found = await _all_exist(ArtifactStore(task.target), task.inputs)
+
+        assert found == [a.id != "in5" for a in task.inputs]
+        assert peak[0] == MAX_CONCURRENT_DIGESTS
 
 
 def _consumers(
