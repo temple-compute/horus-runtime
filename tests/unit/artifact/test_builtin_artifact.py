@@ -29,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.artifact.structure import StructureArtifact
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 
@@ -48,6 +49,8 @@ class TestInitRegistry:
         # Should have scanned the core artifacts package
         assert "file" in BaseArtifact.registry
         assert "folder" in BaseArtifact.registry
+        assert BaseArtifact.registry["structure"] is StructureArtifact
+        assert issubclass(StructureArtifact, FileArtifact)
 
         assert BaseArtifact.registry["file"] is FileArtifact
         assert BaseArtifact.registry["folder"] is FolderArtifact
@@ -85,6 +88,27 @@ class TestArtifactRegistry:
         # Check FolderArtifact
         assert isinstance(result.artifact[1], FolderArtifact)
         assert result.artifact[1].kind == "folder"
+
+    def test_artifact_union_validates_structure_artifact(self) -> None:
+        """
+        A ``kind: structure`` artifact validates to StructureArtifact.
+        """
+
+        class TestModel(BaseModel):
+            artifact: BaseArtifact
+
+        result = TestModel.model_validate(
+            {
+                "artifact": {
+                    "path": "/test/receptor",
+                    "kind": "structure",
+                    "id": "receptor",
+                }
+            }
+        )
+
+        assert isinstance(result.artifact, StructureArtifact)
+        assert result.artifact.kind == "structure"
 
     def test_artifact_registry_invalid_kind_handling(self) -> None:
         """
