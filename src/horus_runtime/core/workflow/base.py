@@ -31,6 +31,7 @@ topological (DAG) order, which may differ from the order they are defined.
 """
 
 import asyncio
+import os
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
@@ -871,15 +872,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         return self
 
     @staticmethod
-    def _expanded_from(task_id: str, owner_id: str) -> bool:
+    def _expanded_from(task: BaseTask, owner: BaseTask) -> bool:
         """
-        Whether *task_id* is a task an expander derived from *owner_id*: a
-        map clone (``m[0]``), loop iteration (``l#1``), loop checker
-        (``l~1``) or subworkflow child (``s/x``).
+        Whether *owner* is an expander and *task* one of the tasks it
+        derived: a map clone (``m[0]``), loop iteration (``l#1``), loop
+        checker (``l~1``) or subworkflow child (``s/x``).
         """
-        return task_id.startswith(owner_id) and task_id[
-            len(owner_id) : len(owner_id) + 1
-        ] in ("[", "#", "~", "/")
+        mark = task.id[len(owner.id) : len(owner.id) + 1]
+        return task.id.startswith(owner.id) and mark in owner.derived_id_marks
 
     @model_validator(mode="after")
     def check_output_paths_disjoint(self) -> Self:
@@ -893,26 +893,39 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         folder (a map slot), and an in-place task whose output path is one
         of its own input paths.
         """
+        self._assert_output_paths_disjoint(self.tasks)
+        return self
+
+    @classmethod
+    def _assert_output_paths_disjoint(cls, tasks: list[BaseTask]) -> None:
+        """
+        Raise :exc:`OverlappingOutputPathsError` if two of *tasks* write the
+        same or nested output paths. Shared by
+        :meth:`check_output_paths_disjoint` and :meth:`expand`.
+        """
+
+        def key(artifact: BaseArtifact) -> Path:
+            return Path(
+                os.path.normpath(artifact.declared_path or artifact.path)
+            )
+
         owners: dict[Path, list[BaseTask]] = {}
-        for task in self.tasks:
+        for task in tasks:
             for output in task.outputs:
-                path = output.declared_path or output.path
-                owners.setdefault(path, []).append(task)
+                owners.setdefault(key(output), []).append(task)
 
         def related(a: BaseTask, b: BaseTask) -> bool:
             return (
                 a.id == b.id
-                or self._expanded_from(a.id, b.id)
-                or self._expanded_from(b.id, a.id)
+                or cls._expanded_from(a, b)
+                or cls._expanded_from(b, a)
             )
 
         def in_place(task: BaseTask, path: Path) -> bool:
-            return any(
-                (i.declared_path or i.path) == path for i in task.inputs
-            )
+            return any(key(i) == path for i in task.inputs)
 
-        for path, tasks in owners.items():
-            for a, b in combinations(tasks, 2):
+        for path, writers in owners.items():
+            for a, b in combinations(writers, 2):
                 shared_ok = (
                     related(a, b) or in_place(a, path) or in_place(b, path)
                 )
@@ -922,13 +935,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                     )
             for parent in path.parents:
                 for outer in owners.get(parent, ()):
-                    for inner in tasks:
+                    for inner in writers:
                         if not related(outer, inner):
                             raise OverlappingOutputPathsError(
                                 outer.id, str(parent), inner.id, str(path)
                             )
-
-        return self
 
     @staticmethod
     def _assert_edge_target_resolves(
@@ -1240,7 +1251,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         Validates, in order: task id uniqueness (kept + new), per-task
         input/output id uniqueness for each new task, root artifact id
-        uniqueness (kept + new), every new edge resolving against the
+        uniqueness (kept + new), disjoint output paths (kept + new), every
+        new edge resolving against the
         combined tasks/artifacts with no duplicate ``(target, target_input)``
         (kept or within the batch), and no cycle anywhere in the resulting
         graph.
@@ -1255,6 +1267,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 collide, or two new root artifacts share an id.
             SharedInputOutputIdError: If a new task uses one id as both an
                 input and an output.
+            OverlappingOutputPathsError: If two tasks of the combined graph
+                write the same or nested output paths.
             UnknownEdgeEndpointError: If a new edge's target or source does
                 not resolve against the combined graph.
             DuplicateEdgeTargetError: If a new edge duplicates the
@@ -1295,6 +1309,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         for task in new_tasks:
             self._assert_task_artifact_ids(task)
         self._assert_unique_artifact_ids(combined_artifacts)
+        self._assert_output_paths_disjoint(combined_tasks)
 
         task_inputs = {t.id: {a.id for a in t.inputs} for t in combined_tasks}
         task_outputs = {

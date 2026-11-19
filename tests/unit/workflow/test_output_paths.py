@@ -21,7 +21,7 @@ not write the same output path, or one inside the other's output folder.
 """
 
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 from pydantic import ValidationError
@@ -32,11 +32,18 @@ from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
+from horus_builtin.workflow.loop import LoopController
+from horus_builtin.workflow.map import MapTask
+from horus_builtin.workflow.subworkflow.expander import SubworkflowExpander
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.workflow.exceptions import OverlappingOutputPathsError
 
 
 def _task(
-    task_id: str, outputs: list[str], inputs: list[str] | None = None
+    task_id: str,
+    outputs: list[str],
+    inputs: list[str] | None = None,
+    cls: type[HorusTask] = HorusTask,
 ) -> HorusTask:
     """A task writing folders at the given relative *outputs* paths."""
 
@@ -49,7 +56,7 @@ def _task(
             ],
         )
 
-    return HorusTask(
+    return cls(
         id=task_id,
         name=task_id,
         inputs=folders("in", inputs or []),
@@ -118,12 +125,49 @@ class TestOutputPathsDisjoint:
         """One task's own outputs may nest."""
         _workflow(_task("a", ["out", "out/log"]))
 
-    @pytest.mark.parametrize("child", ["m[0]", "m#1", "m~1", "m/inner"])
-    def test_expanded_task_inside_owner_allowed(self, child: str) -> None:
+    @pytest.mark.parametrize(
+        ("expander", "child"),
+        [
+            (MapTask, "m[0]"),
+            (LoopController, "m#1"),
+            (LoopController, "m~1"),
+            (SubworkflowExpander, "m/inner"),
+        ],
+    )
+    def test_expanded_task_inside_owner_allowed(
+        self, expander: type[HorusTask], child: str
+    ) -> None:
         """Snapshots holding map slots, loop iterations or subworkflow
         children keep loading.
         """
-        _workflow(_task("m", ["m_out"]), _task(child, ["m_out/0"]))
+
+        class Owner(HorusTask):
+            add_to_registry: ClassVar[bool] = False
+            derived_id_marks: ClassVar[tuple[str, ...]] = (
+                expander.derived_id_marks
+            )
+
+        _workflow(_task("m", ["m_out"], cls=Owner), _task(child, ["m_out/0"]))
+
+    @pytest.mark.parametrize("child", ["qc#2", "qc/plots", "qc[0]"])
+    def test_task_with_expander_like_id_is_not_exempt(
+        self, child: str
+    ) -> None:
+        """An expander-shaped id exempts nothing unless its owner expands."""
+        with pytest.raises(ValidationError, match="cannot be the same"):
+            _workflow(_task("qc", ["bam"]), _task(child, ["bam/x"]))
+
+    def test_paths_are_normalized(self) -> None:
+        """``..`` segments do not hide a nested output."""
+        with pytest.raises(ValidationError, match="cannot be the same"):
+            _workflow(_task("a", ["shared"]), _task("b", ["tmp/../shared/x"]))
+
+    def test_expand_rejects_overlap_and_keeps_workflow(self) -> None:
+        """A batch added by ``expand`` is checked against kept tasks."""
+        wf = _workflow(_task("outer", ["results"]))
+        with pytest.raises(OverlappingOutputPathsError):
+            wf.expand(tasks=[_task("added", ["results/x"])])
+        assert [t.id for t in wf.tasks] == ["outer"]
 
     def test_task_with_owner_like_id_is_not_exempt(self) -> None:
         """Only expander separators exempt a task, not a shared id prefix."""

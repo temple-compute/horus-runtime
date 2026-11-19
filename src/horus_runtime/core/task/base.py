@@ -107,6 +107,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     or its children could never get one.
     """
 
+    derived_id_marks: ClassVar[tuple[str, ...]] = ()
+    """
+    What follows this task's id in the ids of the tasks it expands into
+    (``[`` for a map clone ``m[0]``). Empty for a task that expands into
+    none.
+    """
+
     substitutes_ids: ClassVar[bool] = True
     """
     Whether this task's command resolves artifacts by id, so no id may be
