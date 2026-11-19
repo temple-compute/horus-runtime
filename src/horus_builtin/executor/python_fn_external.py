@@ -186,12 +186,11 @@ class ExternalPythonFunctionExecutor(BaseExecutor):
         )
         try:
             async with aclosing(proc.stream()) as stream:
-                async for stream_name, line in stream:
+                async for _stream_name, line in stream:
                     text = line.decode("utf-8", errors="replace").rstrip()
-                    if stream_name == "stdout":
-                        horus_logger.log.info(text)
-                    else:
-                        horus_logger.log.warning(text)
+                    # Tools write progress to stderr; failure is the exit
+                    # code, not the stream.
+                    horus_logger.log.info(text)
         except asyncio.CancelledError:
             proc.kill()
             await proc.wait()
