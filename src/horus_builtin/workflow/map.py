@@ -269,6 +269,7 @@ class MapTask(HorusTask):
         "writing into its own slot of a single folder output."
     )
     dispatches_children: ClassVar[bool] = True
+    derived_id_marks: ClassVar[tuple[str, ...]] = ("[",)
 
     over: MapOver
     """

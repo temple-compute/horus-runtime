@@ -72,6 +72,7 @@ class LoopController(HorusTask):
         "Repeats a template body task while a sentinel artifact says to "
         "continue, up to a hard max_iterations safety bound."
     )
+    derived_id_marks: ClassVar[tuple[str, ...]] = ("#", "~")
 
     runtime: BaseRuntime = Field(
         default_factory=lambda: CommandRuntime(command="true")

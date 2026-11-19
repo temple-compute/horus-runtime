@@ -69,6 +69,8 @@ class SubworkflowExpander(HorusTask):
         "Inlines a complete child workflow's tasks and edges into the "
         "parent workflow at run time."
     )
+    derived_id_marks: ClassVar[tuple[str, ...]] = (_ID_SEPARATOR,)
+    substitutes_ids: ClassVar[bool] = False
 
     runtime: BaseRuntime = Field(
         default_factory=lambda: CommandRuntime(command="true")

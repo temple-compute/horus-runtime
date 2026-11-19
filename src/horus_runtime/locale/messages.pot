@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-13 01:14+0100\n"
+"POT-Creation-Date: 2026-11-19 21:55+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -108,27 +108,27 @@ msgstr ""
 msgid "Cannot evacuate '%(out)s': no orchestrator target is set."
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:762
+#: src/horus_runtime/core/lease.py:781
 #, python-format
 msgid "Releasing machine '%(key)s' failed: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:805 src/horus_runtime/core/lease.py:839
+#: src/horus_runtime/core/lease.py:824 src/horus_runtime/core/lease.py:858
 #, python-format
 msgid "Evacuating from machine '%(key)s' failed: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:870
+#: src/horus_runtime/core/lease.py:893
 #, python-format
 msgid "Keepalive of machine '%(key)s' failed: %(e)s"
 msgstr ""
 
-#: src/horus_runtime/core/lease.py:913
+#: src/horus_runtime/core/lease.py:943
 #, python-format
 msgid "Releasing a machine at run end failed: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/placement.py:92
+#: src/horus_runtime/core/placement.py:94
 #, python-format
 msgid ""
 "Task '%(task_name)s' requests %(requested)s %(dimension)s at location "
@@ -141,53 +141,60 @@ msgstr ""
 msgid "Artifact at %(path)s. %(event)s"
 msgstr ""
 
-#: src/horus_runtime/core/artifact/store.py:392
+#: src/horus_runtime/core/artifact/store.py:398
 #, python-format
 msgid "Failed to %(op)s artifact '%(id)s' on target"
 msgstr ""
 
-#: src/horus_runtime/core/artifact/store.py:409
+#: src/horus_runtime/core/artifact/store.py:415
 #, python-format
 msgid "Failed to %(op)s artifact '%(id)s' on target (exit code %(rc)s)"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:90
+#: src/horus_runtime/core/executor/base.py:91
 msgid "Horus base executor"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:197
+#: src/horus_runtime/core/executor/base.py:167
+#, python-format
+msgid ""
+"Task %(task_id)s uses the in-process '%(kind)s' executor, which is "
+"disabled on this runtime."
+msgstr ""
+
+#: src/horus_runtime/core/executor/base.py:214
 #, python-format
 msgid "Failed to collect side artifacts for task %(task_id)s: %(err)s"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:245
+#: src/horus_runtime/core/executor/base.py:262
 #, python-format
 msgid "Side artifacts of task %(task_id)s kept on the target: %(err)s"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:250
+#: src/horus_runtime/core/executor/base.py:267
 #, python-format
 msgid "Failed to list side artifacts for task %(task_id)s: %(err)s"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:280
-#: src/horus_runtime/core/executor/base.py:346
+#: src/horus_runtime/core/executor/base.py:297
+#: src/horus_runtime/core/executor/base.py:363
 #, python-format
 msgid "Skipping side artifact with unsafe name %(name)s"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:298
-#: src/horus_runtime/core/executor/base.py:356
+#: src/horus_runtime/core/executor/base.py:315
+#: src/horus_runtime/core/executor/base.py:373
 #, python-format
 msgid "Skipping large side artifact %(name)s (%(size)d bytes)"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:315
+#: src/horus_runtime/core/executor/base.py:332
 #, python-format
 msgid "Side artifact %(name)s kept on the target: %(err)s"
 msgstr ""
 
-#: src/horus_runtime/core/executor/base.py:320
+#: src/horus_runtime/core/executor/base.py:337
 #, python-format
 msgid "Failed to collect side artifact %(name)s: %(err)s"
 msgstr ""
@@ -327,49 +334,49 @@ msgstr ""
 msgid "Secret %(name)s: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:433
+#: src/horus_runtime/core/task/base.py:440
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
 "Expected one of: %(expected)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:486
+#: src/horus_runtime/core/task/base.py:493
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:570
+#: src/horus_runtime/core/task/base.py:577
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:573
+#: src/horus_runtime/core/task/base.py:580
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:574
+#: src/horus_runtime/core/task/base.py:581
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:575
+#: src/horus_runtime/core/task/base.py:582
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:642
+#: src/horus_runtime/core/task/base.py:649
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:651
+#: src/horus_runtime/core/task/base.py:658
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:670
+#: src/horus_runtime/core/task/base.py:677
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr ""
@@ -391,50 +398,50 @@ msgid ""
 "provided root artifacts."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:173
+#: src/horus_runtime/core/workflow/base.py:184
 msgid "Horus base workflow"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1097
+#: src/horus_runtime/core/workflow/base.py:1184
 #, python-format
 msgid ""
 "Adding edge from '%(source)s.%(source_output)s' to "
 "'%(target)s.%(target_input)s' would create a cycle."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1533
+#: src/horus_runtime/core/workflow/base.py:1621
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
 "%(strategy)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1730
+#: src/horus_runtime/core/workflow/base.py:1829
 #, python-format
 msgid "Task %(task_name)s fingerprints its inputs in %(mode)s cache mode."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2015
+#: src/horus_runtime/core/workflow/base.py:2117
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2035
+#: src/horus_runtime/core/workflow/base.py:2137
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2042
+#: src/horus_runtime/core/workflow/base.py:2144
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2049
+#: src/horus_runtime/core/workflow/base.py:2151
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2073
+#: src/horus_runtime/core/workflow/base.py:2175
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr ""
@@ -469,16 +476,32 @@ msgstr ""
 #: src/horus_runtime/core/workflow/exceptions.py:83
 #, python-format
 msgid ""
-"Multiple tasks declare the same output artifact ID '%(id)s'. Output "
-"artifact IDs must be unique across all tasks in a workflow."
+"Artifact ID '%(id)s' is declared more than once. Artifact IDs must be "
+"unique within a task's inputs, within its outputs, and among the "
+"workflow's root artifacts."
 msgstr ""
 
 #: src/horus_runtime/core/workflow/exceptions.py:101
 #, python-format
+msgid ""
+"Task '%(task)s' uses %(ids)s as both an input and an output ID. Rename "
+"one of them."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:123
+#, python-format
+msgid ""
+"Task '%(task)s' writes '%(path)s' and task '%(other)s' writes "
+"'%(other_path)s'. Output paths of different tasks cannot be the same or "
+"nested. Give each task its own output path."
+msgstr ""
+
+#: src/horus_runtime/core/workflow/exceptions.py:147
+#, python-format
 msgid "Workflow edge references unknown %(endpoint)s '%(value)s'."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:117
+#: src/horus_runtime/core/workflow/exceptions.py:163
 #, python-format
 msgid ""
 "Edge '%(source)s' -> '%(target)s' names only one of 'source_output' and "
@@ -486,45 +509,45 @@ msgid ""
 "order the two tasks."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:135
+#: src/horus_runtime/core/workflow/exceptions.py:181
 #, python-format
 msgid ""
 "Multiple edges feed input '%(input)s' of task '%(target)s'. Each consumer"
 " input may be fed by at most one edge."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:147
+#: src/horus_runtime/core/workflow/exceptions.py:193
 #, python-format
 msgid "Unknown cache mode %(value)s. Use one of: %(modes)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:168
+#: src/horus_runtime/core/workflow/exceptions.py:214
 #, python-format
 msgid "Workflow finished with failed task(s): %(tasks)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:181
+#: src/horus_runtime/core/workflow/exceptions.py:227
 #, python-format
 msgid "Task '%(task)s' refers to unknown target '%(ref)s'."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:192
+#: src/horus_runtime/core/workflow/exceptions.py:238
 #, python-format
 msgid "Target name '%(name)s' must be lower-case letters, digits, '-' or '_'."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:204
+#: src/horus_runtime/core/workflow/exceptions.py:250
 #, python-format
 msgid "Target '%(name)s' cannot itself be a reference."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:218
+#: src/horus_runtime/core/workflow/exceptions.py:264
 msgid ""
 "Shared targets are not supported inside loop bodies yet; use an inline "
 "target."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/exceptions.py:247
+#: src/horus_runtime/core/workflow/exceptions.py:293
 #, python-format
 msgid ""
 "Output '%(out)s' of '%(task)s' was on machine '%(ref)s' (gen %(g)s), "

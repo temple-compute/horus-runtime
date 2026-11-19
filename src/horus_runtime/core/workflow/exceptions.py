@@ -73,18 +73,64 @@ class TaskIdsAreNotUniqueError(WorkflowError):
 
 class ArtifactIdsAreNotUniqueError(WorkflowError):
     """
-    Raised when two or more tasks in the workflow declare the
-    same artifact ID inside inputs or outputs.
+    Raised when one task declares the same artifact ID twice among its
+    inputs or among its outputs, or two root artifacts share an ID.
     """
 
     def __init__(self, duplicate_id: str):
         super().__init__(
             _(
-                "Multiple tasks declare the same output artifact ID '%(id)s'. "
-                "Output artifact IDs must be unique across all "
-                "tasks in a workflow."
+                "Artifact ID '%(id)s' is declared more than once. Artifact "
+                "IDs must be unique within a task's inputs, within its "
+                "outputs, and among the workflow's root artifacts."
             )
             % {"id": duplicate_id}
+        )
+
+
+class SharedInputOutputIdError(WorkflowError):
+    """
+    Raised when a task uses the same ID for an input and an output. Command
+    substitution keys both by ID, so the output would silently shadow the
+    input.
+    """
+
+    def __init__(self, task_id: str, shared_ids: list[str]):
+        super().__init__(
+            _(
+                "Task '%(task)s' uses %(ids)s as both an input and an output "
+                "ID. Rename one of them."
+            )
+            % {
+                "task": task_id,
+                "ids": ", ".join(f"'{i}'" for i in shared_ids),
+            }
+        )
+
+
+class OverlappingOutputPathsError(WorkflowError):
+    """
+    Raised when two tasks write the same output path, or one writes inside
+    the other's output folder. A folder's digest covers everything under it,
+    so the nested writes would break incremental skipping.
+    """
+
+    def __init__(
+        self, task_id: str, path: str, other_task_id: str, other_path: str
+    ):
+        super().__init__(
+            _(
+                "Task '%(task)s' writes '%(path)s' and task '%(other)s' "
+                "writes '%(other_path)s'. Output paths of different tasks "
+                "cannot be the same or nested. Give each task its own "
+                "output path."
+            )
+            % {
+                "task": task_id,
+                "path": path,
+                "other": other_task_id,
+                "other_path": other_path,
+            }
         )
 
 

@@ -54,6 +54,7 @@ from horus_runtime.core.workflow.base import (
     EdgeSource,
 )
 from horus_runtime.core.workflow.edge import WorkflowEdge
+from horus_runtime.core.workflow.exceptions import SharedInputOutputIdError
 from horus_runtime.core.workflow.status import WorkflowStatus
 
 
@@ -268,8 +269,49 @@ class TestReusableTasks:
                 FileArtifact(id="dup", path=tmp_path / "b.txt"),
             ],
         )
-        with pytest.raises(ValidationError, match="output artifact ID 'dup'"):
+        with pytest.raises(ValidationError, match="Artifact ID 'dup'"):
             HorusWorkflow(name="bad", tasks=[bad])
+
+    def test_input_and_output_sharing_an_id_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """An id cannot be both an input and an output of one task."""
+        bad = _task(
+            task_id="bad",
+            inputs=[FileArtifact(id="data", path=tmp_path / "in.txt")],
+            outputs=[FileArtifact(id="data", path=tmp_path / "out.txt")],
+        )
+        with pytest.raises(
+            ValidationError, match="Task 'bad' uses 'data' as both"
+        ):
+            HorusWorkflow(name="bad", tasks=[bad])
+
+    def test_add_task_rejects_shared_input_output_id(
+        self, tmp_path: Path
+    ) -> None:
+        """The incremental path enforces the same rule."""
+        wf = HorusWorkflow(name="wf", tasks=[])
+        bad = _task(
+            task_id="bad",
+            inputs=[FileArtifact(id="data", path=tmp_path / "in.txt")],
+            outputs=[FileArtifact(id="data", path=tmp_path / "out.txt")],
+        )
+        with pytest.raises(SharedInputOutputIdError):
+            wf.add_task(bad)
+
+    def test_expand_rejects_shared_input_output_id(
+        self, tmp_path: Path
+    ) -> None:
+        """``expand`` enforces it too and leaves the workflow unchanged."""
+        wf = HorusWorkflow(name="wf", tasks=[])
+        bad = _task(
+            task_id="bad",
+            inputs=[FileArtifact(id="data", path=tmp_path / "in.txt")],
+            outputs=[FileArtifact(id="data", path=tmp_path / "out.txt")],
+        )
+        with pytest.raises(SharedInputOutputIdError):
+            wf.expand(tasks=[bad])
+        assert wf.tasks == []
 
 
 @pytest.mark.unit

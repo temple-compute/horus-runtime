@@ -31,6 +31,7 @@ topological (DAG) order, which may differ from the order they are defined.
 """
 
 import asyncio
+import os
 import re
 from abc import abstractmethod
 from asyncio import CancelledError
@@ -97,6 +98,8 @@ from horus_runtime.core.workflow.exceptions import (
     CacheModeError,
     DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
+    OverlappingOutputPathsError,
+    SharedInputOutputIdError,
     SharedTargetError,
     TaskIdsAreNotUniqueError,
     UnknownEdgeEndpointError,
@@ -821,6 +824,24 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 raise ArtifactIdsAreNotUniqueError(artifact.id)
             seen_ids.add(artifact.id)
 
+    @classmethod
+    def _assert_task_artifact_ids(cls, task: BaseTask) -> None:
+        """
+        Raise unless *task*'s output ids and input ids are each unique and
+        no id is both an input and an output. Command substitution keys both
+        sides by id, so a shared id would silently resolve to the output.
+        A task that substitutes no ids (a subworkflow) may share them.
+        Shared by :meth:`check_unique_artifact_ids` and the incremental
+        mutators (:meth:`add_task`, :meth:`expand`).
+        """
+        cls._assert_unique_artifact_ids(task.outputs)
+        cls._assert_unique_artifact_ids(task.inputs)
+        if not task.substitutes_ids:
+            return
+        shared = {a.id for a in task.inputs} & {a.id for a in task.outputs}
+        if shared:
+            raise SharedInputOutputIdError(task.id, sorted(shared))
+
     @model_validator(mode="after")
     def check_unique_task_ids(self) -> Self:
         """
@@ -834,20 +855,91 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def check_unique_artifact_ids(self) -> Self:
         """
         Validates artifact id uniqueness where edge resolution requires it:
-        output ids must be unique *within each task*, and root artifact ids
-        unique among roots. Output ids may repeat across tasks, edges resolve
-        on ``(task id, output id)`` and task ids are unique, so the same
-        reusable task can be placed more than once.
+        output ids and input ids must each be unique *within each task* and
+        never shared between a task's inputs and outputs, and root artifact
+        ids unique among roots. Output ids may repeat across tasks, edges
+        resolve on ``(task id, output id)`` and task ids are unique, so the
+        same reusable task can be placed more than once, as long as each
+        placement writes its own output paths.
         """
         # Root artifacts must have unique ids across the workflow.
         self._assert_unique_artifact_ids(self.artifacts)
 
-        # Output and input artifacts must have unique ids within each task.
+        # Within each task: unique outputs, unique inputs, none shared.
         for task in self.tasks:
-            self._assert_unique_artifact_ids(task.outputs)
-            self._assert_unique_artifact_ids(task.inputs)
+            self._assert_task_artifact_ids(task)
 
         return self
+
+    @staticmethod
+    def _expanded_from(task: BaseTask, owner: BaseTask) -> bool:
+        """
+        Whether *owner* is an expander and *task* one of the tasks it
+        derived: a map clone (``m[0]``), loop iteration (``l#1``), loop
+        checker (``l~1``) or subworkflow child (``s/x``).
+        """
+        mark = task.id[len(owner.id) : len(owner.id) + 1]
+        return task.id.startswith(owner.id) and mark in owner.derived_id_marks
+
+    @model_validator(mode="after")
+    def check_output_paths_disjoint(self) -> Self:
+        """
+        Validates that no two tasks write the same output path, or one
+        inside the other's. A folder's digest covers every file under it, so
+        another task writing into it changes the digest between runs and
+        breaks incremental skipping.
+
+        Allowed: outputs of one task, an expanded task inside its owner's
+        folder (a map slot), and an in-place task whose output path is one
+        of its own input paths.
+        """
+        self._assert_output_paths_disjoint(self.tasks)
+        return self
+
+    @classmethod
+    def _assert_output_paths_disjoint(cls, tasks: list[BaseTask]) -> None:
+        """
+        Raise :exc:`OverlappingOutputPathsError` if two of *tasks* write the
+        same or nested output paths. Shared by
+        :meth:`check_output_paths_disjoint` and :meth:`expand`.
+        """
+
+        def key(artifact: BaseArtifact) -> Path:
+            return Path(
+                os.path.normpath(artifact.declared_path or artifact.path)
+            )
+
+        owners: dict[Path, list[BaseTask]] = {}
+        for task in tasks:
+            for output in task.outputs:
+                owners.setdefault(key(output), []).append(task)
+
+        def related(a: BaseTask, b: BaseTask) -> bool:
+            return (
+                a.id == b.id
+                or cls._expanded_from(a, b)
+                or cls._expanded_from(b, a)
+            )
+
+        def in_place(task: BaseTask, path: Path) -> bool:
+            return any(key(i) == path for i in task.inputs)
+
+        for path, writers in owners.items():
+            for a, b in combinations(writers, 2):
+                shared_ok = (
+                    related(a, b) or in_place(a, path) or in_place(b, path)
+                )
+                if not shared_ok:
+                    raise OverlappingOutputPathsError(
+                        a.id, str(path), b.id, str(path)
+                    )
+            for parent in path.parents:
+                for outer in owners.get(parent, ()):
+                    for inner in writers:
+                        if not related(outer, inner):
+                            raise OverlappingOutputPathsError(
+                                outer.id, str(parent), inner.id, str(path)
+                            )
 
     @staticmethod
     def _assert_edge_target_resolves(
@@ -1049,10 +1141,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 existing task id.
             ArtifactIdsAreNotUniqueError: If two of the task's own inputs, or
                 two of its own outputs, share an id.
+            SharedInputOutputIdError: If an id is both one of the task's
+                inputs and one of its outputs.
         """
         self._assert_unique_task_ids([*self.tasks, task])
-        self._assert_unique_artifact_ids(task.outputs)
-        self._assert_unique_artifact_ids(task.inputs)
+        self._assert_task_artifact_ids(task)
 
         self.tasks.append(task)
         self._anchor_task(task)
@@ -1158,7 +1251,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         Validates, in order: task id uniqueness (kept + new), per-task
         input/output id uniqueness for each new task, root artifact id
-        uniqueness (kept + new), every new edge resolving against the
+        uniqueness (kept + new), disjoint output paths (kept + new), every
+        new edge resolving against the
         combined tasks/artifacts with no duplicate ``(target, target_input)``
         (kept or within the batch), and no cycle anywhere in the resulting
         graph.
@@ -1171,6 +1265,10 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             TaskIdsAreNotUniqueError: If two tasks in the batch share an id.
             ArtifactIdsAreNotUniqueError: If a new task's own inputs/outputs
                 collide, or two new root artifacts share an id.
+            SharedInputOutputIdError: If a new task uses one id as both an
+                input and an output.
+            OverlappingOutputPathsError: If two tasks of the combined graph
+                write the same or nested output paths.
             UnknownEdgeEndpointError: If a new edge's target or source does
                 not resolve against the combined graph.
             DuplicateEdgeTargetError: If a new edge duplicates the
@@ -1209,9 +1307,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         self._assert_unique_task_ids(combined_tasks)
         for task in new_tasks:
-            self._assert_unique_artifact_ids(task.outputs)
-            self._assert_unique_artifact_ids(task.inputs)
+            self._assert_task_artifact_ids(task)
         self._assert_unique_artifact_ids(combined_artifacts)
+        self._assert_output_paths_disjoint(combined_tasks)
 
         task_inputs = {t.id: {a.id for a in t.inputs} for t in combined_tasks}
         task_outputs = {
