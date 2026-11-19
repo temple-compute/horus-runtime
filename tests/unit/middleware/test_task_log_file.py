@@ -180,7 +180,8 @@ async def test_log_is_keyed_by_id_and_keeps_every_attempt(
 ) -> None:
     """
     Two tasks sharing a name get separate files, and a task run twice in one
-    run appends a second "attempt" section instead of overwriting the first.
+    run appends a second "attempt" section instead of overwriting the first,
+    registering its log once.
     """
     monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
 
@@ -193,9 +194,11 @@ async def test_log_is_keyed_by_id_and_keeps_every_attempt(
                 TaskMiddlewareContext(task=task), call_next
             )
 
-    await run(_make_task("a", "same"), "first try")
-    await run(_make_task("a", "same"), "second try")
+    task_a = _make_task("a", "same")
+    await run(task_a, "first try")
+    await run(task_a, "second try")
     await run(_make_task("b", "same"), "other task")
+    assert [a.id for a in task_a.side_artifacts] == ["a_logs"]
 
     log_a = (tmp_path / "a.log").read_text().splitlines()
     assert log_a[0] == "--- attempt 1 ---"
@@ -205,6 +208,13 @@ async def test_log_is_keyed_by_id_and_keeps_every_attempt(
     assert joined.index("--- attempt 2 ---") < joined.index("second try")
     assert "other task" not in joined
     assert "other task" in (tmp_path / "b.log").read_text()
+
+    # A new run (a fresh task object) reusing the directory starts over.
+    await run(_make_task("a", "same"), "next run")
+    log_a = (tmp_path / "a.log").read_text().splitlines()
+    assert log_a[0] == "--- attempt 1 ---"
+    assert "--- attempt 2 ---" not in log_a
+    assert "first try" not in "\n".join(log_a)
 
 
 @pytest.mark.unit

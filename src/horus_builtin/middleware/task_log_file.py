@@ -32,8 +32,6 @@ from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
 R = TypeVar("R")
 
-_ATTEMPT_HEADER = "--- attempt "
-
 
 class _LoguruStream(io.TextIOBase):
     """Forward in-process ``print()``/stdout to loguru, one line at a time.
@@ -71,7 +69,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
     file as a side artifact on the task before it runs (visible to all
     middleware during execution, on success *and* failure).
 
-    The file is appended to, with an "attempt N" header on each run, so a
+    Each run of the task starts with an "attempt N" header. The first
+    attempt of a workflow run truncates the file; later ones append, so a
     task retried within one run keeps the output of every attempt.
     """
 
@@ -94,7 +93,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
         safe_name = ctx.task.id.replace("/", "_").replace("\\", "_")
 
         log_path = logs_dir / f"{safe_name}.log"
-        _write_attempt_header(log_path)
+        ctx.task._log_attempts += 1  # noqa: SLF001
+        _write_attempt_header(log_path, ctx.task._log_attempts)  # noqa: SLF001
 
         # Add the file to the sink (this creates the file on disk). loguru
         # sinks are global, so only accept records emitted while this task is
@@ -124,9 +124,11 @@ class TaskLogFileMiddleware(TaskMiddleware):
         # log is in ``side_artifacts`` when the upload reads it. The file is
         # populated during ``call_next`` (loguru ``enqueue=False`` writes
         # synchronously), so it is non-empty by the time any upload runs.
-        ctx.task.side_artifacts.append(
-            FileArtifact(id=f"{ctx.task.id}_logs", path=log_path)
-        )
+        log_id = f"{ctx.task.id}_logs"
+        if all(a.id != log_id for a in ctx.task.side_artifacts):
+            ctx.task.side_artifacts.append(
+                FileArtifact(id=log_id, path=log_path)
+            )
 
         # Route the task's print()/stdout (and stderr) through loguru so it
         # lands in the per-task log and stays live on the terminal.
@@ -145,12 +147,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
             logger.remove(handler_id)
 
 
-def _write_attempt_header(log_path: Path) -> None:
-    """Append an "attempt N" line, N counted from the headers already there."""
+def _write_attempt_header(log_path: Path, attempt: int) -> None:
+    """Write the "attempt N" line, starting a fresh file on attempt 1."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    attempt = 1
-    if log_path.exists():
-        with log_path.open(encoding="utf-8", errors="replace") as f:
-            attempt += sum(line.startswith(_ATTEMPT_HEADER) for line in f)
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(f"{_ATTEMPT_HEADER}{attempt} ---\n")
+    with log_path.open("w" if attempt == 1 else "a", encoding="utf-8") as f:
+        f.write(f"--- attempt {attempt} ---\n")

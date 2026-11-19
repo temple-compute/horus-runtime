@@ -841,9 +841,10 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             % {"trigger_id": trigger_id}
         )
 
-    # Each run gets its own node-loss budget.
+    # Each run gets its own node-loss budget and starts its logs afresh.
     for task in workflow.tasks:
         task._target_loss_retries = 0  # noqa: SLF001
+        task._log_attempts = 0  # noqa: SLF001
 
     # Ids present before this call began. A composite task that registers
     # its children in the DAG for visibility (e.g. a ``horus_map`` task's
