@@ -26,6 +26,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from horus_builtin.executor.python_exec import PythonExecExecutor
@@ -209,6 +210,29 @@ class TestShellExecutorIntegration:
         with pytest.raises(CommandFailedError) as exc_info:
             await executor.execute(task)
         assert exc_info.value.exit_code == 3
+
+    async def test_stderr_is_logged_at_info(
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
+    ) -> None:
+        """
+        Tool output on stderr is not a warning: it is logged at INFO.
+        """
+        del horus_context
+        levels: dict[str, str] = {}
+        handler_id = logger.add(
+            lambda m: levels.update(
+                {m.record["message"]: m.record["level"].name}
+            ),
+            level="DEBUG",
+        )
+        try:
+            await ShellExecutor().execute(
+                make_shell_task("echo progress-on-stderr 1>&2")
+            )
+        finally:
+            logger.remove(handler_id)
+
+        assert levels["progress-on-stderr"] == "INFO"
 
 
 @pytest.mark.unit

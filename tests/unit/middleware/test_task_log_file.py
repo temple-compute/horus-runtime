@@ -18,6 +18,7 @@
 """Tests for TaskLogFileMiddleware."""
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -112,8 +113,8 @@ async def test_concurrent_tasks_log_only_their_own_lines(
     )
     logger.info("workflow-level line")
 
-    log_a = (tmp_path / "task_a.log").read_text()
-    log_b = (tmp_path / "task_b.log").read_text()
+    log_a = (tmp_path / "a.log").read_text()
+    log_b = (tmp_path / "b.log").read_text()
     assert log_a.count("line from task_a") == 3
     assert log_b.count("line from task_b") == 3
     assert "task_b" not in log_a
@@ -140,7 +141,7 @@ async def test_operator_only_lines_stay_out_of_the_task_log(
             TaskMiddlewareContext(task=task), call_next
         )
 
-    log = (tmp_path / "my_task.log").read_text()
+    log = (tmp_path / f"{task.id}.log").read_text()
     assert "visible line" in log
     assert "123456789012" not in log
 
@@ -168,6 +169,64 @@ async def test_task_log_keeps_tracebacks_without_variable_values(
             TaskMiddlewareContext(task=task), call_next
         )
 
-    log = (tmp_path / f"{task.name}.log").read_text()
+    log = (tmp_path / f"{task.id}.log").read_text()
     assert "ValueError: boom" in log
     assert "s3cr3t-token" not in log
+
+
+@pytest.mark.unit
+async def test_log_is_keyed_by_id_and_keeps_every_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Two tasks sharing a name get separate files, and a task run twice in one
+    run appends a second "attempt" section instead of overwriting the first.
+    """
+    monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+
+    async def run(task: _ConcreteTask, line: str) -> None:
+        async def call_next() -> None:
+            logger.info(line)
+
+        with running_task(task.id):
+            await TaskLogFileMiddleware().wrap(
+                TaskMiddlewareContext(task=task), call_next
+            )
+
+    await run(_make_task("a", "same"), "first try")
+    await run(_make_task("a", "same"), "second try")
+    await run(_make_task("b", "same"), "other task")
+
+    log_a = (tmp_path / "a.log").read_text().splitlines()
+    assert log_a[0] == "--- attempt 1 ---"
+    assert "--- attempt 2 ---" in log_a
+    joined = "\n".join(log_a)
+    assert joined.index("first try") < joined.index("--- attempt 2 ---")
+    assert joined.index("--- attempt 2 ---") < joined.index("second try")
+    assert "other task" not in joined
+    assert "other task" in (tmp_path / "b.log").read_text()
+
+
+@pytest.mark.unit
+async def test_in_process_stderr_is_logged_at_info(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In-process stderr is tool output, not a warning."""
+    monkeypatch.setattr(horus_logger, "log_directory", tmp_path)
+    task = _make_task()
+
+    async def call_next() -> None:
+        sys.stderr.write("progress-on-stderr\n")
+
+    with running_task(task.id):
+        await TaskLogFileMiddleware().wrap(
+            TaskMiddlewareContext(task=task), call_next
+        )
+
+    line = next(
+        ln
+        for ln in (tmp_path / f"{task.id}.log").read_text().splitlines()
+        if "progress-on-stderr" in ln
+    )
+    assert "INFO" in line
+    assert "WARNING" not in line

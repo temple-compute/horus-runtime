@@ -96,7 +96,9 @@ class ShellExecutor(BaseExecutor):
                             line.decode("utf-8", errors="replace").rstrip()
                         )
                     elif stream_name == "stderr":
-                        horus_logger.log.warning(
+                        # Tools write progress to stderr; failure is the
+                        # exit code, not the stream.
+                        horus_logger.log.info(
                             line.decode("utf-8", errors="replace").rstrip()
                         )
         except asyncio.CancelledError:

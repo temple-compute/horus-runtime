@@ -20,6 +20,7 @@
 import io
 from collections.abc import Awaitable, Callable
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import TypeVar
 
 from loguru import logger
@@ -30,6 +31,8 @@ from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
 R = TypeVar("R")
+
+_ATTEMPT_HEADER = "--- attempt "
 
 
 class _LoguruStream(io.TextIOBase):
@@ -64,9 +67,12 @@ class _LoguruStream(io.TextIOBase):
 class TaskLogFileMiddleware(TaskMiddleware):
     """
     Capture the task's loguru output (plus its stdout/stderr) to its own
-    ``<horus_logger.log_directory>/<task.name>.log`` file and register that
+    ``<horus_logger.log_directory>/<task.id>.log`` file and register that
     file as a side artifact on the task before it runs (visible to all
     middleware during execution, on success *and* failure).
+
+    The file is appended to, with an "attempt N" header on each run, so a
+    task retried within one run keeps the output of every attempt.
     """
 
     async def wrap(
@@ -84,9 +90,11 @@ class TaskLogFileMiddleware(TaskMiddleware):
 
         # Create a tmp directory for the task's log file,
         # which will be uploaded as a side artifact.
-        safe_name = ctx.task.name.replace("/", "_").replace("\\", "_")
+        # Keyed by id: names are not unique within a workflow.
+        safe_name = ctx.task.id.replace("/", "_").replace("\\", "_")
 
         log_path = logs_dir / f"{safe_name}.log"
+        _write_attempt_header(log_path)
 
         # Add the file to the sink (this creates the file on disk). loguru
         # sinks are global, so only accept records emitted while this task is
@@ -123,7 +131,8 @@ class TaskLogFileMiddleware(TaskMiddleware):
         # Route the task's print()/stdout (and stderr) through loguru so it
         # lands in the per-task log and stays live on the terminal.
         out_stream = _LoguruStream("INFO")
-        err_stream = _LoguruStream("WARNING")
+        # Tools write progress and chatter to stderr; it is not a warning.
+        err_stream = _LoguruStream("INFO")
 
         # A failure is logged by ``BaseTask.run`` while the task is still
         # current, so it lands in this file before any middleware's cleanup.
@@ -134,3 +143,14 @@ class TaskLogFileMiddleware(TaskMiddleware):
             out_stream.flush()
             err_stream.flush()
             logger.remove(handler_id)
+
+
+def _write_attempt_header(log_path: Path) -> None:
+    """Append an "attempt N" line, N counted from the headers already there."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    attempt = 1
+    if log_path.exists():
+        with log_path.open(encoding="utf-8", errors="replace") as f:
+            attempt += sum(line.startswith(_ATTEMPT_HEADER) for line in f)
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"{_ATTEMPT_HEADER}{attempt} ---\n")
