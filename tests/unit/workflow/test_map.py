@@ -2029,8 +2029,15 @@ class TestDropFailedItems:
         The clone logs the drop at INFO with its code, never a failure, and
         no status push shows it FAILED.
         """
-        del horus_context
-        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3"},
+            runtime=CommandRuntime(
+                command='read w c < $batch; [ "$w" != exit ] || exit $c; '
+                + _BODY
+            ),
+            executor=ShellExecutor(),
+        )
         seen: list[TaskStatus] = []
         original_registry = list(TaskMiddleware.registry)
 
@@ -2047,7 +2054,10 @@ class TestDropFailedItems:
         )
         TaskMiddleware.registry = [*original_registry, RecordingMiddleware]
         try:
-            await wf.run(trigger_id="split")
+            with patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit:
+                await wf.run(trigger_id="split")
         finally:
             TaskMiddleware.registry = original_registry
             logger.remove(sink)
@@ -2055,8 +2065,20 @@ class TestDropFailedItems:
         assert seen == [TaskStatus.SKIPPED]
         assert "INFO Task score[1] dropped its item: exit code 3\n" in records
         assert not [
-            r for r in records if r.startswith("ERROR Task score[1] failed")
+            r
+            for r in records
+            if r.startswith("ERROR")
+            and not r.startswith("ERROR Error publishing event")
         ]
+        messages = [
+            c.args[0].message
+            for c in emit.call_args_list
+            if isinstance(c.args[0], HorusTaskEvent)
+            and c.args[0].task_id == "score[1]"
+            and c.args[0].message
+        ]
+        assert not [m for m in messages if "failed" in m]
+        assert [m for m in messages if "dropped its item after" in m]
 
     async def test_rerun_skips_a_map_that_only_code_dropped(
         self, tmp_path: Path, horus_context: HorusContext

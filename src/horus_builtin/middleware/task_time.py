@@ -27,6 +27,7 @@ from typing import TypeVar
 from horus_builtin.event.task_event import HorusTaskEvent
 from horus_runtime.context import HorusContext
 from horus_runtime.core.task.exceptions import TargetLostError
+from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.i18n import tr as _
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
@@ -64,6 +65,20 @@ class TaskTimeMiddleware(TaskMiddleware):
             if middleware_context.task._retry_on_target_loss:  # noqa: SLF001
                 message = _(
                     "Task %(task_name)s lost its machine after "
+                    "%(elapsed).2f seconds."
+                )
+            raise
+        except Exception:
+            # `BaseTask.run` recorded the outcome inside this chain.
+            task = middleware_context.task
+            if task.skip_reason is SkipReason.DROPPED:
+                message = _(
+                    "Task %(task_name)s dropped its item after "
+                    "%(elapsed).2f seconds."
+                )
+            elif task.status is TaskStatus.PENDING:
+                message = _(
+                    "Task %(task_name)s exited with a retried code after "
                     "%(elapsed).2f seconds."
                 )
             raise
