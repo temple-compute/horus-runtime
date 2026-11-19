@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-19 23:01+0100\n"
+"POT-Creation-Date: 2026-11-19 23:18+0100\n"
 "PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
@@ -458,12 +458,13 @@ msgstr ""
 "Añadir una arista de '%(source)s.%(source_output)s' a "
 "'%(target)s.%(target_input)s' crearía un ciclo."
 
-#: src/horus_runtime/core/workflow/base.py:1567
+#: src/horus_runtime/core/workflow/base.py:1545
+#: src/horus_runtime/core/workflow/base.py:1576
 #, python-format
 msgid "An input transfer of %(task_name)s was cancelled."
 msgstr "Se canceló una transferencia de entrada de %(task_name)s."
 
-#: src/horus_runtime/core/workflow/base.py:1648
+#: src/horus_runtime/core/workflow/base.py:1657
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
@@ -472,34 +473,34 @@ msgstr ""
 "Transfiriendo el artefacto '%(id)s' de '%(src)s' a '%(dst)s' mediante "
 "%(strategy)s."
 
-#: src/horus_runtime/core/workflow/base.py:1856
+#: src/horus_runtime/core/workflow/base.py:1865
 #, python-format
 msgid "Task %(task_name)s fingerprints its inputs in %(mode)s cache mode."
 msgstr ""
 "La tarea %(task_name)s calcula la huella de sus entradas en modo de caché"
 " %(mode)s."
 
-#: src/horus_runtime/core/workflow/base.py:2144
+#: src/horus_runtime/core/workflow/base.py:2153
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → RUNNING"
 
-#: src/horus_runtime/core/workflow/base.py:2164
+#: src/horus_runtime/core/workflow/base.py:2173
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → CANCELED"
 
-#: src/horus_runtime/core/workflow/base.py:2171
+#: src/horus_runtime/core/workflow/base.py:2180
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → FAILED"
 
-#: src/horus_runtime/core/workflow/base.py:2178
+#: src/horus_runtime/core/workflow/base.py:2187
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → COMPLETED"
 
-#: src/horus_runtime/core/workflow/base.py:2202
+#: src/horus_runtime/core/workflow/base.py:2211
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr "Reiniciando el flujo de trabajo %(workflow_name)s."

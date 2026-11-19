@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-19 23:01+0100\n"
+"POT-Creation-Date: 2026-11-19 23:18+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -419,44 +419,45 @@ msgid ""
 "'%(target)s.%(target_input)s' would create a cycle."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1567
+#: src/horus_runtime/core/workflow/base.py:1545
+#: src/horus_runtime/core/workflow/base.py:1576
 #, python-format
 msgid "An input transfer of %(task_name)s was cancelled."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1648
+#: src/horus_runtime/core/workflow/base.py:1657
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
 "%(strategy)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1856
+#: src/horus_runtime/core/workflow/base.py:1865
 #, python-format
 msgid "Task %(task_name)s fingerprints its inputs in %(mode)s cache mode."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2144
+#: src/horus_runtime/core/workflow/base.py:2153
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2164
+#: src/horus_runtime/core/workflow/base.py:2173
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2171
+#: src/horus_runtime/core/workflow/base.py:2180
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2178
+#: src/horus_runtime/core/workflow/base.py:2187
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2202
+#: src/horus_runtime/core/workflow/base.py:2211
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr ""
