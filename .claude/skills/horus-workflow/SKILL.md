@@ -118,7 +118,11 @@ Compatible pairings: `command`/`python_script` runtime ↔ `shell` executor;
   `IncompleteEdgeError`.
 - **Artifact ids:** unique among root artifacts; unique *within* each task's
   inputs and among its outputs (may repeat across tasks). Edge endpoints resolve
-  on `(task_id, artifact_id)`.
+  on `(task_id, artifact_id)`. An id cannot be both an input and an output of
+  one task.
+- **Output paths:** outputs of different tasks cannot be the same path or one
+  inside the other. An in-place task (output path = one of its own input paths)
+  is allowed.
 - **The id `task` is reserved** in command substitution (`${task.name}`); don't
   name an artifact `task`.
 - **`print()` is banned** by the repo's ruff config (T201). In Python function
