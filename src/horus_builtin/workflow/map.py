@@ -60,6 +60,7 @@ from horus_runtime.core.task.base import (
     InputDigests,
 )
 from horus_runtime.core.task.exceptions import (
+    SelfCancelledError,
     TargetLostError,
     TaskExecutionError,
     drop_code,
@@ -972,19 +973,41 @@ class MapTask(HorusTask):
         """
         slot = clone.id[len(self.id) + 1 : -1]
         try:
-            for wait in waits.get(slot, []):
-                item = await wait()
-                if item.state == "dropped":
-                    self._mark_upstream_dropped(clone, slot, str(item.origin))
-                    stream.dropped(slot, str(item.origin), item.reason)
-                    return None
-                if item.state == "failed":
-                    stream.failed()
-                    # shortcut: parked until the scheduler cancels this map
-                    # (its source is failing); revisit if a source can fail
-                    # without raising.
-                    await asyncio.get_running_loop().create_future()
-            await run_task(clone)
+            try:
+                for wait in waits.get(slot, []):
+                    item = await wait()
+                    if item.state == "dropped":
+                        self._mark_upstream_dropped(
+                            clone, slot, str(item.origin)
+                        )
+                        stream.dropped(slot, str(item.origin), item.reason)
+                        return None
+                    if item.state == "failed":
+                        stream.failed()
+                        # shortcut: parked until the scheduler cancels this
+                        # map (its source is failing); revisit if a source
+                        # can fail without raising.
+                        await asyncio.get_running_loop().create_future()
+                await run_task(clone)
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is None or current.cancelling():
+                    raise
+                # No cancel request: the clone failed, or the run would
+                # read as cancelled.
+                error = SelfCancelledError(
+                    _("%(task_name)s was cancelled.")
+                    % {"task_name": clone.name}
+                )
+                clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
+                HorusContext.get_context().bus.emit(
+                    HorusTaskEvent(
+                        task_id=clone.id,
+                        task_name=clone.name,
+                        message=str(error),
+                    )
+                )
+                raise error from None
         except Exception as exc:
             # The clone recorded the drop itself (`_drop_exit_codes`).
             code = self._drop_code(exc)

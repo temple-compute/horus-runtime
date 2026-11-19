@@ -25,6 +25,7 @@ Artifact transfer events.
 exactly one workflow edge, so a UI can animate the data moving along it.
 """
 
+import asyncio
 import datetime
 import time
 import uuid
@@ -123,8 +124,9 @@ def transfer_scope(template: TransferEvent) -> Iterator[None]:
     """
     Emit ``started`` for *template*, route :func:`report_transfer_progress`
     calls inside the block to it, then emit ``finished`` (or ``failed`` when
-    the block raises, re-raising). A cancellation is not a failure: it emits
-    nothing more, and a UI drops the open transfer when the run ends.
+    the block raises, re-raising). A cancel request is not a failure: it
+    emits nothing more, and a UI drops the open transfer when the run ends.
+    A transfer that cancelled itself fails its task, so it emits ``failed``.
     """
     emit_transfer_event(_derive(template, {"phase": "started"}))
     token = _current_transfer.set(_TransferScope(template))
@@ -132,6 +134,11 @@ def transfer_scope(template: TransferEvent) -> Iterator[None]:
         yield
     except Exception:
         emit_transfer_event(_derive(template, {"phase": "failed"}))
+        raise
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and not current.cancelling():
+            emit_transfer_event(_derive(template, {"phase": "failed"}))
         raise
     finally:
         _current_transfer.reset(token)

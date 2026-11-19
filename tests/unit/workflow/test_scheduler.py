@@ -25,7 +25,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Generator
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -64,6 +64,7 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask, InputDigests, TaskRetry
 from horus_runtime.core.task.exceptions import (
     CommandFailedError,
+    SelfCancelledError,
     TargetLostError,
     TaskExecutionError,
 )
@@ -2391,6 +2392,61 @@ class TestRecordFailure:
         # (`cast`: mypy keeps the SKIPPED narrowing across the call.)
         assert cast(TaskStatus, task.status) == TaskStatus.FAILED
         assert task.error == "RuntimeError: upload failed"
+
+
+@pytest.mark.unit
+class TestSelfCancelledTask:
+    """A task that cancelled itself fails; the run is not cancelled."""
+
+    @pytest.mark.parametrize(
+        ("policy", "raised"),
+        [
+            ("fail_fast", SelfCancelledError),
+            ("continue", WorkflowExecutionError),
+        ],
+    )
+    async def test_a_self_cancelled_task_fails_the_run(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        policy: str,
+        raised: type[Exception],
+    ) -> None:
+        """The task ends FAILED and its dependent is blocked, not stalled."""
+        del horus_context
+        a = _task(
+            "a",
+            tmp_path=tmp_path,
+            outputs=[FileArtifact(id="out", path=tmp_path / "a.txt")],
+        )
+        b = _task(
+            "b",
+            tmp_path=tmp_path,
+            inputs=[FileArtifact(id="in", path=tmp_path / "b.txt")],
+        )
+        wf = HorusWorkflow(
+            name="self_cancel",
+            tasks=[a, b],
+            edges=[_edge("a", "out", "b", "in")],
+        )
+        wf.failure_policy = cast(Any, policy)
+
+        async def execute(_wf: object, task: BaseTask, **_: object) -> None:
+            # As `BaseTask.run` records a cancel.
+            task._finish(TaskStatus.CANCELED)
+            raise asyncio.CancelledError
+
+        with (
+            patch.object(scheduler_mod, "execute_task", execute),
+            pytest.raises(raised),
+        ):
+            await asyncio.wait_for(wf.run(trigger_id="a"), timeout=10)
+
+        assert a.status == TaskStatus.FAILED
+        assert a.error is not None
+        assert "a was cancelled" in a.error
+        assert b.status != TaskStatus.COMPLETED
+        assert wf.status == WorkflowStatus.FAILED
 
 
 class _StreamSource(_PassTask):

@@ -82,6 +82,7 @@ from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask, TaskRetry
 from horus_runtime.core.task.exceptions import (
     CommandFailedError,
+    SelfCancelledError,
     TargetLostError,
     TaskExecutionError,
     exception_leaves,
@@ -1005,6 +1006,83 @@ class TestCloneFailure:
         }
         assert map_task.status == TaskStatus.FAILED
         assert wf.status.value == "failed"
+
+    @pytest.mark.parametrize(
+        ("policy", "raised"),
+        [("fail_fast", ExceptionGroup), ("continue", WorkflowExecutionError)],
+    )
+    async def test_a_self_cancelled_clone_fails_the_map(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        policy: str,
+        raised: type[Exception],
+    ) -> None:
+        """
+        A clone cancelled with no cancel request fails, like any clone
+        error: the map and the run fail, not read as cancelled.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.failure_policy = cast(Any, policy)
+        real = execute_task
+
+        async def execute(
+            workflow: BaseWorkflow, task: BaseTask, **kwargs: Any
+        ) -> None:
+            if task.id == "score[1]":
+                raise asyncio.CancelledError
+            await real(workflow, task, **kwargs)
+
+        with (
+            patch("horus_builtin.workflow.map.execute_task", execute),
+            pytest.raises(raised) as info,
+        ):
+            await wf.run(trigger_id="split")
+
+        if policy == "fail_fast":
+            leaves = exception_leaves(info.value)
+            assert [type(leaf) for leaf in leaves] == [SelfCancelledError]
+        assert map_task.status == TaskStatus.FAILED
+        assert map_task.error is not None
+        assert "score[1] was cancelled" in map_task.error
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.status == TaskStatus.FAILED
+        assert wf.status.value == "failed"
+
+    @pytest.mark.parametrize("policy", ["fail_fast", "continue"])
+    async def test_cancelling_the_run_cancels_a_running_clone(
+        self, tmp_path: Path, horus_context: HorusContext, policy: str
+    ) -> None:
+        """A cancel request while a clone runs stays a cancel."""
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command="sleep 5",
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.failure_policy = cast(Any, policy)
+
+        run = asyncio.create_task(wf.run(trigger_id="split"))
+        while map_task.status != TaskStatus.RUNNING:
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.2)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=3)
+
+        assert wf.status.value == "canceled"
+        # (`cast`: mypy keeps the RUNNING narrowing across the awaits.)
+        assert cast(TaskStatus, map_task.status) == TaskStatus.CANCELED
 
 
 @pytest.mark.unit
