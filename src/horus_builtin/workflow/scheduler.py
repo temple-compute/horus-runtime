@@ -50,6 +50,7 @@ from horus_runtime.core.task.base import (
     InputDigests,
 )
 from horus_runtime.core.task.exceptions import (
+    SelfCancelledError,
     TargetLostError,
     drop_code,
     exception_leaves,
@@ -402,7 +403,8 @@ async def _wait_retry(task: "BaseTask", exc: Exception) -> None:
 def _record_failure(task: "BaseTask", exc: Exception) -> None:
     """
     Mark *task* FAILED with *exc*, unless it already recorded an outcome
-    (failed, canceled, or dropped by a map's drop code).
+    (failed, canceled, or dropped by a map's drop code). A task that
+    cancelled itself recorded CANCELED; it fails here.
 
     Middleware, target acquisition, binding and artifact transfer all run
     outside `BaseTask.run`, which is the only place that records FAILED and
@@ -410,7 +412,13 @@ def _record_failure(task: "BaseTask", exc: Exception) -> None:
     BaseException and deliberately never passed here: the dispatch path
     already records CANCELED.
     """
-    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED) or (
+    if (
+        task.status is TaskStatus.FAILED
+        or (
+            task.status is TaskStatus.CANCELED
+            and not isinstance(exc, SelfCancelledError)
+        )
+    ) or (
         task.status is TaskStatus.SKIPPED
         and drop_code(exc, task._drop_exit_codes) is not None  # noqa: SLF001
     ):
@@ -579,6 +587,7 @@ async def _execute_ready_task(
 
 
 def _collect_completions(
+    workflow: BaseWorkflow,
     done: set[asyncio.Task[None]],
     running: dict[asyncio.Task[None], str],
     completed: set[str],
@@ -597,6 +606,16 @@ def _collect_completions(
     for fut in sorted(done, key=lambda f: running[f]):
         task_id = running.pop(fut)
         if fut.cancelled():
+            # Every cancel here pops its wrapper first: this one cancelled
+            # itself. Fail it, or the run reads as cancelled and its
+            # dependents never run.
+            task = next(t for t in workflow.tasks if t.id == task_id)
+            error = SelfCancelledError(
+                _("Task %(task_name)s was cancelled.")
+                % {"task_name": task.name}
+            )
+            _record_failure(task, error)
+            failures.append((task_id, error))
             continue
         exc = fut.exception()
         if exc is not None:
@@ -1071,7 +1090,10 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             raise
 
         failures = _collect_completions(
-            {fut for fut in done if fut in running}, running, completed
+            workflow,
+            {fut for fut in done if fut in running},
+            running,
+            completed,
         )
         if failures and workflow.failure_policy == "fail_fast":
             await _cancel_running(running)
