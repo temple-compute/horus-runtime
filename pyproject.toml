@@ -51,6 +51,7 @@ string = "horus_builtin.artifact.string"
 choice = "horus_builtin.artifact.choice"
 multichoice = "horus_builtin.artifact.multichoice"
 list = "horus_builtin.artifact.list"
+structure = "horus_builtin.artifact.structure"
 
 [project.entry-points."horus.executor"]
 shell = "horus_builtin.executor.shell"
@@ -79,6 +80,7 @@ command = "horus_builtin.runtime.command"
 python_string = "horus_builtin.runtime.python_string"
 python = "horus_builtin.runtime.python"
 python_script = "horus_builtin.runtime.python_script"
+r_script = "horus_builtin.runtime.r_script"
 
 [project.entry-points."horus.subscriber"]
 log_event_subscriber = "horus_builtin.event.log_subscriber"

@@ -20,6 +20,7 @@
 import io
 from collections.abc import Awaitable, Callable
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import TypeVar
 
 from loguru import logger
@@ -64,9 +65,13 @@ class _LoguruStream(io.TextIOBase):
 class TaskLogFileMiddleware(TaskMiddleware):
     """
     Capture the task's loguru output (plus its stdout/stderr) to its own
-    ``<horus_logger.log_directory>/<task.name>.log`` file and register that
+    ``<horus_logger.log_directory>/<task.id>.log`` file and register that
     file as a side artifact on the task before it runs (visible to all
     middleware during execution, on success *and* failure).
+
+    Each run of the task starts with an "attempt N" header. The first
+    attempt of a workflow run truncates the file; later ones append, so a
+    task retried within one run keeps the output of every attempt.
     """
 
     async def wrap(
@@ -84,9 +89,12 @@ class TaskLogFileMiddleware(TaskMiddleware):
 
         # Create a tmp directory for the task's log file,
         # which will be uploaded as a side artifact.
-        safe_name = ctx.task.name.replace("/", "_").replace("\\", "_")
+        # Keyed by id: names are not unique within a workflow.
+        safe_name = ctx.task.id.replace("/", "_").replace("\\", "_")
 
         log_path = logs_dir / f"{safe_name}.log"
+        ctx.task._log_attempts += 1  # noqa: SLF001
+        _write_attempt_header(log_path, ctx.task._log_attempts)  # noqa: SLF001
 
         # Add the file to the sink (this creates the file on disk). loguru
         # sinks are global, so only accept records emitted while this task is
@@ -116,14 +124,17 @@ class TaskLogFileMiddleware(TaskMiddleware):
         # log is in ``side_artifacts`` when the upload reads it. The file is
         # populated during ``call_next`` (loguru ``enqueue=False`` writes
         # synchronously), so it is non-empty by the time any upload runs.
-        ctx.task.side_artifacts.append(
-            FileArtifact(id=f"{ctx.task.id}_logs", path=log_path)
-        )
+        log_id = f"{ctx.task.id}_logs"
+        if all(a.id != log_id for a in ctx.task.side_artifacts):
+            ctx.task.side_artifacts.append(
+                FileArtifact(id=log_id, path=log_path)
+            )
 
         # Route the task's print()/stdout (and stderr) through loguru so it
         # lands in the per-task log and stays live on the terminal.
         out_stream = _LoguruStream("INFO")
-        err_stream = _LoguruStream("WARNING")
+        # Tools write progress and chatter to stderr; it is not a warning.
+        err_stream = _LoguruStream("INFO")
 
         # A failure is logged by ``BaseTask.run`` while the task is still
         # current, so it lands in this file before any middleware's cleanup.
@@ -134,3 +145,10 @@ class TaskLogFileMiddleware(TaskMiddleware):
             out_stream.flush()
             err_stream.flush()
             logger.remove(handler_id)
+
+
+def _write_attempt_header(log_path: Path, attempt: int) -> None:
+    """Write the "attempt N" line, starting a fresh file on attempt 1."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w" if attempt == 1 else "a", encoding="utf-8") as f:
+        f.write(f"--- attempt {attempt} ---\n")

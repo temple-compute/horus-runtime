@@ -26,12 +26,14 @@ and the whole point of this executor is that the work leaves the process.
 import json
 import os
 import pickle
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from loguru import logger
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
@@ -130,6 +132,27 @@ class TestExternalPythonFunctionExecutor:
         await task.executor.execute(task)
 
         assert target_file.read_text() == "42"
+
+    async def test_stderr_is_logged_at_info(self, tmp_path: Path) -> None:
+        """Tool output on stderr is not a warning: it is logged at INFO."""
+
+        def work() -> None:
+            print("progress-on-stderr", file=sys.stderr)  # noqa: T201
+
+        levels: dict[str, str] = {}
+        handler_id = logger.add(
+            lambda m: levels.update(
+                {m.record["message"]: m.record["level"].name}
+            ),
+            level="DEBUG",
+        )
+        try:
+            task = make_task(tmp_path, work)
+            await task.executor.execute(task)
+        finally:
+            logger.remove(handler_id)
+
+        assert levels["progress-on-stderr"] == "INFO"
 
     async def test_failure_surfaces_remote_traceback(
         self, tmp_path: Path

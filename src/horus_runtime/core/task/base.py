@@ -316,6 +316,9 @@ class BaseTask(AutoRegistry, entry_point="task"):
     _target_loss_retries: int = PrivateAttr(default=0)
     """Re-runs spent on :class:`TargetLostError`, up to the max."""
 
+    _log_attempts: int = PrivateAttr(default=0)
+    """Runs of this task in the current workflow run, for its log file."""
+
     _staged_digests: dict[str, str] | None = PrivateAttr(default=None)
     """
     Set by the scheduler for one run: the digests of the non-pinned inputs

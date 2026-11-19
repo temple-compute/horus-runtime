@@ -515,7 +515,7 @@ class TestBaseTaskRun:
 
             async def after(self, context: TaskMiddlewareContext) -> None:
                 uploaded.append(
-                    (tmp_path / f"{context.task.name}.log").read_text()
+                    (tmp_path / f"{context.task.id}.log").read_text()
                 )
 
         TaskMiddleware.registry = [TaskLogFileMiddleware, UploadingMiddleware]

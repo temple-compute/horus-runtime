@@ -39,11 +39,13 @@ class CommandFailedError(TaskExecutionError):
     """
     The task's command ran and exited non-zero. Never retried; a map reads
     :attr:`exit_code` to drop an item, never the (translated) message.
+    :attr:`output` holds the last lines the command wrote to stderr.
     """
 
-    def __init__(self, message: str, exit_code: int) -> None:
+    def __init__(self, message: str, exit_code: int, output: str = "") -> None:
         super().__init__(message)
         self.exit_code = exit_code
+        self.output = output
 
     def __reduce__(
         self,
