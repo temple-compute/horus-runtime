@@ -51,6 +51,7 @@ from horus_runtime.core.task.base import (
 )
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
+    drop_code,
     exception_leaves,
     summarize_exception,
 )
@@ -411,7 +412,7 @@ def _record_failure(task: "BaseTask", exc: Exception) -> None:
     """
     if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED) or (
         task.status is TaskStatus.SKIPPED
-        and task.skip_reason is SkipReason.DROPPED
+        and drop_code(exc, task._drop_exit_codes) is not None  # noqa: SLF001
     ):
         return
     task.status = TaskStatus.FAILED

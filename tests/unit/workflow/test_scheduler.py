@@ -2367,6 +2367,32 @@ class TestRetryOnExitCode:
         assert task.status == TaskStatus.FAILED
 
 
+@pytest.mark.unit
+class TestRecordFailure:
+    """``_record_failure`` keeps an outcome the task already recorded."""
+
+    def test_only_the_drop_keeps_a_dropped_clone(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The drop itself leaves a dropped clone alone; another error raised
+        after it (e.g. by a middleware) fails it.
+        """
+        del horus_context
+        task = _task("t", tmp_path=tmp_path)
+        task._drop_exit_codes = frozenset({3})
+        task.status = TaskStatus.SKIPPED
+        task.skip_reason = SkipReason.DROPPED
+
+        scheduler_mod._record_failure(task, CommandFailedError("exit 3", 3))
+        assert task.status == TaskStatus.SKIPPED
+
+        scheduler_mod._record_failure(task, RuntimeError("upload failed"))
+        # (`cast`: mypy keeps the SKIPPED narrowing across the call.)
+        assert cast(TaskStatus, task.status) == TaskStatus.FAILED
+        assert task.error == "RuntimeError: upload failed"
+
+
 class _StreamSource(_PassTask):
     """
     Opens its stream as it starts, then ends once a consumer sets
