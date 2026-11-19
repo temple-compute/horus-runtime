@@ -892,14 +892,7 @@ class MapTask(HorusTask):
                 # the rest.
                 async with asyncio.TaskGroup() as tg:
                     runs = [tg.create_task(run_clone(c)) for c in clones]
-                # A group ignores a clone that cancelled itself: settled
-                # below, not raised here.
-                results = [
-                    asyncio.CancelledError()
-                    if run.cancelled()
-                    else run.result()
-                    for run in runs
-                ]
+                results = [run.result() for run in runs]
             self._fan_out = None
             early = await asyncio.gather(
                 *self._early_reruns.values(), return_exceptions=True
@@ -980,19 +973,41 @@ class MapTask(HorusTask):
         """
         slot = clone.id[len(self.id) + 1 : -1]
         try:
-            for wait in waits.get(slot, []):
-                item = await wait()
-                if item.state == "dropped":
-                    self._mark_upstream_dropped(clone, slot, str(item.origin))
-                    stream.dropped(slot, str(item.origin), item.reason)
-                    return None
-                if item.state == "failed":
-                    stream.failed()
-                    # shortcut: parked until the scheduler cancels this map
-                    # (its source is failing); revisit if a source can fail
-                    # without raising.
-                    await asyncio.get_running_loop().create_future()
-            await run_task(clone)
+            try:
+                for wait in waits.get(slot, []):
+                    item = await wait()
+                    if item.state == "dropped":
+                        self._mark_upstream_dropped(
+                            clone, slot, str(item.origin)
+                        )
+                        stream.dropped(slot, str(item.origin), item.reason)
+                        return None
+                    if item.state == "failed":
+                        stream.failed()
+                        # shortcut: parked until the scheduler cancels this
+                        # map (its source is failing); revisit if a source
+                        # can fail without raising.
+                        await asyncio.get_running_loop().create_future()
+                await run_task(clone)
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is None or current.cancelling():
+                    raise
+                # No cancel request: the clone failed, or the run would
+                # read as cancelled.
+                error = SelfCancelledError(
+                    _("%(task_name)s was cancelled.")
+                    % {"task_name": clone.name}
+                )
+                clone._finish(TaskStatus.FAILED, error)  # noqa: SLF001
+                HorusContext.get_context().bus.emit(
+                    HorusTaskEvent(
+                        task_id=clone.id,
+                        task_name=clone.name,
+                        message=str(error),
+                    )
+                )
+                raise error from None
         except Exception as exc:
             # The clone recorded the drop itself (`_drop_exit_codes`).
             code = self._drop_code(exc)
@@ -1331,19 +1346,10 @@ class MapTask(HorusTask):
         nothing downstream sees it, and report the drop.
         """
         errors = [r for r in results if isinstance(r, BaseException)]
-        cancelled = [
-            e for e in errors if isinstance(e, asyncio.CancelledError)
-        ]
-        if cancelled:
-            # A cancel request on this map stays a cancel; a clone that
-            # cancelled itself fails the map, or the run reads as cancelled.
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
-                raise cancelled[0]
-            raise SelfCancelledError(
-                _("%(n)d item(s) of %(name)s were cancelled.")
-                % {"n": len(cancelled), "name": self.name}
-            ) from cancelled[0]
+        # A cancelled clone is a cancel, not a failure: never group it.
+        for error in errors:
+            if isinstance(error, asyncio.CancelledError):
+                raise error
         upstream = self._upstream_dropped
         if not errors and not upstream:
             return
