@@ -636,6 +636,11 @@ class TestTaskRetry:
         with pytest.raises(ValidationError):
             TaskRetry(backoff_s=-1)
 
+    def test_unknown_keys_are_rejected(self) -> None:
+        """A misspelled key fails instead of silently never retrying."""
+        with pytest.raises(ValidationError):
+            TaskRetry.model_validate({"max_retries": 2})
+
     def test_round_trips_through_a_dump(self) -> None:
         """``retry`` is a plain task field, absent by default."""
         task = _make_concrete_task()

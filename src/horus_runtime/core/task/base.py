@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     PrivateAttr,
     SerializationInfo,
@@ -85,6 +86,8 @@ class TaskRetry(BaseModel):
     Run a task again when its command exits non-zero. A map's ``retry``
     applies to each item on its own.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     max: int = Field(default=0, ge=0, le=10)
     """Attempts after the first."""
@@ -641,7 +644,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         """
         code = drop_code(exc, self._drop_exit_codes)
         if code is not None:
-            # Once: the outer handler in `run` sees the same exception.
+            # Set by the inner handler; the outer one in `run` sees the same
+            # exception.
             if self.skip_reason is not SkipReason.DROPPED:
                 self.status = TaskStatus.SKIPPED
                 self.skip_reason = SkipReason.DROPPED
