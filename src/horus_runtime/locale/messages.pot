@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-19 21:55+0100\n"
+"POT-Creation-Date: 2026-11-19 22:29+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -325,58 +325,68 @@ msgid ""
 " use a target that derives it automatically."
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:98
+#: src/horus_runtime/core/task/base.py:99
 msgid "Horus base task"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:220
+#: src/horus_runtime/core/task/base.py:235
 #, python-format
 msgid "Secret %(name)s: %(error)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:440
+#: src/horus_runtime/core/task/base.py:464
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
 "Expected one of: %(expected)s"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:493
+#: src/horus_runtime/core/task/base.py:519
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:577
+#: src/horus_runtime/core/task/base.py:587
+#, python-format
+msgid "Dropped: exit code %(code)d"
+msgstr ""
+
+#: src/horus_runtime/core/task/base.py:590
+#, python-format
+msgid "Task %(task_name)s dropped its item: exit code %(code)d"
+msgstr ""
+
+#: src/horus_runtime/core/task/base.py:620
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:580
+#: src/horus_runtime/core/task/base.py:623
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:581
+#: src/horus_runtime/core/task/base.py:624
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:582
+#: src/horus_runtime/core/task/base.py:625
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:649
+#: src/horus_runtime/core/task/base.py:692
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:658
+#: src/horus_runtime/core/task/base.py:701
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr ""
 
-#: src/horus_runtime/core/task/base.py:677
+#: src/horus_runtime/core/task/base.py:720
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr ""
@@ -398,50 +408,50 @@ msgid ""
 "provided root artifacts."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:184
+#: src/horus_runtime/core/workflow/base.py:185
 msgid "Horus base workflow"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1184
+#: src/horus_runtime/core/workflow/base.py:1199
 #, python-format
 msgid ""
 "Adding edge from '%(source)s.%(source_output)s' to "
 "'%(target)s.%(target_input)s' would create a cycle."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1621
+#: src/horus_runtime/core/workflow/base.py:1640
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
 "%(strategy)s."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:1829
+#: src/horus_runtime/core/workflow/base.py:1848
 #, python-format
 msgid "Task %(task_name)s fingerprints its inputs in %(mode)s cache mode."
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2117
+#: src/horus_runtime/core/workflow/base.py:2136
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2137
+#: src/horus_runtime/core/workflow/base.py:2156
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2144
+#: src/horus_runtime/core/workflow/base.py:2163
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2151
+#: src/horus_runtime/core/workflow/base.py:2170
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr ""
 
-#: src/horus_runtime/core/workflow/base.py:2175
+#: src/horus_runtime/core/workflow/base.py:2194
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr ""

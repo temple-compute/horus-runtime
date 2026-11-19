@@ -62,7 +62,7 @@ from horus_runtime.core.task.base import (
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
     TaskExecutionError,
-    exception_leaves,
+    drop_code,
 )
 from horus_runtime.core.task.status import SkipReason, TaskStatus
 from horus_runtime.core.workflow.base import BaseWorkflow, EdgeSource
@@ -305,12 +305,19 @@ class MapTask(HorusTask):
     drop_exit_codes: list[int] = Field(default_factory=list)
     """
     Exit codes that drop the item instead of failing it, whatever
-    :attr:`on_item_failure` says. The clone ends SKIPPED with
-    ``skip_reason: dropped``.
+    :attr:`on_item_failure` says, and are never retried. The clone ends
+    SKIPPED with ``skip_reason: dropped``, and stays dropped on later runs
+    until an input, the command or these codes change.
     """
 
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
     """Slots dropped by the current execution."""
+
+    _retry_slots: list[str] = PrivateAttr(default_factory=list)
+    """
+    Slots of the current execution dropped by a failure, not an exit code:
+    the next run tries them again.
+    """
 
     _staged_dirs: list[str] = PrivateAttr(default_factory=list)
     """The output root and slot dirs of the current execution."""
@@ -615,6 +622,7 @@ class MapTask(HorusTask):
             )
 
         self._dropped_slots = []
+        self._retry_slots = []
         self._upstream_dropped = {}
         self._streamed_digests = None
         streams = {
@@ -978,13 +986,9 @@ class MapTask(HorusTask):
                     await asyncio.get_running_loop().create_future()
             await run_task(clone)
         except Exception as exc:
+            # The clone recorded the drop itself (`_drop_exit_codes`).
             code = self._drop_code(exc)
             if code is not None:
-                # shortcut: set after the run raised, so a snapshot can show
-                # FAILED for one push; mark it inside the run if that matters.
-                clone.status = TaskStatus.SKIPPED
-                clone.skip_reason = SkipReason.DROPPED
-                clone.error = _("Dropped: exit code %(code)d") % {"code": code}
                 stream.dropped(
                     slot, self.id, _("exit code %(code)d") % {"code": code}
                 )
@@ -1124,12 +1128,7 @@ class MapTask(HorusTask):
         The exit code that drops the item *exc* failed, when every leaf of
         *exc* exited with one of :attr:`drop_exit_codes`; else ``None``.
         """
-        codes = [
-            getattr(leaf, "exit_code", None) for leaf in exception_leaves(exc)
-        ]
-        if codes and all(code in self.drop_exit_codes for code in codes):
-            return codes[0]
-        return None
+        return drop_code(exc, self.drop_exit_codes)
 
     def _droppable(self, exc: BaseException) -> bool:
         """Whether a clone failing with *exc* drops its item."""
@@ -1354,6 +1353,11 @@ class MapTask(HorusTask):
                 % {"n": len(clones), "name": self.name}
             ) from cause
 
+        self._retry_slots = [
+            slot
+            for slot, result in zip(labels, results, strict=True)
+            if result is not None and self._drop_code(result) is None
+        ]
         lines: list[str] = []
         dropped: list[dict[str, str]] = []
         for (slot, label), clone, result in zip(
@@ -1450,12 +1454,14 @@ class MapTask(HorusTask):
 
     async def _write_manifest(self, fingerprint: TaskFingerprint) -> None:
         """
-        Record *fingerprint*, unless items were dropped: then remove any
-        earlier manifest instead, so the next run re-enters the map and
-        retries the dropped items (the others skip on their own manifests).
+        Record *fingerprint*, unless an item was dropped by a failure: then
+        remove any earlier manifest instead, so the next run re-enters the
+        map and retries it (the others skip on their own manifests). An
+        exit-code drop is the item's outcome, recorded with the rest;
+        upstream drops follow their origin.
         """
         streamed = self._streamed_digests
-        if self._dropped_slots or (
+        if self._retry_slots or (
             streamed is not None and None in streamed.values()
         ):
             # A streamed source that cannot be digested is a miss.
@@ -1596,6 +1602,10 @@ class MapTask(HorusTask):
         # digest does not depend on the path): the clone hashes its item
         # only. The scheduler replaces this when it digested them itself.
         clone._staged_digests = dict(self._input_digests)  # noqa: SLF001
+
+        # A drop code ends the clone dropped inside its own run, logged as a
+        # drop rather than a failure, and is never retried.
+        clone._drop_exit_codes = frozenset(self.drop_exit_codes)  # noqa: SLF001
 
         # Register this clone's item as a side artifact, so the upload
         # middleware persists it to S3 under the clone's own task id and the

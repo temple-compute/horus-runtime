@@ -52,6 +52,7 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
+    drop_code,
     summarize_exception,
 )
 from horus_runtime.core.task.status import SkipReason, TaskStatus
@@ -353,6 +354,12 @@ class BaseTask(AutoRegistry, entry_point="task"):
     instead of ``FAILED``.
     """
 
+    _drop_exit_codes: frozenset[int] = PrivateAttr(default=frozenset())
+    """
+    Set by a map on its clones: exit codes that drop the item. Such a
+    failure ends the task ``SKIPPED`` (``dropped``).
+    """
+
     _streaming_from: frozenset[str] = PrivateAttr(default=frozenset())
     """
     Set by the scheduler at dispatch: dependencies this run started before
@@ -483,6 +490,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``FAILED``    — set on any other exception (re-raised after)
         - ``PENDING``   — instead of ``FAILED`` for a
                           :class:`TargetLostError` the scheduler will retry
+        - ``SKIPPED``   — ``dropped``, for a map clone exiting with one of
+                          the map's drop codes
 
         Terminal statuses are set as soon as ``_run()`` returns or raises,
         still inside the ``TaskMiddleware`` chain, so middleware sees them on
@@ -563,10 +572,27 @@ class BaseTask(AutoRegistry, entry_point="task"):
 
     def _fail_or_wait_retry(self, exc: Exception) -> None:
         """
-        Record ``FAILED``, or ``PENDING`` when the scheduler will retry
-        *exc* on a new machine, so no status push shows a failure first.
+        Record the outcome of *exc*, in this order: ``SKIPPED`` (``dropped``)
+        for a drop code; ``PENDING`` when the scheduler will retry it on a
+        new machine, so no status push shows a failure first; else
+        ``FAILED``.
         """
-        if isinstance(exc, TargetLostError) and self._retry_on_target_loss:
+        code = drop_code(exc, self._drop_exit_codes)
+        if code is not None:
+            # Once: the outer handler in `run` sees the same exception.
+            if self.skip_reason is not SkipReason.DROPPED:
+                self.status = TaskStatus.SKIPPED
+                self.skip_reason = SkipReason.DROPPED
+                self.finished_at = datetime.now(UTC)
+                self.error = _("Dropped: exit code %(code)d") % {"code": code}
+                horus_logger.log.info(
+                    _(
+                        "Task %(task_name)s dropped its item: "
+                        "exit code %(code)d"
+                    )
+                    % {"task_name": self.name, "code": code}
+                )
+        elif isinstance(exc, TargetLostError) and self._retry_on_target_loss:
             self.status = TaskStatus.PENDING
             self.error = None
         else:

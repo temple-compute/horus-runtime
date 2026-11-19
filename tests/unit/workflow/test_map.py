@@ -37,6 +37,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from loguru import logger
 from pydantic import PrivateAttr, ValidationError
 
 from horus_builtin.artifact.file import FileArtifact
@@ -102,6 +103,7 @@ from horus_runtime.middleware.bound_task import (
     BoundTaskMiddleware,
     BoundTaskMiddlewareContext,
 )
+from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
 
 # The body sees the item under `over.as` (`batch`), the collection it came
 # from still under its own id (`batches`), and the folder output id (`scored`)
@@ -2002,6 +2004,109 @@ class TestDropFailedItems:
         clone = next(t for t in wf.tasks if t.id == "score[1]")
         assert clone.runs == 1
         assert clone._target_loss_retries == 0
+
+    async def test_code_drop_is_logged_as_a_drop(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The clone logs the drop at INFO with its code, never a failure, and
+        no status push shows it FAILED.
+        """
+        del horus_context
+        wf, _map = _drop_code_wf(tmp_path, {"a.txt": "a", "b.txt": "exit 3"})
+        seen: list[TaskStatus] = []
+        original_registry = list(TaskMiddleware.registry)
+
+        class RecordingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, context: TaskMiddlewareContext) -> None:
+                if context.task.id == "score[1]":
+                    seen.append(context.task.status)
+
+        records: list[str] = []
+        sink = logger.add(
+            records.append, level="DEBUG", format="{level.name} {message}"
+        )
+        TaskMiddleware.registry = [*original_registry, RecordingMiddleware]
+        try:
+            await wf.run(trigger_id="split")
+        finally:
+            TaskMiddleware.registry = original_registry
+            logger.remove(sink)
+
+        assert seen == [TaskStatus.SKIPPED]
+        assert "INFO Task score[1] dropped its item: exit code 3\n" in records
+        assert not [
+            r for r in records if r.startswith("ERROR Task score[1] failed")
+        ]
+
+    async def test_rerun_skips_a_map_that_only_code_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        A code drop is recorded with the map's manifest: a rerun with the
+        same inputs finds the map complete and runs no clone.
+        """
+        del horus_context
+        contents = {"a.txt": "a", "b.txt": "exit 3"}
+        wf, _map = _drop_code_wf(tmp_path, contents)
+        await wf.run(trigger_id="split")
+        assert (tmp_path / ".horus" / "score.json").exists()
+
+        wf, map_task = _drop_code_wf(tmp_path, contents)
+        await wf.run(trigger_id="split")
+
+        assert map_task.skip_reason == SkipReason.COMPLETE
+        assert not [t for t in wf.tasks if t.runs]
+
+    @pytest.mark.parametrize("mode", ["deep", "fast"])
+    async def test_join_after_a_code_drop_stays_skipped(
+        self, tmp_path: Path, horus_context: HorusContext, mode: CacheMode
+    ) -> None:
+        """A plain consumer of a map that only code-dropped skips too."""
+        del horus_context
+        contents = {"a.txt": "a", "b.txt": "exit 3"}
+
+        def build() -> tuple[HorusWorkflow, HorusTask]:
+            join = HorusTask(
+                id="join",
+                name="join",
+                runtime=CommandRuntime(command="ls $scored_in > $joined"),
+                executor=ShellExecutor(),
+                target=LocalTarget(),
+                inputs=[
+                    FolderArtifact(id="scored_in", path=Path("scored_in"))
+                ],
+                outputs=[FileArtifact(id="joined", path=Path("joined.txt"))],
+                cache=mode,
+            )
+            wf, map_task = _drop_code_wf(tmp_path, contents, cache=mode)
+            wf = _wire(
+                tmp_path,
+                split=cast(HorusTask, wf.tasks[0]),
+                map_task=map_task,
+                extra_tasks=[join],
+                extra_edges=[
+                    WorkflowEdge(
+                        source="score",
+                        source_output="scored",
+                        target="join",
+                        target_input="scored_in",
+                    )
+                ],
+            )
+            return wf, join
+
+        wf, join = build()
+        await wf.run(trigger_id="split")
+        assert join.status == TaskStatus.COMPLETED
+
+        wf, join = build()
+        await wf.run(trigger_id="split")
+
+        assert join.skip_reason == SkipReason.COMPLETE
+        assert join.runs == 0
 
     async def test_dropped_clone_error_names_the_code(
         self, tmp_path: Path, horus_context: HorusContext
@@ -3954,31 +4059,42 @@ class TestChain:
         assert _starts(tmp_path) == {"b_out_0", "b_out_1"}
         assert not [e for e in _drop_events(emit) if "chain" in e.data["map"]]
 
-    async def test_rerun_after_drop_retries_only_that_item(
+    async def test_rerun_after_code_drop_skips_until_codes_change(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
         """
-        The next run re-enters A and B for the item A dropped; their other
-        clones skip on their own manifests.
+        A code drop is A's outcome: the next run skips A and B whole. New
+        drop codes re-enter both for that item only; the other clones skip
+        on their own manifests.
         """
         del horus_context
 
-        def chain() -> HorusWorkflow:
+        def chain(codes: list[int]) -> HorusWorkflow:
             return _stages(
                 tmp_path,
                 ["x", "y", "z"],
                 [
-                    _stage_map(tmp_path, "a", drop_exit_codes=[3]),
+                    _stage_map(tmp_path, "a", drop_exit_codes=codes),
                     _stage_map(tmp_path, "b", chain=True),
                 ],
             )
 
         _set(tmp_path, "exit", "a_out_1", 3)
-        await chain().run(trigger_id="split")
+        await chain([3]).run(trigger_id="split")
         _starts(tmp_path)
         (tmp_path / "exit" / "a_out_1").unlink()
 
-        wf = chain()
+        wf = chain([3])
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert _starts(tmp_path) == set()
+        assert [t.skip_reason for t in wf.tasks[1:]] == [
+            SkipReason.COMPLETE,
+            SkipReason.COMPLETE,
+        ]
+
+        wf = chain([4])
         await wf.run(trigger_id="split")
 
         assert wf.status.value == "completed"

@@ -24,6 +24,7 @@ import pytest
 from horus_runtime.core.task.exceptions import (
     CommandFailedError,
     TaskExecutionError,
+    drop_code,
     summarize_exception,
 )
 from horus_runtime.core.task.status import SkipReason
@@ -110,3 +111,14 @@ def test_drop_skip_reasons_keep_their_values() -> None:
     """The drop reasons are persisted by value, so the values are fixed."""
     assert SkipReason("upstream_dropped") is SkipReason.UPSTREAM_DROPPED
     assert SkipReason("dropped") is SkipReason.DROPPED
+
+
+@pytest.mark.unit
+def test_drop_code_needs_every_leaf_to_match() -> None:
+    """A drop code is read from every leaf; one other leaf keeps the item."""
+    three = CommandFailedError("exit 3", 3)
+    assert drop_code(three, {3}) == 3
+    assert drop_code(ExceptionGroup("g", [three, three]), {3}) == 3
+    assert drop_code(three, set()) is None
+    assert drop_code(ExceptionGroup("g", [three, ValueError()]), {3}) is None
+    assert drop_code(TaskExecutionError("boom"), {3}) is None

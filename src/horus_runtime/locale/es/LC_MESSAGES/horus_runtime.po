@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-19 21:55+0100\n"
+"POT-Creation-Date: 2026-11-19 22:29+0100\n"
 "PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
@@ -352,16 +352,16 @@ msgstr ""
 "El destino '%(kind)s' no tiene working_directory definido. Proporcione "
 "uno explícitamente o use un destino que lo derive automáticamente."
 
-#: src/horus_runtime/core/task/base.py:98
+#: src/horus_runtime/core/task/base.py:99
 msgid "Horus base task"
 msgstr "Tarea base de Horus"
 
-#: src/horus_runtime/core/task/base.py:220
+#: src/horus_runtime/core/task/base.py:235
 #, python-format
 msgid "Secret %(name)s: %(error)s"
 msgstr "Secreto %(name)s: %(error)s"
 
-#: src/horus_runtime/core/task/base.py:440
+#: src/horus_runtime/core/task/base.py:464
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
@@ -370,42 +370,52 @@ msgstr ""
 "El entorno de ejecución '%(runtime)s' no es compatible con el ejecutor "
 "'%(executor)s'. Se esperaba uno de: %(expected)s"
 
-#: src/horus_runtime/core/task/base.py:493
+#: src/horus_runtime/core/task/base.py:519
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
 msgstr "Estado de la tarea %(task_name)s → CONFIGURING"
 
-#: src/horus_runtime/core/task/base.py:577
+#: src/horus_runtime/core/task/base.py:587
+#, python-format
+msgid "Dropped: exit code %(code)d"
+msgstr "Descartado: código de salida %(code)d"
+
+#: src/horus_runtime/core/task/base.py:590
+#, python-format
+msgid "Task %(task_name)s dropped its item: exit code %(code)d"
+msgstr "La tarea %(task_name)s descartó su elemento: código de salida %(code)d"
+
+#: src/horus_runtime/core/task/base.py:620
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr "La tarea %(task_name)s falló"
 
-#: src/horus_runtime/core/task/base.py:580
+#: src/horus_runtime/core/task/base.py:623
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr "Estado de la tarea %(task_name)s → COMPLETED"
 
-#: src/horus_runtime/core/task/base.py:581
+#: src/horus_runtime/core/task/base.py:624
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr "Estado de la tarea %(task_name)s → FAILED"
 
-#: src/horus_runtime/core/task/base.py:582
+#: src/horus_runtime/core/task/base.py:625
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr "Estado de la tarea %(task_name)s → CANCELED"
 
-#: src/horus_runtime/core/task/base.py:649
+#: src/horus_runtime/core/task/base.py:692
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr "Se omite la tarea %(task_name)s. Ya está completada."
 
-#: src/horus_runtime/core/task/base.py:658
+#: src/horus_runtime/core/task/base.py:701
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr "Estado de la tarea %(task_name)s → SKIPPED"
 
-#: src/horus_runtime/core/task/base.py:677
+#: src/horus_runtime/core/task/base.py:720
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr "Reinicio de la tarea %(task_name)s → IDLE"
@@ -435,11 +445,11 @@ msgstr ""
 "el flujo de trabajo. Defina workflow.orchestrator_target como el destino "
 "que contiene los artefactos raíz proporcionados por el usuario."
 
-#: src/horus_runtime/core/workflow/base.py:184
+#: src/horus_runtime/core/workflow/base.py:185
 msgid "Horus base workflow"
 msgstr "Flujo de trabajo base de Horus"
 
-#: src/horus_runtime/core/workflow/base.py:1184
+#: src/horus_runtime/core/workflow/base.py:1199
 #, python-format
 msgid ""
 "Adding edge from '%(source)s.%(source_output)s' to "
@@ -448,7 +458,7 @@ msgstr ""
 "Añadir una arista de '%(source)s.%(source_output)s' a "
 "'%(target)s.%(target_input)s' crearía un ciclo."
 
-#: src/horus_runtime/core/workflow/base.py:1621
+#: src/horus_runtime/core/workflow/base.py:1640
 #, python-format
 msgid ""
 "Transferring artifact '%(id)s' from '%(src)s' to '%(dst)s' via "
@@ -457,34 +467,34 @@ msgstr ""
 "Transfiriendo el artefacto '%(id)s' de '%(src)s' a '%(dst)s' mediante "
 "%(strategy)s."
 
-#: src/horus_runtime/core/workflow/base.py:1829
+#: src/horus_runtime/core/workflow/base.py:1848
 #, python-format
 msgid "Task %(task_name)s fingerprints its inputs in %(mode)s cache mode."
 msgstr ""
 "La tarea %(task_name)s calcula la huella de sus entradas en modo de caché"
 " %(mode)s."
 
-#: src/horus_runtime/core/workflow/base.py:2117
+#: src/horus_runtime/core/workflow/base.py:2136
 #, python-format
 msgid "Workflow %(workflow_name)s status → RUNNING"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → RUNNING"
 
-#: src/horus_runtime/core/workflow/base.py:2137
+#: src/horus_runtime/core/workflow/base.py:2156
 #, python-format
 msgid "Workflow %(workflow_name)s status → CANCELED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → CANCELED"
 
-#: src/horus_runtime/core/workflow/base.py:2144
+#: src/horus_runtime/core/workflow/base.py:2163
 #, python-format
 msgid "Workflow %(workflow_name)s status → FAILED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → FAILED"
 
-#: src/horus_runtime/core/workflow/base.py:2151
+#: src/horus_runtime/core/workflow/base.py:2170
 #, python-format
 msgid "Workflow %(workflow_name)s status → COMPLETED"
 msgstr "Estado del flujo de trabajo %(workflow_name)s → COMPLETED"
 
-#: src/horus_runtime/core/workflow/base.py:2175
+#: src/horus_runtime/core/workflow/base.py:2194
 #, python-format
 msgid "Resetting workflow %(workflow_name)s."
 msgstr "Reiniciando el flujo de trabajo %(workflow_name)s."
@@ -825,32 +835,4 @@ msgid ""
 msgstr ""
 "El registry_key de %(cls_name)s referencia el atributo '%(attr)s' cuya "
 "clave de registro no es una cadena no vacía."
-
-#~ msgid "Initializing %(group)s registry for %(cls)s"
-#~ msgstr "Inicializando el registro %(group)s para %(cls)s"
-
-#~ msgid ""
-#~ "No subclasses registered for %(cls)s. "
-#~ "Ensure that there are subclasses of "
-#~ "this base class with add_to_registry=True."
-#~ msgstr ""
-#~ "No hay subclases registradas para "
-#~ "%(cls)s. Asegúrese de que existan "
-#~ "subclases de esta clase base con "
-#~ "add_to_registry=True."
-
-#~ msgid "Task %(task_name)s status → RUNNING"
-#~ msgstr "Estado de la tarea %(task_name)s → RUNNING"
-
-#~ msgid ""
-#~ "Multiple tasks declare the same output"
-#~ " artifact ID '%(id)s'. Output artifact "
-#~ "IDs must be unique across all "
-#~ "tasks in a workflow."
-#~ msgstr ""
-#~ "Varias tareas declaran el mismo ID "
-#~ "de artefacto de salida '%(id)s'. Los "
-#~ "IDs de artefacto de salida deben "
-#~ "ser únicos entre todas las tareas "
-#~ "de un flujo de trabajo."
 

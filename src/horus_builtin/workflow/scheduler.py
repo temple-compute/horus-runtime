@@ -344,7 +344,8 @@ async def _execute_on_target(
 
 def _record_failure(task: "BaseTask", exc: Exception) -> None:
     """
-    Mark *task* FAILED with *exc*, unless it already recorded an outcome.
+    Mark *task* FAILED with *exc*, unless it already recorded an outcome
+    (failed, canceled, or dropped by a map's drop code).
 
     Middleware, target acquisition, binding and artifact transfer all run
     outside `BaseTask.run`, which is the only place that records FAILED and
@@ -352,7 +353,10 @@ def _record_failure(task: "BaseTask", exc: Exception) -> None:
     BaseException and deliberately never passed here: the dispatch path
     already records CANCELED.
     """
-    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED):
+    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED) or (
+        task.status is TaskStatus.SKIPPED
+        and task.skip_reason is SkipReason.DROPPED
+    ):
         return
     task.status = TaskStatus.FAILED
     # What the UI shows on the task, as `BaseTask._finish` records it.
