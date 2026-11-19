@@ -1081,7 +1081,8 @@ class TestCloneFailure:
             await asyncio.wait_for(run, timeout=3)
 
         assert wf.status.value == "canceled"
-        assert map_task.status == TaskStatus.CANCELED
+        # (`cast`: mypy keeps the RUNNING narrowing across the awaits.)
+        assert cast(TaskStatus, map_task.status) == TaskStatus.CANCELED
 
 
 @pytest.mark.unit
