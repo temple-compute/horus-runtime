@@ -107,6 +107,13 @@ class BaseTask(AutoRegistry, entry_point="task"):
     or its children could never get one.
     """
 
+    substitutes_ids: ClassVar[bool] = True
+    """
+    Whether this task's command resolves artifacts by id, so no id may be
+    both an input and an output. False for a task that runs no command of
+    its own (a subworkflow, whose ports mirror its child's).
+    """
+
     id: str = Field(pattern=r"^([^@]|$)")
     """
     The task ID. Unique within a workflow: it is the DAG node key (edges,

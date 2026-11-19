@@ -829,11 +829,14 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Raise unless *task*'s output ids and input ids are each unique and
         no id is both an input and an output. Command substitution keys both
         sides by id, so a shared id would silently resolve to the output.
+        A task that substitutes no ids (a subworkflow) may share them.
         Shared by :meth:`check_unique_artifact_ids` and the incremental
         mutators (:meth:`add_task`, :meth:`expand`).
         """
         cls._assert_unique_artifact_ids(task.outputs)
         cls._assert_unique_artifact_ids(task.inputs)
+        if not task.substitutes_ids:
+            return
         shared = {a.id for a in task.inputs} & {a.id for a in task.outputs}
         if shared:
             raise SharedInputOutputIdError(task.id, sorted(shared))
@@ -855,7 +858,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         never shared between a task's inputs and outputs, and root artifact
         ids unique among roots. Output ids may repeat across tasks, edges
         resolve on ``(task id, output id)`` and task ids are unique, so the
-        same reusable task can be placed more than once.
+        same reusable task can be placed more than once, as long as each
+        placement writes its own output paths.
         """
         # Root artifacts must have unique ids across the workflow.
         self._assert_unique_artifact_ids(self.artifacts)

@@ -303,6 +303,52 @@ class TestExistingWorkflowDropsInUnchanged:
         assert wf.status.value == "completed"
         assert any(a.id == "sub/seed" for a in wf.artifacts)
 
+    def test_child_root_sharing_an_id_with_a_leaf_output_loads(self) -> None:
+        """
+        A child whose root ``data`` feeds a task that also outputs ``data``
+        derives an in-port and an out-port of the same id. The expander
+        substitutes no command, so the shared id is valid.
+        """
+        child = {
+            "kind": "horus_workflow",
+            "name": "child",
+            "artifacts": [{"kind": "file", "id": "data", "path": "in.txt"}],
+            "tasks": [
+                _yaml_task(
+                    "a",
+                    "cp $data_in $data",
+                    inputs=[("data_in", "in.txt")],
+                    outputs=[("data", "out.txt")],
+                )
+            ],
+            "edges": [
+                {
+                    "source": "artifact-data",
+                    "source_output": "data",
+                    "target": "a",
+                    "target_input": "data_in",
+                }
+            ],
+        }
+        wf = BaseWorkflow.model_validate(
+            {
+                "kind": "horus_workflow",
+                "name": "parent",
+                "tasks": [
+                    {
+                        "kind": "subworkflow",
+                        "id": "s",
+                        "name": "s",
+                        "body": child,
+                    }
+                ],
+            }
+        )
+        sub = wf.tasks[0]
+        assert {a.id for a in sub.inputs} & {a.id for a in sub.outputs} == {
+            "data"
+        }
+
 
 @pytest.mark.unit
 class TestSubworkflowInliningEndToEnd:

@@ -299,6 +299,20 @@ class TestReusableTasks:
         with pytest.raises(SharedInputOutputIdError):
             wf.add_task(bad)
 
+    def test_expand_rejects_shared_input_output_id(
+        self, tmp_path: Path
+    ) -> None:
+        """``expand`` enforces it too and leaves the workflow unchanged."""
+        wf = HorusWorkflow(name="wf", tasks=[])
+        bad = _task(
+            task_id="bad",
+            inputs=[FileArtifact(id="data", path=tmp_path / "in.txt")],
+            outputs=[FileArtifact(id="data", path=tmp_path / "out.txt")],
+        )
+        with pytest.raises(SharedInputOutputIdError):
+            wf.expand(tasks=[bad])
+        assert wf.tasks == []
+
 
 @pytest.mark.unit
 class TestEdgeTransferResolution:
