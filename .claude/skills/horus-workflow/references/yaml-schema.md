@@ -47,6 +47,10 @@ capacity:                  # optional; per-location resource caps (see Resources
   description: ""          # optional
   skip_if_complete: true  # optional (default true): skip if outputs exist and the manifest matches
   cache: fast             # optional; deep | fast. Unset = the workflow's cache
+  retry:                  # optional; run again when the command exits non-zero
+    max: 2                #   attempts after the first, 0 to 10
+    on_exit_codes: [137]  #   codes that retry; empty = any non-zero exit
+    backoff_s: 30         #   wait before attempt 2, doubled each time, max 1 h
   runtime:                # required; WHAT to run
     kind: command
     command: "echo hello > $result"
@@ -221,7 +225,12 @@ Drops:
 - Clones downstream of a dropped item never run. They end `SKIPPED` with
   `upstream_dropped`, and their slot stays a gap.
 - A map completes with its drops removed from its output folder. The run
-  still ends `COMPLETED`. Dropped items run again on the next run.
+  still ends `COMPLETED`.
+- An exit-code drop is final: the next run skips the map until an input, the
+  command or `drop_exit_codes` change. Items dropped by
+  `on_item_failure: drop` run again on the next run.
+- A map's `retry` applies to each clone. Drop codes are never retried, and
+  `on_item_failure: drop` applies once a clone's attempts are spent.
 - If every item was dropped, the map fails with `All N items were dropped
   in <map>.` and its consumers do not run.
 

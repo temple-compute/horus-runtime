@@ -31,3 +31,24 @@ class HorusTaskEvent(BaseEvent):
 
     task_id: str | None = None
     task_name: str
+
+
+class HorusTaskRetryEvent(HorusTaskEvent):
+    """
+    Emitted when a task failed with an exit code its ``retry`` covers and
+    is about to run again.
+    """
+
+    event_type: str = "task_retry"
+
+    attempt: int
+    """The attempt about to start, from 2."""
+
+    max_attempts: int
+    """All attempts allowed: the first plus ``retry.max``."""
+
+    exit_code: int
+    """The exit code of the failed attempt."""
+
+    delay_s: float
+    """Seconds waited before the next attempt."""

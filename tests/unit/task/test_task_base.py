@@ -33,7 +33,11 @@ from horus_builtin.middleware.task_log_file import TaskLogFileMiddleware
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import BaseTask, TaskRetry
+from horus_runtime.core.task.exceptions import (
+    CommandFailedError,
+    TaskExecutionError,
+)
 from horus_runtime.core.task.status import TaskStatus
 from horus_runtime.logging import horus_logger
 from horus_runtime.middleware.task import TaskMiddleware, TaskMiddlewareContext
@@ -613,3 +617,67 @@ class TestBaseTaskReset:
         await task.reset()
 
         assert task.status == TaskStatus.IDLE
+
+
+@pytest.mark.unit
+class TestTaskRetry:
+    """``retry``: which failures the scheduler runs again, and when."""
+
+    def test_backoff_doubles_up_to_an_hour(self) -> None:
+        """The wait before attempt n is ``backoff_s * 2**(n-2)``, capped."""
+        retry = TaskRetry(max=10, backoff_s=10)
+        assert [retry.delay(n) for n in (2, 3, 4)] == [10, 20, 40]
+        assert retry.delay(11) == 3600
+
+    def test_limits_are_validated(self) -> None:
+        """At most ten extra attempts and no negative backoff."""
+        with pytest.raises(ValidationError):
+            TaskRetry(max=11)
+        with pytest.raises(ValidationError):
+            TaskRetry(backoff_s=-1)
+
+    def test_unknown_keys_are_rejected(self) -> None:
+        """A misspelled key fails instead of silently never retrying."""
+        with pytest.raises(ValidationError):
+            TaskRetry.model_validate({"max_retries": 2})
+
+    def test_round_trips_through_a_dump(self) -> None:
+        """``retry`` is a plain task field, absent by default."""
+        task = _make_concrete_task()
+        assert task.model_dump()["retry"] is None
+        task.retry = TaskRetry(max=2, on_exit_codes=[137])
+        again = ConcreteTestTask.model_validate(task.model_dump())
+        assert again.retry == TaskRetry(max=2, on_exit_codes=[137])
+
+    def test_will_retry_only_covered_exit_codes(self) -> None:
+        """
+        Only a command failure with a covered code, never a drop code, and
+        only while the scheduler allows it.
+        """
+        task = _make_concrete_task()
+        task.retry = TaskRetry(max=1, on_exit_codes=[5])
+        five = CommandFailedError("exit 5", 5)
+        assert not task.will_retry(five)
+
+        task._retry_on_failure = True
+        assert task.will_retry(five)
+        assert task.will_retry(ExceptionGroup("g", [five, five]))
+        assert not task.will_retry(CommandFailedError("exit 1", 1))
+        assert not task.will_retry(TaskExecutionError("setup failed"))
+        assert not task.will_retry(ExceptionGroup("g", [five, ValueError()]))
+
+        task.retry = TaskRetry(max=1)
+        assert task.will_retry(CommandFailedError("exit 1", 1))
+        task._drop_exit_codes = frozenset({1})
+        assert not task.will_retry(CommandFailedError("exit 1", 1))
+
+    async def test_reset_restores_the_budget(self) -> None:
+        """A reset task starts again from its first attempt."""
+        task = _make_concrete_task()
+        task._attempt = 3
+        task._retry_on_failure = True
+
+        await task.reset()
+
+        assert task._attempt == 1
+        assert not task._retry_on_failure

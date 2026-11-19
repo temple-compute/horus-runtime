@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING
 
-from horus_builtin.event.task_event import HorusTaskEvent
+from horus_builtin.event.task_event import HorusTaskEvent, HorusTaskRetryEvent
 from horus_builtin.workflow.condition import compute_liveness
 from horus_builtin.workflow.dag import (
     StalledWorkflowError,
@@ -51,6 +51,8 @@ from horus_runtime.core.task.base import (
 )
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
+    drop_code,
+    exception_leaves,
     summarize_exception,
 )
 from horus_runtime.core.task.status import (
@@ -287,10 +289,17 @@ async def _execute_on_target(
             # transfer, dispatch and wait on a new one, keeping this
             # placement, pool slot and lease membership. A map gets one only
             # for a loss of its own (after the fan-out): its clones' losses
-            # reach it grouped, and they retry on their own.
+            # reach it grouped, and they retry on their own. A failure the
+            # task's `retry` covers runs it again the same way, on the same
+            # machine; a map's `retry` applies to each clone instead.
             while True:
                 retry = task._target_loss_retries < MAX_TARGET_LOSS_RETRIES  # noqa: SLF001
                 task._retry_on_target_loss = retry  # noqa: SLF001
+                task._retry_on_failure = (  # noqa: SLF001
+                    task.retry is not None
+                    and not task.dispatches_children
+                    and task._attempt <= task.retry.max  # noqa: SLF001
+                )
                 try:
                     await BoundTaskMiddleware.call_with_middleware(
                         BoundTaskMiddlewareContext(
@@ -331,8 +340,17 @@ async def _execute_on_target(
                     input_digests = _Once(
                         partial(workflow.source_digests, task, source_map)
                     )
+                except Exception as exc:
+                    if not task.will_retry(exc):
+                        raise
+                    # shortcut: the backoff holds this placement, pool slot
+                    # and lease; release them while waiting if backoffs grow.
+                    await _wait_retry(task, exc)
+                    target.bind(task)
+                    workflow.leases.repull(task)
         finally:
             task._retry_on_target_loss = False  # noqa: SLF001
+            task._retry_on_failure = False  # noqa: SLF001
             task.target = declared_target
             await placement.release(location_id, resources)
     except Exception as exc:
@@ -342,9 +360,49 @@ async def _execute_on_target(
         pool.release(declared_target, target, gated=gated)
 
 
+async def _wait_retry(task: "BaseTask", exc: Exception) -> None:
+    """
+    Report that *task* failed with *exc*, which its ``retry`` covers, and
+    wait out the backoff before its next attempt.
+    """
+    assert task.retry is not None  # will_retry checked it
+    task._attempt += 1  # noqa: SLF001
+    attempt = task._attempt  # noqa: SLF001
+    delay = task.retry.delay(attempt)
+    code: int = getattr(exception_leaves(exc)[0], "exit_code")  # noqa: B009
+    message = _(
+        "Exit code %(code)d; attempt %(attempt)d of %(max)d for %(task_name)s."
+    ) % {
+        "code": code,
+        "attempt": attempt,
+        "max": task.retry.max + 1,
+        "task_name": task.name,
+    }
+    horus_logger.log.warning(message)
+    HorusContext.get_context().bus.emit(
+        HorusTaskRetryEvent(
+            task_id=task.id,
+            task_name=task.name,
+            level="WARNING",
+            message=message,
+            attempt=attempt,
+            max_attempts=task.retry.max + 1,
+            exit_code=code,
+            delay_s=delay,
+        )
+    )
+    try:
+        await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        # Nothing else records it: the task is not running while it waits.
+        task._finish(TaskStatus.CANCELED)  # noqa: SLF001
+        raise
+
+
 def _record_failure(task: "BaseTask", exc: Exception) -> None:
     """
-    Mark *task* FAILED with *exc*, unless it already recorded an outcome.
+    Mark *task* FAILED with *exc*, unless it already recorded an outcome
+    (failed, canceled, or dropped by a map's drop code).
 
     Middleware, target acquisition, binding and artifact transfer all run
     outside `BaseTask.run`, which is the only place that records FAILED and
@@ -352,7 +410,10 @@ def _record_failure(task: "BaseTask", exc: Exception) -> None:
     BaseException and deliberately never passed here: the dispatch path
     already records CANCELED.
     """
-    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED):
+    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELED) or (
+        task.status is TaskStatus.SKIPPED
+        and drop_code(exc, task._drop_exit_codes) is not None  # noqa: SLF001
+    ):
         return
     task.status = TaskStatus.FAILED
     # What the UI shows on the task, as `BaseTask._finish` records it.
@@ -841,9 +902,11 @@ async def _run_ready_set(workflow: BaseWorkflow, trigger_id: str) -> None:  # no
             % {"trigger_id": trigger_id}
         )
 
-    # Each run gets its own node-loss budget and starts its logs afresh.
+    # Each run gets its own node-loss and retry budgets and starts its logs
+    # afresh.
     for task in workflow.tasks:
         task._target_loss_retries = 0  # noqa: SLF001
+        task._attempt = 1  # noqa: SLF001
         task._log_attempts = 0  # noqa: SLF001
 
     # Ids present before this call began. A composite task that registers

@@ -19,7 +19,7 @@
 Exceptions related to task execution in the Horus runtime.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, Self
 
 
@@ -37,9 +37,10 @@ class TaskExecutionError(BaseTaskError):
 
 class CommandFailedError(TaskExecutionError):
     """
-    The task's command ran and exited non-zero. Never retried; a map reads
-    :attr:`exit_code` to drop an item, never the (translated) message.
-    :attr:`output` holds the last lines the command wrote to stderr.
+    The task's command ran and exited non-zero. Retried only per the task's
+    ``retry``; a map reads :attr:`exit_code` to drop an item (see
+    :func:`drop_code`), never the (translated) message. :attr:`output` holds
+    the last lines the command wrote to stderr.
     """
 
     def __init__(self, message: str, exit_code: int, output: str = "") -> None:
@@ -102,6 +103,20 @@ def exception_leaves(exc: BaseException) -> list[BaseException]:
             leaf for sub in exc.exceptions for leaf in exception_leaves(sub)
         ]
     return [exc]
+
+
+def drop_code(exc: BaseException, codes: Collection[int]) -> int | None:
+    """
+    The exit code that drops the item *exc* failed, when every leaf of
+    *exc* (see :func:`exception_leaves`) exited with one of *codes*; else
+    ``None``.
+    """
+    found = [
+        getattr(leaf, "exit_code", None) for leaf in exception_leaves(exc)
+    ]
+    if found and all(code in codes for code in found):
+        return found[0]
+    return None
 
 
 def summarize_exception(exc: BaseException) -> str:

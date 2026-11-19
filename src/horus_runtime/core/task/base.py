@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, ClassVar, Self, final
 from uuid import uuid4
 
 from pydantic import (
+    BaseModel,
+    ConfigDict,
     Field,
     PrivateAttr,
     SerializationInfo,
@@ -52,6 +54,8 @@ from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.ref import target_or_ref_schema
 from horus_runtime.core.task.exceptions import (
     TargetLostError,
+    drop_code,
+    exception_leaves,
     summarize_exception,
 )
 from horus_runtime.core.task.status import SkipReason, TaskStatus
@@ -72,6 +76,34 @@ InputDigests = Callable[[], Awaitable[dict[str, str | None]]]
 
 MAX_TARGET_LOSS_RETRIES = 1
 """How many times a task is re-run after a :class:`TargetLostError`."""
+
+MAX_RETRY_DELAY_S = 3600.0
+"""Cap on the wait between two attempts of a task's ``retry``."""
+
+
+class TaskRetry(BaseModel):
+    """
+    Run a task again when its command exits non-zero. A map's ``retry``
+    applies to each item on its own.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max: int = Field(default=0, ge=0, le=10)
+    """Attempts after the first."""
+
+    on_exit_codes: list[int] = Field(default_factory=list)
+    """Exit codes that retry; empty retries any non-zero exit."""
+
+    backoff_s: float = Field(default=0, ge=0)
+    """
+    Seconds before the second attempt, doubling for each later one, up to
+    one hour.
+    """
+
+    def delay(self, attempt: int) -> float:
+        """Seconds to wait before *attempt* (from 2)."""
+        return min(self.backoff_s * 2.0 ** (attempt - 2), MAX_RETRY_DELAY_S)
 
 
 class BaseTask(AutoRegistry, entry_point="task"):
@@ -308,6 +340,12 @@ class BaseTask(AutoRegistry, entry_point="task"):
     The interaction transport currently associated with the task run.
     """
 
+    retry: TaskRetry | None = None
+    """
+    Run the task again when its command exits non-zero (see
+    :class:`TaskRetry`). ``None`` (the default) never retries.
+    """
+
     _execution_id: str | None = PrivateAttr(default=None)
     """
     Identifier for this task invocation's isolated working directory.
@@ -351,6 +389,21 @@ class BaseTask(AutoRegistry, entry_point="task"):
     Set by the scheduler before dispatch: a :class:`TargetLostError` from
     this run will be retried, so :meth:`run` leaves the task ``PENDING``
     instead of ``FAILED``.
+    """
+
+    _attempt: int = PrivateAttr(default=1)
+    """The current attempt under :attr:`retry`, from 1."""
+
+    _retry_on_failure: bool = PrivateAttr(default=False)
+    """
+    Set by the scheduler before dispatch: a failure :attr:`retry` covers
+    will be retried, so :meth:`run` leaves the task ``PENDING``.
+    """
+
+    _drop_exit_codes: frozenset[int] = PrivateAttr(default=frozenset())
+    """
+    Set by a map on its clones: exit codes that drop the item. Such a
+    failure ends the task ``SKIPPED`` (``dropped``) and is never retried.
     """
 
     _streaming_from: frozenset[str] = PrivateAttr(default=frozenset())
@@ -482,7 +535,10 @@ class BaseTask(AutoRegistry, entry_point="task"):
         - ``CANCELED``  — set when ``CancelledError`` is raised
         - ``FAILED``    — set on any other exception (re-raised after)
         - ``PENDING``   — instead of ``FAILED`` for a
-                          :class:`TargetLostError` the scheduler will retry
+                          :class:`TargetLostError` or a failure covered by
+                          :attr:`retry` that the scheduler will retry
+        - ``SKIPPED``   — ``dropped``, for a map clone exiting with one of
+                          the map's drop codes
 
         Terminal statuses are set as soon as ``_run()`` returns or raises,
         still inside the ``TaskMiddleware`` chain, so middleware sees them on
@@ -561,12 +617,50 @@ class BaseTask(AutoRegistry, entry_point="task"):
             else:
                 self._finish(TaskStatus.COMPLETED)
 
+    def will_retry(self, exc: BaseException) -> bool:
+        """
+        Whether the scheduler runs this task again after *exc*: every leaf
+        exited with a code :attr:`retry` covers and no drop code, and
+        attempts are left.
+        """
+        if not self._retry_on_failure or self.retry is None:
+            return False
+        codes = self.retry.on_exit_codes
+        for leaf in exception_leaves(exc):
+            code = getattr(leaf, "exit_code", None)
+            if (
+                code is None
+                or code in self._drop_exit_codes
+                or (codes and code not in codes)
+            ):
+                return False
+        return True
+
     def _fail_or_wait_retry(self, exc: Exception) -> None:
         """
-        Record ``FAILED``, or ``PENDING`` when the scheduler will retry
-        *exc* on a new machine, so no status push shows a failure first.
+        Record the outcome of *exc*, in this order: ``SKIPPED`` (``dropped``)
+        for a drop code; ``PENDING`` when the scheduler will retry it, so no
+        status push shows a failure first; else ``FAILED``.
         """
-        if isinstance(exc, TargetLostError) and self._retry_on_target_loss:
+        code = drop_code(exc, self._drop_exit_codes)
+        if code is not None:
+            # Set by the inner handler; the outer one in `run` sees the same
+            # exception.
+            if self.skip_reason is not SkipReason.DROPPED:
+                self.status = TaskStatus.SKIPPED
+                self.skip_reason = SkipReason.DROPPED
+                self.finished_at = datetime.now(UTC)
+                self.error = _("Dropped: exit code %(code)d") % {"code": code}
+                horus_logger.log.info(
+                    _(
+                        "Task %(task_name)s dropped its item: "
+                        "exit code %(code)d"
+                    )
+                    % {"task_name": self.name, "code": code}
+                )
+        elif (
+            isinstance(exc, TargetLostError) and self._retry_on_target_loss
+        ) or self.will_retry(exc):
             self.status = TaskStatus.PENDING
             self.error = None
         else:
@@ -690,6 +784,8 @@ class BaseTask(AutoRegistry, entry_point="task"):
         self.finished_at = None
         self._target_loss_retries = 0
         self._retry_on_target_loss = False
+        self._attempt = 1
+        self._retry_on_failure = False
         horus_logger.log.debug(
             _("Task %(task_name)s reset → IDLE") % {"task_name": self.name}
         )

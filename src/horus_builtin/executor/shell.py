@@ -113,7 +113,13 @@ class ShellExecutor(BaseExecutor):
 
         if returncode != 0:
             output = "\n".join(recent)
-            horus_logger.log.error(
+            # A map's drop code is a clean drop: the task logs it at INFO.
+            log = (
+                horus_logger.log.info
+                if returncode in task._drop_exit_codes  # noqa: SLF001
+                else horus_logger.log.error
+            )
+            log(
                 _(
                     "Command execution failed for task %(task_id)s with "
                     "return code %(return_code)s. Output: %(out)s"
