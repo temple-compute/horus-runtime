@@ -139,12 +139,12 @@ class TestTransferArtifactsEvents:
 
         assert [e.phase for e in events] == ["started", "failed"]
 
-    async def test_cancelled_transfer_emits_no_failed(
+    async def test_self_cancelled_transfer_emits_failed(
         self, horus_context: HorusContext
     ) -> None:
         """
-        A transfer that cancelled itself reports only ``started``; the task
-        fails with :exc:`SelfCancelledError`.
+        A transfer that cancelled itself reports ``failed``; the task fails
+        with :exc:`SelfCancelledError`.
         """
         wf, consumer = _workflow()
 
@@ -163,6 +163,33 @@ class TestTransferArtifactsEvents:
             pytest.raises(SelfCancelledError),
         ):
             await wf.transfer_artifacts(consumer)
+
+        assert [e.phase for e in events] == ["started", "failed"]
+
+    async def test_cancel_request_emits_no_failed(
+        self, horus_context: HorusContext
+    ) -> None:
+        """A cancel request leaves the transfer at ``started``."""
+        wf, consumer = _workflow()
+        started = asyncio.Event()
+
+        class _Slow:
+            async def transfer(self, *_: object) -> None:
+                started.set()
+                await asyncio.sleep(10)
+
+        events: list[TransferEvent] = []
+        with (
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            patch.object(
+                BaseTransferStrategy, "get_from_registry", return_value=_Slow
+            ),
+        ):
+            run = asyncio.create_task(wf.transfer_artifacts(consumer))
+            await started.wait()
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
 
         assert [e.phase for e in events] == ["started"]
 
