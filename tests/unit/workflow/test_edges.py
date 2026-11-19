@@ -1000,6 +1000,36 @@ def _fan_in(tmp_path: Path, n: int) -> tuple[HorusWorkflow, HorusTask]:
     return wf, consumer
 
 
+def _nested(tmp_path: Path) -> tuple[HorusWorkflow, HorusTask]:
+    """A folder input and a file input nested under it."""
+    results = tmp_path / "results"
+    producer = _task(
+        task_id="producer",
+        inputs=[],
+        outputs=[
+            FileArtifact(id="folder", path=results),
+            FileArtifact(id="summary", path=results / "summary.json"),
+        ],
+    )
+    consumer = _task(
+        task_id="consumer",
+        inputs=[
+            FileArtifact(id="in_folder", path=tmp_path / "a"),
+            FileArtifact(id="in_summary", path=tmp_path / "b"),
+        ],
+        outputs=[],
+    )
+    wf = HorusWorkflow(
+        name="nested",
+        tasks=[producer, consumer],
+        edges=[
+            _edge("producer", "folder", "consumer", "in_folder"),
+            _edge("producer", "summary", "consumer", "in_summary"),
+        ],
+    )
+    return wf, consumer
+
+
 @pytest.mark.unit
 class TestConcurrentInputTransfers:
     """A task's inputs are pulled concurrently, within a cap."""
@@ -1077,6 +1107,26 @@ class TestConcurrentInputTransfers:
             ) -> None:
                 if artifact.path.name == "p0.txt":
                     raise asyncio.CancelledError
+
+        with (
+            patch.object(
+                BaseTransferStrategy,
+                "get_from_registry",
+                return_value=_SelfCancelling,
+            ),
+            pytest.raises(SelfCancelledError, match="consumer"),
+        ):
+            await wf.transfer_artifacts(consumer)
+
+    async def test_a_self_cancelled_sequential_transfer_fails_the_task(
+        self, tmp_path: Path
+    ) -> None:
+        """Nested inputs transfer one by one; a self-cancel still fails."""
+        wf, consumer = _nested(tmp_path)
+
+        class _SelfCancelling:
+            async def transfer(self, *_: object) -> None:
+                raise asyncio.CancelledError
 
         with (
             patch.object(
@@ -1168,31 +1218,7 @@ class TestConcurrentInputTransfers:
         self, tmp_path: Path
     ) -> None:
         """A folder and a file inside it are transferred in order."""
-        results = tmp_path / "results"
-        producer = _task(
-            task_id="producer",
-            inputs=[],
-            outputs=[
-                FileArtifact(id="folder", path=results),
-                FileArtifact(id="summary", path=results / "summary.json"),
-            ],
-        )
-        consumer = _task(
-            task_id="consumer",
-            inputs=[
-                FileArtifact(id="in_folder", path=tmp_path / "a"),
-                FileArtifact(id="in_summary", path=tmp_path / "b"),
-            ],
-            outputs=[],
-        )
-        wf = HorusWorkflow(
-            name="nested",
-            tasks=[producer, consumer],
-            edges=[
-                _edge("producer", "folder", "consumer", "in_folder"),
-                _edge("producer", "summary", "consumer", "in_summary"),
-            ],
-        )
+        wf, consumer = _nested(tmp_path)
         active = peak = 0
         order: list[str] = []
 

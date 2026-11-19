@@ -1535,7 +1535,16 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             # A folder transfer replaces its whole directory: a nested
             # input transferred alongside it would race its delete.
             for artifact in inputs:
-                await self._transfer_input(task, artifact, sources)
+                try:
+                    await self._transfer_input(task, artifact, sources)
+                except CancelledError:
+                    current = asyncio.current_task()
+                    if current is None or current.cancelling():
+                        raise
+                    raise SelfCancelledError(
+                        _("An input transfer of %(task_name)s was cancelled.")
+                        % {"task_name": task.name}
+                    ) from None
             return
         slots = asyncio.Semaphore(MAX_CONCURRENT_INPUT_TRANSFERS)
 
