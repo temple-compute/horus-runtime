@@ -108,6 +108,32 @@ class SharedInputOutputIdError(WorkflowError):
         )
 
 
+class OverlappingOutputPathsError(WorkflowError):
+    """
+    Raised when two tasks write the same output path, or one writes inside
+    the other's output folder. A folder's digest covers everything under it,
+    so the nested writes would break incremental skipping.
+    """
+
+    def __init__(
+        self, task_id: str, path: str, other_task_id: str, other_path: str
+    ):
+        super().__init__(
+            _(
+                "Task '%(task)s' writes '%(path)s' and task '%(other)s' "
+                "writes '%(other_path)s'. Output paths of different tasks "
+                "cannot be the same or nested. Give each task its own "
+                "output path."
+            )
+            % {
+                "task": task_id,
+                "path": path,
+                "other": other_task_id,
+                "other_path": other_path,
+            }
+        )
+
+
 class UnknownEdgeEndpointError(WorkflowError):
     """
     Raised when a workflow edge references a task, output, input, or root

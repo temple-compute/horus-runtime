@@ -1198,8 +1198,10 @@ class TestSkipBeforeTransfer:
                     id=f"c{i}",
                     name=f"c{i}",
                     inputs=[FolderArtifact(id="inp", path=Path("data"))],
-                    outputs=[FileArtifact(id="out", path=Path("out.txt"))],
-                    runtime=CommandRuntime(command=f"ls $inp > {dst}/out.txt"),
+                    outputs=[FileArtifact(id="out", path=Path(f"out{i}.txt"))],
+                    runtime=CommandRuntime(
+                        command=f"ls $inp > {dst}/out{i}.txt"
+                    ),
                     executor=ShellExecutor(),
                     target=_FarLocalTarget(working_directory=dst.as_posix()),
                 )

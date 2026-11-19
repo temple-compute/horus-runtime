@@ -222,14 +222,13 @@ class TestDerivePorts:
 
     def test_colliding_output_ids_are_qualified(self) -> None:
         """Two leaves sharing an artifact id get ``taskid.artifactid``."""
+        b = _task_dict("b", ["out"])
+        b["outputs"][0]["path"] = "b_out.txt"  # same id, its own path
         body = BaseWorkflow.model_validate(
             {
                 "kind": "horus_workflow",
                 "name": "child",
-                "tasks": [
-                    _task_dict("a", ["out"]),
-                    _task_dict("b", ["out"]),
-                ],
+                "tasks": [_task_dict("a", ["out"]), b],
             }
         )
         _in, out_ports = derive_ports(body)

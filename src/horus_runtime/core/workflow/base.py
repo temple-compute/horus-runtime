@@ -97,6 +97,7 @@ from horus_runtime.core.workflow.exceptions import (
     CacheModeError,
     DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
+    OverlappingOutputPathsError,
     SharedInputOutputIdError,
     SharedTargetError,
     TaskIdsAreNotUniqueError,
@@ -862,6 +863,66 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # Within each task: unique outputs, unique inputs, none shared.
         for task in self.tasks:
             self._assert_task_artifact_ids(task)
+
+        return self
+
+    @staticmethod
+    def _expanded_from(task_id: str, owner_id: str) -> bool:
+        """
+        Whether *task_id* is a task an expander derived from *owner_id*: a
+        map clone (``m[0]``), loop iteration (``l#1``), loop checker
+        (``l~1``) or subworkflow child (``s/x``).
+        """
+        return task_id.startswith(owner_id) and task_id[
+            len(owner_id) : len(owner_id) + 1
+        ] in ("[", "#", "~", "/")
+
+    @model_validator(mode="after")
+    def check_output_paths_disjoint(self) -> Self:
+        """
+        Validates that no two tasks write the same output path, or one
+        inside the other's. A folder's digest covers every file under it, so
+        another task writing into it changes the digest between runs and
+        breaks incremental skipping.
+
+        Allowed: outputs of one task, an expanded task inside its owner's
+        folder (a map slot), and an in-place task whose output path is one
+        of its own input paths.
+        """
+        owners: dict[Path, list[BaseTask]] = {}
+        for task in self.tasks:
+            for output in task.outputs:
+                path = output.declared_path or output.path
+                owners.setdefault(path, []).append(task)
+
+        def related(a: BaseTask, b: BaseTask) -> bool:
+            return (
+                a.id == b.id
+                or self._expanded_from(a.id, b.id)
+                or self._expanded_from(b.id, a.id)
+            )
+
+        def in_place(task: BaseTask, path: Path) -> bool:
+            return any(
+                (i.declared_path or i.path) == path for i in task.inputs
+            )
+
+        for path, tasks in owners.items():
+            for a, b in combinations(tasks, 2):
+                shared_ok = (
+                    related(a, b) or in_place(a, path) or in_place(b, path)
+                )
+                if not shared_ok:
+                    raise OverlappingOutputPathsError(
+                        a.id, str(path), b.id, str(path)
+                    )
+            for parent in path.parents:
+                for outer in owners.get(parent, ()):
+                    for inner in tasks:
+                        if not related(outer, inner):
+                            raise OverlappingOutputPathsError(
+                                outer.id, str(parent), inner.id, str(path)
+                            )
 
         return self
 
