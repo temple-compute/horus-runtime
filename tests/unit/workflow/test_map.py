@@ -2159,6 +2159,30 @@ class TestDropFailedItems:
             (TaskStatus.COMPLETED, 2),
         ]
 
+    async def test_a_failed_sibling_cancels_a_clone_in_its_backoff(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A clone waiting to retry ends CANCELED when the map fails."""
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "exit 5", "b.txt": "exit 4"},
+            runtime=CommandRuntime(
+                command="read w c < $batch; [ $c = 5 ] || sleep 0.5; exit $c"
+            ),
+            executor=ShellExecutor(),
+            retry=TaskRetry(max=2, on_exit_codes=[5], backoff_s=30),
+        )
+
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(wf.run(trigger_id="split"), timeout=10)
+
+        assert map_task.status == TaskStatus.FAILED
+        clone = next(t for t in wf.tasks if t.id == "score[0]")
+        assert clone.runs == 1
+        assert clone.status == TaskStatus.CANCELED
+        assert clone.finished_at is not None
+
     async def test_drop_on_failure_applies_after_retries(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:

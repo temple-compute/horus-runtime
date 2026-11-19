@@ -20,6 +20,7 @@ Unit tests for the concurrent ready-set scheduler.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Generator
@@ -2272,8 +2273,10 @@ class TestRetryOnExitCode:
     ) -> None:
         """The wait before each attempt doubles from ``backoff_s``."""
         events: list[object] = []
-        with patch.object(
-            horus_context.bus, "emit", side_effect=events.append
+        sleep = AsyncMock(side_effect=asyncio.sleep)
+        with (
+            patch.object(horus_context.bus, "emit", side_effect=events.append),
+            patch.object(asyncio, "sleep", sleep),
         ):
             await self._run_one(
                 tmp_path, [5, 5], TaskRetry(max=2, backoff_s=0.01)
@@ -2282,6 +2285,29 @@ class TestRetryOnExitCode:
         assert [
             e.delay_s for e in events if isinstance(e, HorusTaskRetryEvent)
         ] == [0.01, 0.02]
+        delays = [c.args[0] for c in sleep.await_args_list]
+        assert [d for d in delays if d in (0.01, 0.02)] == [0.01, 0.02]
+
+    async def test_a_cancel_during_the_backoff_cancels_the_task(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A run canceled while a task waits to retry ends it CANCELED."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_ExitingTask)
+        assert isinstance(task, _ExitingTask)
+        task.exits = [5]
+        task.retry = TaskRetry(max=2, backoff_s=30)
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        run = asyncio.create_task(wf.run(trigger_id="t"))
+        while task._attempt < 2:
+            await asyncio.sleep(0.01)
+        run.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=10)
+
+        assert task.runs == 1
+        assert task.status == TaskStatus.CANCELED
+        assert task.finished_at is not None
 
     async def test_no_failed_status_before_the_retry(
         self, tmp_path: Path, horus_context: HorusContext

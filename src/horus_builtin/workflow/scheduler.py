@@ -390,7 +390,12 @@ async def _wait_retry(task: "BaseTask", exc: Exception) -> None:
             delay_s=delay,
         )
     )
-    await asyncio.sleep(delay)
+    try:
+        await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        # Nothing else records it: the task is not running while it waits.
+        task._finish(TaskStatus.CANCELED)  # noqa: SLF001
+        raise
 
 
 def _record_failure(task: "BaseTask", exc: Exception) -> None:
