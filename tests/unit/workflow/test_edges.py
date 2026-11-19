@@ -47,7 +47,10 @@ from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.store import ArtifactStore, CacheMode
 from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.exceptions import TargetLostError
+from horus_runtime.core.task.exceptions import (
+    SelfCancelledError,
+    TargetLostError,
+)
 from horus_runtime.core.transfer.strategy import BaseTransferStrategy
 from horus_runtime.core.workflow.base import (
     MAX_CONCURRENT_INPUT_TRANSFERS,
@@ -1061,6 +1064,50 @@ class TestConcurrentInputTransfers:
         # one more in); every started one but the failure was cancelled.
         assert len(started) <= MAX_CONCURRENT_INPUT_TRANSFERS + 1
         assert sorted(cancelled) == sorted(set(started) - {"p0.txt"})
+
+    async def test_a_self_cancelled_transfer_fails_the_task(
+        self, tmp_path: Path
+    ) -> None:
+        """A transfer cancelled with no cancel request is a failure."""
+        wf, consumer = _fan_in(tmp_path, 2)
+
+        class _SelfCancelling:
+            async def transfer(
+                self, artifact: BaseArtifact, *_: object
+            ) -> None:
+                if artifact.path.name == "p0.txt":
+                    raise asyncio.CancelledError
+
+        with (
+            patch.object(
+                BaseTransferStrategy,
+                "get_from_registry",
+                return_value=_SelfCancelling,
+            ),
+            pytest.raises(SelfCancelledError, match="consumer"),
+        ):
+            await wf.transfer_artifacts(consumer)
+
+    async def test_a_cancel_request_stays_a_cancel(
+        self, tmp_path: Path
+    ) -> None:
+        """Cancelling the task that transfers raises CancelledError."""
+        wf, consumer = _fan_in(tmp_path, 2)
+        started = asyncio.Event()
+
+        class _Slow:
+            async def transfer(self, *_: object) -> None:
+                started.set()
+                await asyncio.sleep(10)
+
+        with patch.object(
+            BaseTransferStrategy, "get_from_registry", return_value=_Slow
+        ):
+            run = asyncio.create_task(wf.transfer_artifacts(consumer))
+            await started.wait()
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
 
     async def test_a_lost_node_wins_over_a_sibling_failure(
         self, tmp_path: Path

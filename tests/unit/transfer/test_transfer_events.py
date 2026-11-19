@@ -35,6 +35,7 @@ from horus_builtin.task.horus_task import HorusTask
 from horus_builtin.workflow.horus_workflow import HorusWorkflow
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
+from horus_runtime.core.task.exceptions import SelfCancelledError
 from horus_runtime.core.transfer.events import (
     TransferEvent,
     report_transfer_progress,
@@ -141,7 +142,10 @@ class TestTransferArtifactsEvents:
     async def test_cancelled_transfer_emits_no_failed(
         self, horus_context: HorusContext
     ) -> None:
-        """A cancel is not a failure: only ``started`` is reported."""
+        """
+        A transfer that cancelled itself reports only ``started``; the task
+        fails with :exc:`SelfCancelledError`.
+        """
         wf, consumer = _workflow()
 
         class _Cancelled:
@@ -156,7 +160,7 @@ class TestTransferArtifactsEvents:
                 "get_from_registry",
                 return_value=_Cancelled,
             ),
-            pytest.raises(asyncio.CancelledError),
+            pytest.raises(SelfCancelledError),
         ):
             await wf.transfer_artifacts(consumer)
 

@@ -83,6 +83,14 @@ class TargetLostError(TaskExecutionError):
     """
 
 
+class SelfCancelledError(TaskExecutionError):
+    """
+    Part of a task (a map clone, an input transfer) was cancelled with no
+    cancel request. The task fails: a ``CancelledError`` would end the run
+    as cancelled.
+    """
+
+
 class TaskMissingIdError(BaseTaskError):
     """
     Exception raised when a task is about to be executed but has no id

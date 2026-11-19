@@ -82,6 +82,7 @@ from horus_runtime.core.target.channel import ChannelProcess
 from horus_runtime.core.task.base import BaseTask, TaskRetry
 from horus_runtime.core.task.exceptions import (
     CommandFailedError,
+    SelfCancelledError,
     TargetLostError,
     TaskExecutionError,
     exception_leaves,
@@ -1004,6 +1005,43 @@ class TestCloneFailure:
             "score[2]": TaskStatus.COMPLETED,
         }
         assert map_task.status == TaskStatus.FAILED
+        assert wf.status.value == "failed"
+
+    @pytest.mark.parametrize("policy", ["fail_fast", "continue"])
+    async def test_a_self_cancelled_clone_fails_the_map(
+        self, tmp_path: Path, horus_context: HorusContext, policy: str
+    ) -> None:
+        """
+        A clone cancelled with no cancel request fails the map and the
+        run; the run is not reported as cancelled.
+        """
+        del horus_context
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+        )
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.failure_policy = cast(Any, policy)
+        real = execute_task
+
+        async def execute(
+            workflow: BaseWorkflow, task: BaseTask, **kwargs: Any
+        ) -> None:
+            if task.id == "score[1]":
+                raise asyncio.CancelledError
+            await real(workflow, task, **kwargs)
+
+        with (
+            patch("horus_builtin.workflow.map.execute_task", execute),
+            pytest.raises((SelfCancelledError, WorkflowExecutionError)),
+        ):
+            await wf.run(trigger_id="split")
+
+        assert map_task.status == TaskStatus.FAILED
+        assert map_task.error is not None
+        assert "cancelled" in map_task.error
         assert wf.status.value == "failed"
 
 

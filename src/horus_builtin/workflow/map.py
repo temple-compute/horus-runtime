@@ -60,6 +60,7 @@ from horus_runtime.core.task.base import (
     InputDigests,
 )
 from horus_runtime.core.task.exceptions import (
+    SelfCancelledError,
     TargetLostError,
     TaskExecutionError,
     drop_code,
@@ -891,7 +892,14 @@ class MapTask(HorusTask):
                 # the rest.
                 async with asyncio.TaskGroup() as tg:
                     runs = [tg.create_task(run_clone(c)) for c in clones]
-                results = [run.result() for run in runs]
+                # A group ignores a clone that cancelled itself: settled
+                # below, not raised here.
+                results = [
+                    asyncio.CancelledError()
+                    if run.cancelled()
+                    else run.result()
+                    for run in runs
+                ]
             self._fan_out = None
             early = await asyncio.gather(
                 *self._early_reruns.values(), return_exceptions=True
@@ -1323,10 +1331,19 @@ class MapTask(HorusTask):
         nothing downstream sees it, and report the drop.
         """
         errors = [r for r in results if isinstance(r, BaseException)]
-        # A cancelled clone is a cancel, not a failure: never group it.
-        for error in errors:
-            if isinstance(error, asyncio.CancelledError):
-                raise error
+        cancelled = [
+            e for e in errors if isinstance(e, asyncio.CancelledError)
+        ]
+        if cancelled:
+            # A cancel request on this map stays a cancel; a clone that
+            # cancelled itself fails the map, or the run reads as cancelled.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise cancelled[0]
+            raise SelfCancelledError(
+                _("%(n)d item(s) of %(name)s were cancelled.")
+                % {"n": len(cancelled), "name": self.name}
+            ) from cancelled[0]
         upstream = self._upstream_dropped
         if not errors and not upstream:
             return

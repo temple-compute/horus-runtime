@@ -85,7 +85,10 @@ from horus_runtime.core.lease import LeaseManager
 from horus_runtime.core.placement import PlacementManager, ResourceCapacity
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.task.base import BaseTask
-from horus_runtime.core.task.exceptions import TargetLostError
+from horus_runtime.core.task.exceptions import (
+    SelfCancelledError,
+    TargetLostError,
+)
 from horus_runtime.core.transfer.events import TransferEvent, transfer_scope
 from horus_runtime.core.transfer.exceptions import (
     OrchestratorTargetNotSetError,
@@ -1516,6 +1519,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Raises:
             OrchestratorTargetNotSetError: When a root artifact cannot be
                 accessed by the destination and no orchestrator_target is set.
+            SelfCancelledError: When a transfer cancelled itself.
         """
         sources = (
             self._build_source_map() if source_map is None else source_map
@@ -1556,9 +1560,13 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 ),
                 failures.exceptions[0],
             )
-        # A group ignores a child that cancelled itself; the caller must not.
+        # A group ignores a child that cancelled itself; the caller must not,
+        # and it is no cancel request: a real one raised from the group.
         if any(t.cancelled() for t in transfers):
-            raise CancelledError
+            raise SelfCancelledError(
+                _("An input transfer of %(task_name)s was cancelled.")
+                % {"task_name": task.name}
+            )
 
     def _destinations_overlap(
         self,
