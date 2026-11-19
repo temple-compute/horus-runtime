@@ -37,10 +37,10 @@ class TaskExecutionError(BaseTaskError):
 
 class CommandFailedError(TaskExecutionError):
     """
-    The task's command ran and exited non-zero. Never retried; a map reads
-    :attr:`exit_code` to drop an item (see :func:`drop_code`), never the
-    (translated) message. :attr:`output` holds the last lines the command
-    wrote to stderr.
+    The task's command ran and exited non-zero. Retried only per the task's
+    ``retry``; a map reads :attr:`exit_code` to drop an item (see
+    :func:`drop_code`), never the (translated) message. :attr:`output` holds
+    the last lines the command wrote to stderr.
     """
 
     def __init__(self, message: str, exit_code: int, output: str = "") -> None:

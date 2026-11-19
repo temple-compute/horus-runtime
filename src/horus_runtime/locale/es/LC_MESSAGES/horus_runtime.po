@@ -352,16 +352,16 @@ msgstr ""
 "El destino '%(kind)s' no tiene working_directory definido. Proporcione "
 "uno explícitamente o use un destino que lo derive automáticamente."
 
-#: src/horus_runtime/core/task/base.py:99
+#: src/horus_runtime/core/task/base.py:127
 msgid "Horus base task"
 msgstr "Tarea base de Horus"
 
-#: src/horus_runtime/core/task/base.py:235
+#: src/horus_runtime/core/task/base.py:263
 #, python-format
 msgid "Secret %(name)s: %(error)s"
 msgstr "Secreto %(name)s: %(error)s"
 
-#: src/horus_runtime/core/task/base.py:464
+#: src/horus_runtime/core/task/base.py:507
 #, python-format
 msgid ""
 "Runtime '%(runtime)s' is not compatible with executor '%(executor)s'. "
@@ -370,52 +370,52 @@ msgstr ""
 "El entorno de ejecución '%(runtime)s' no es compatible con el ejecutor "
 "'%(executor)s'. Se esperaba uno de: %(expected)s"
 
-#: src/horus_runtime/core/task/base.py:519
+#: src/horus_runtime/core/task/base.py:563
 #, python-format
 msgid "Task %(task_name)s status → CONFIGURING"
 msgstr "Estado de la tarea %(task_name)s → CONFIGURING"
 
-#: src/horus_runtime/core/task/base.py:587
+#: src/horus_runtime/core/task/base.py:649
 #, python-format
 msgid "Dropped: exit code %(code)d"
 msgstr "Descartado: código de salida %(code)d"
 
-#: src/horus_runtime/core/task/base.py:590
+#: src/horus_runtime/core/task/base.py:652
 #, python-format
 msgid "Task %(task_name)s dropped its item: exit code %(code)d"
 msgstr "La tarea %(task_name)s descartó su elemento: código de salida %(code)d"
 
-#: src/horus_runtime/core/task/base.py:620
+#: src/horus_runtime/core/task/base.py:684
 #, python-format
 msgid "Task %(task_name)s failed"
 msgstr "La tarea %(task_name)s falló"
 
-#: src/horus_runtime/core/task/base.py:623
+#: src/horus_runtime/core/task/base.py:687
 #, python-format
 msgid "Task %(task_name)s status → COMPLETED"
 msgstr "Estado de la tarea %(task_name)s → COMPLETED"
 
-#: src/horus_runtime/core/task/base.py:624
+#: src/horus_runtime/core/task/base.py:688
 #, python-format
 msgid "Task %(task_name)s status → FAILED"
 msgstr "Estado de la tarea %(task_name)s → FAILED"
 
-#: src/horus_runtime/core/task/base.py:625
+#: src/horus_runtime/core/task/base.py:689
 #, python-format
 msgid "Task %(task_name)s status → CANCELED"
 msgstr "Estado de la tarea %(task_name)s → CANCELED"
 
-#: src/horus_runtime/core/task/base.py:692
+#: src/horus_runtime/core/task/base.py:756
 #, python-format
 msgid "Skipping task %(task_name)s. Already complete."
 msgstr "Se omite la tarea %(task_name)s. Ya está completada."
 
-#: src/horus_runtime/core/task/base.py:701
+#: src/horus_runtime/core/task/base.py:765
 #, python-format
 msgid "Task %(task_name)s status → SKIPPED"
 msgstr "Estado de la tarea %(task_name)s → SKIPPED"
 
-#: src/horus_runtime/core/task/base.py:720
+#: src/horus_runtime/core/task/base.py:786
 #, python-format
 msgid "Task %(task_name)s reset → IDLE"
 msgstr "Reinicio de la tarea %(task_name)s → IDLE"

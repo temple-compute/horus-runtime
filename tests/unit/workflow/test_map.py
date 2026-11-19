@@ -79,7 +79,7 @@ from horus_runtime.core.placement import ResourceCapacity
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
 from horus_runtime.core.target.channel import ChannelProcess
-from horus_runtime.core.task.base import BaseTask
+from horus_runtime.core.task.base import BaseTask, TaskRetry
 from horus_runtime.core.task.exceptions import (
     CommandFailedError,
     TargetLostError,
@@ -2005,6 +2005,23 @@ class TestDropFailedItems:
         assert clone.runs == 1
         assert clone._target_loss_retries == 0
 
+    async def test_drop_code_is_not_retried_by_retry(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A drop code wins over a ``retry`` that covers every exit."""
+        del horus_context
+        wf, _map = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 3"},
+            retry=TaskRetry(max=2),
+        )
+
+        await wf.run(trigger_id="split")
+
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.runs == 1
+        assert clone.skip_reason == SkipReason.DROPPED
+
     async def test_code_drop_is_logged_as_a_drop(
         self, tmp_path: Path, horus_context: HorusContext
     ) -> None:
@@ -2107,6 +2124,63 @@ class TestDropFailedItems:
 
         assert join.skip_reason == SkipReason.COMPLETE
         assert join.runs == 0
+
+    async def test_a_clone_retries_on_its_own(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """
+        The map's ``retry`` applies per clone: a failing item runs again
+        and the map completes; the map itself runs once.
+        """
+        del horus_context
+        tries = tmp_path / "tries"
+        tries.mkdir()
+        split = _split_task(tmp_path, ["a.txt", "b.txt"])
+        map_task = _map_task(
+            over_artifact=FolderArtifact(
+                id="batches", path=Path("batches_in")
+            ),
+            command=(
+                f"f={tries}/$(basename $scored); echo x >> $f; "
+                "[ $(wc -l < $f) -ge 2 ] || exit 5; "
+                "cp $batch $scored/result.txt"
+            ),
+        )
+        map_task.retry = TaskRetry(max=2, on_exit_codes=[5])
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        assert map_task.runs == 1
+        clones = [t for t in wf.tasks if t.id.startswith("score[")]
+        assert [(c.status, c.runs) for c in clones] == [
+            (TaskStatus.COMPLETED, 2),
+            (TaskStatus.COMPLETED, 2),
+        ]
+
+    async def test_drop_on_failure_applies_after_retries(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``on_item_failure: drop`` drops an item once its attempts are
+        spent, and the next run tries it again.
+        """
+        del horus_context
+        wf, map_task = _drop_code_wf(
+            tmp_path,
+            {"a.txt": "a", "b.txt": "exit 4"},
+            on_item_failure="drop",
+            retry=TaskRetry(max=1),
+        )
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        clone = next(t for t in wf.tasks if t.id == "score[1]")
+        assert clone.runs == 2
+        assert clone.status == TaskStatus.FAILED
+        assert map_task._retry_slots == ["1"]
+        assert not (tmp_path / ".horus" / "score.json").exists()
 
     async def test_dropped_clone_error_names_the_code(
         self, tmp_path: Path, horus_context: HorusContext

@@ -32,6 +32,7 @@ from pydantic import Field, PrivateAttr
 
 from horus_builtin.artifact.file import FileArtifact
 from horus_builtin.artifact.folder import FolderArtifact
+from horus_builtin.event.task_event import HorusTaskRetryEvent
 from horus_builtin.executor.shell import ShellExecutor
 from horus_builtin.runtime.command import CommandRuntime
 from horus_builtin.target.local import LocalTarget
@@ -59,8 +60,9 @@ from horus_runtime.core.placement import (
 )
 from horus_runtime.core.resources import ResourceRequest
 from horus_runtime.core.target.base import BaseTarget
-from horus_runtime.core.task.base import BaseTask, InputDigests
+from horus_runtime.core.task.base import BaseTask, InputDigests, TaskRetry
 from horus_runtime.core.task.exceptions import (
+    CommandFailedError,
     TargetLostError,
     TaskExecutionError,
 )
@@ -2170,6 +2172,173 @@ class TestRetryOnTargetLoss:
         assert slots
         assert all(slot.free == 1 for slot in slots)
         assert wf.placement._remaining[location_id] == {"gpus": 1}
+
+
+class _ExitingTask(HorusTask):
+    """Exits with each of ``exits`` in turn, then succeeds."""
+
+    add_to_registry: ClassVar[bool] = False
+    exits: list[int] = Field(default_factory=list)
+
+    async def _run(self) -> None:
+        self.runs += 1
+        if self.exits:
+            code = self.exits.pop(0)
+            raise CommandFailedError(f"exit {code}", code)
+
+
+class _ExitingMapTask(_ExitingTask):
+    """Stands in for a map: it dispatches children."""
+
+    dispatches_children: ClassVar[bool] = True
+
+
+@pytest.mark.unit
+class TestRetryOnExitCode:
+    """
+    ``retry`` runs a task again, on the same machine, when its command
+    exits with a code it covers.
+    """
+
+    async def _run_one(
+        self,
+        tmp_path: Path,
+        exits: list[int],
+        retry: TaskRetry,
+        *,
+        task_cls: type[_ExitingTask] = _ExitingTask,
+    ) -> _ExitingTask:
+        task = _task("t", tmp_path=tmp_path, task_cls=task_cls)
+        assert isinstance(task, _ExitingTask)
+        task.exits = exits
+        task.retry = retry
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+        return task
+
+    async def test_a_covered_code_retries_and_completes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Each retry emits a ``task_retry`` event with its attempt."""
+        events: list[object] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            task = await self._run_one(
+                tmp_path, [5, 5], TaskRetry(max=2, on_exit_codes=[5])
+            )
+
+        assert task.runs == 3
+        assert task.status == TaskStatus.COMPLETED
+        assert task.error is None
+        retries = [e for e in events if isinstance(e, HorusTaskRetryEvent)]
+        assert [(e.attempt, e.max_attempts, e.exit_code) for e in retries] == [
+            (2, 3, 5),
+            (3, 3, 5),
+        ]
+        assert retries[0].event_type == "task_retry"
+        assert retries[0].level == "WARNING"
+        assert retries[0].message == "Exit code 5; attempt 2 of 3 for t."
+
+    async def test_other_codes_fail_at_once(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A code ``on_exit_codes`` does not list is never retried."""
+        del horus_context
+        with pytest.raises(CommandFailedError):
+            await self._run_one(
+                tmp_path, [1], TaskRetry(max=2, on_exit_codes=[5])
+            )
+
+    async def test_spent_attempts_fail(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Without ``on_exit_codes`` any exit retries, up to ``max``."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_ExitingTask)
+        assert isinstance(task, _ExitingTask)
+        task.exits = [7, 7, 7]
+        task.retry = TaskRetry(max=2)
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        with pytest.raises(CommandFailedError):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 3
+        assert task.status == TaskStatus.FAILED
+        assert task.error == "CommandFailedError: exit 7"
+
+    async def test_backoff_doubles(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The wait before each attempt doubles from ``backoff_s``."""
+        events: list[object] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            await self._run_one(
+                tmp_path, [5, 5], TaskRetry(max=2, backoff_s=0.01)
+            )
+
+        assert [
+            e.delay_s for e in events if isinstance(e, HorusTaskRetryEvent)
+        ] == [0.01, 0.02]
+
+    async def test_no_failed_status_before_the_retry(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A middleware sees ``PENDING`` for the failed attempt."""
+        del horus_context
+        seen: list[TaskStatus] = []
+        original_registry = list(TaskMiddleware.registry)
+
+        class RecordingMiddleware(TaskMiddleware):
+            add_to_registry: ClassVar[bool] = False
+
+            async def after(self, context: TaskMiddlewareContext) -> None:
+                seen.append(context.task.status)
+
+        TaskMiddleware.registry = [*original_registry, RecordingMiddleware]
+        try:
+            task = await self._run_one(tmp_path, [5], TaskRetry(max=1))
+        finally:
+            TaskMiddleware.registry = original_registry
+
+        assert seen == [TaskStatus.PENDING, TaskStatus.COMPLETED]
+        assert not task._retry_on_failure
+
+    async def test_each_run_has_its_own_budget(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A workflow run again starts from its first attempt."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_ExitingTask)
+        assert isinstance(task, _ExitingTask)
+        task.exits = [5]
+        task.retry = TaskRetry(max=1)
+        wf = HorusWorkflow(name="retry", tasks=[task])
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        task.exits = [5]
+        await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 4
+        assert task.status == TaskStatus.COMPLETED
+
+    async def test_a_map_is_never_retried_whole(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A task that dispatches children leaves ``retry`` to them."""
+        del horus_context
+        task = _task("t", tmp_path=tmp_path, task_cls=_ExitingMapTask)
+        assert isinstance(task, _ExitingTask)
+        task.exits = [5]
+        task.retry = TaskRetry(max=2)
+        wf = HorusWorkflow(name="map", tasks=[task])
+        with pytest.raises(CommandFailedError):
+            await asyncio.wait_for(wf.run(trigger_id="t"), timeout=10)
+
+        assert task.runs == 1
+        assert task.status == TaskStatus.FAILED
 
 
 class _StreamSource(_PassTask):
