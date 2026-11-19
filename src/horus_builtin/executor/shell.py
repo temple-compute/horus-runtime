@@ -21,6 +21,7 @@ task via the target's channel.
 """
 
 import asyncio
+from collections import deque
 from contextlib import aclosing
 from typing import TYPE_CHECKING, ClassVar
 
@@ -33,6 +34,8 @@ from horus_runtime.settings import runtime_settings
 
 if TYPE_CHECKING:
     from horus_runtime.core.task.base import BaseTask
+
+_ERROR_TAIL_LINES = 20
 
 
 class ShellExecutor(BaseExecutor):
@@ -88,19 +91,18 @@ class ShellExecutor(BaseExecutor):
             task=task,
         )
 
+        # Kept for the failure message: stderr is logged at INFO, which a
+        # failure summary or a WARNING log level leaves out.
+        recent: deque[str] = deque(maxlen=_ERROR_TAIL_LINES)
         try:
             async with aclosing(proc.stream()) as stream:
                 async for stream_name, line in stream:
-                    if stream_name == "stdout":
-                        horus_logger.log.info(
-                            line.decode("utf-8", errors="replace").rstrip()
-                        )
-                    elif stream_name == "stderr":
-                        # Tools write progress to stderr; failure is the
-                        # exit code, not the stream.
-                        horus_logger.log.info(
-                            line.decode("utf-8", errors="replace").rstrip()
-                        )
+                    text = line.decode("utf-8", errors="replace").rstrip()
+                    if stream_name == "stderr" and text:
+                        recent.append(text)
+                    # Tools write progress to stderr; failure is the exit
+                    # code, not the stream.
+                    horus_logger.log.info(text)
         except asyncio.CancelledError:
             proc.kill()
             await proc.wait()
@@ -110,14 +112,16 @@ class ShellExecutor(BaseExecutor):
         returncode = await proc.wait()
 
         if returncode != 0:
+            output = "\n".join(recent)
             horus_logger.log.error(
                 _(
                     "Command execution failed for task %(task_id)s with "
-                    "return code %(return_code)s"
+                    "return code %(return_code)s. Output: %(out)s"
                 )
                 % {
                     "task_id": task.id,
                     "return_code": returncode,
+                    "out": output,
                 }
             )
             # Passed as-is: negative for a local signal, -1 for a lost job.
@@ -125,4 +129,5 @@ class ShellExecutor(BaseExecutor):
                 _("Shell command exited with return code %(return_code)s")
                 % {"return_code": returncode},
                 returncode,
+                output,
             )

@@ -234,6 +234,32 @@ class TestShellExecutorIntegration:
 
         assert levels["progress-on-stderr"] == "INFO"
 
+    async def test_failure_carries_stderr_tail(
+        self, make_shell_task: MakeTaskType, horus_context: HorusContext
+    ) -> None:
+        """
+        A failed command logs at ERROR, and raises with, its last stderr lines.
+        """
+        del horus_context
+        errors: list[str] = []
+        handler_id = logger.add(
+            lambda m: errors.append(m.record["message"]), level="ERROR"
+        )
+        try:
+            with pytest.raises(CommandFailedError) as exc_info:
+                await ShellExecutor().execute(
+                    make_shell_task(
+                        "for i in $(seq 1 25); do echo line$i 1>&2; done; "
+                        "exit 3"
+                    )
+                )
+        finally:
+            logger.remove(handler_id)
+
+        tail = exc_info.value.output.splitlines()
+        assert tail == [f"line{i}" for i in range(6, 26)]
+        assert any("line25" in e and "line5\n" not in e for e in errors)
+
 
 @pytest.mark.unit
 class TestPythonExecExecutor:

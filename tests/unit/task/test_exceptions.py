@@ -71,6 +71,13 @@ def test_command_failed_error_pickles_exit_code() -> None:
 
 
 @pytest.mark.unit
+def test_command_failed_error_pickles_output() -> None:
+    """The stderr tail survives a pickle round trip."""
+    copy = pickle.loads(pickle.dumps(CommandFailedError("x", 3, "boom")))
+    assert copy.output == "boom"
+
+
+@pytest.mark.unit
 def test_command_failed_error_pickles_notes() -> None:
     """A note added after construction survives a pickle round trip."""
     exc = CommandFailedError("exited with 3", 3)
