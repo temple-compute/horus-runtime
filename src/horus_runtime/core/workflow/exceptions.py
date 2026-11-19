@@ -73,18 +73,38 @@ class TaskIdsAreNotUniqueError(WorkflowError):
 
 class ArtifactIdsAreNotUniqueError(WorkflowError):
     """
-    Raised when two or more tasks in the workflow declare the
-    same artifact ID inside inputs or outputs.
+    Raised when one task declares the same artifact ID twice among its
+    inputs or among its outputs, or two root artifacts share an ID.
     """
 
     def __init__(self, duplicate_id: str):
         super().__init__(
             _(
-                "Multiple tasks declare the same output artifact ID '%(id)s'. "
-                "Output artifact IDs must be unique across all "
-                "tasks in a workflow."
+                "Artifact ID '%(id)s' is declared more than once. Artifact "
+                "IDs must be unique within a task's inputs, within its "
+                "outputs, and among the workflow's root artifacts."
             )
             % {"id": duplicate_id}
+        )
+
+
+class SharedInputOutputIdError(WorkflowError):
+    """
+    Raised when a task uses the same ID for an input and an output. Command
+    substitution keys both by ID, so the output would silently shadow the
+    input.
+    """
+
+    def __init__(self, task_id: str, shared_ids: list[str]):
+        super().__init__(
+            _(
+                "Task '%(task)s' uses %(ids)s as both an input and an output "
+                "ID. Rename one of them."
+            )
+            % {
+                "task": task_id,
+                "ids": ", ".join(f"'{i}'" for i in shared_ids),
+            }
         )
 
 

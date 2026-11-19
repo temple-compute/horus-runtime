@@ -97,6 +97,7 @@ from horus_runtime.core.workflow.exceptions import (
     CacheModeError,
     DuplicateEdgeTargetError,
     OneWorkflowAtATimeError,
+    SharedInputOutputIdError,
     SharedTargetError,
     TaskIdsAreNotUniqueError,
     UnknownEdgeEndpointError,
@@ -821,6 +822,21 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 raise ArtifactIdsAreNotUniqueError(artifact.id)
             seen_ids.add(artifact.id)
 
+    @classmethod
+    def _assert_task_artifact_ids(cls, task: BaseTask) -> None:
+        """
+        Raise unless *task*'s output ids and input ids are each unique and
+        no id is both an input and an output. Command substitution keys both
+        sides by id, so a shared id would silently resolve to the output.
+        Shared by :meth:`check_unique_artifact_ids` and the incremental
+        mutators (:meth:`add_task`, :meth:`expand`).
+        """
+        cls._assert_unique_artifact_ids(task.outputs)
+        cls._assert_unique_artifact_ids(task.inputs)
+        shared = {a.id for a in task.inputs} & {a.id for a in task.outputs}
+        if shared:
+            raise SharedInputOutputIdError(task.id, sorted(shared))
+
     @model_validator(mode="after")
     def check_unique_task_ids(self) -> Self:
         """
@@ -834,18 +850,18 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
     def check_unique_artifact_ids(self) -> Self:
         """
         Validates artifact id uniqueness where edge resolution requires it:
-        output ids must be unique *within each task*, and root artifact ids
-        unique among roots. Output ids may repeat across tasks, edges resolve
-        on ``(task id, output id)`` and task ids are unique, so the same
-        reusable task can be placed more than once.
+        output ids and input ids must each be unique *within each task* and
+        never shared between a task's inputs and outputs, and root artifact
+        ids unique among roots. Output ids may repeat across tasks, edges
+        resolve on ``(task id, output id)`` and task ids are unique, so the
+        same reusable task can be placed more than once.
         """
         # Root artifacts must have unique ids across the workflow.
         self._assert_unique_artifact_ids(self.artifacts)
 
-        # Output and input artifacts must have unique ids within each task.
+        # Within each task: unique outputs, unique inputs, none shared.
         for task in self.tasks:
-            self._assert_unique_artifact_ids(task.outputs)
-            self._assert_unique_artifact_ids(task.inputs)
+            self._assert_task_artifact_ids(task)
 
         return self
 
@@ -1049,10 +1065,11 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 existing task id.
             ArtifactIdsAreNotUniqueError: If two of the task's own inputs, or
                 two of its own outputs, share an id.
+            SharedInputOutputIdError: If an id is both one of the task's
+                inputs and one of its outputs.
         """
         self._assert_unique_task_ids([*self.tasks, task])
-        self._assert_unique_artifact_ids(task.outputs)
-        self._assert_unique_artifact_ids(task.inputs)
+        self._assert_task_artifact_ids(task)
 
         self.tasks.append(task)
         self._anchor_task(task)
@@ -1171,6 +1188,8 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
             TaskIdsAreNotUniqueError: If two tasks in the batch share an id.
             ArtifactIdsAreNotUniqueError: If a new task's own inputs/outputs
                 collide, or two new root artifacts share an id.
+            SharedInputOutputIdError: If a new task uses one id as both an
+                input and an output.
             UnknownEdgeEndpointError: If a new edge's target or source does
                 not resolve against the combined graph.
             DuplicateEdgeTargetError: If a new edge duplicates the
@@ -1209,8 +1228,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
 
         self._assert_unique_task_ids(combined_tasks)
         for task in new_tasks:
-            self._assert_unique_artifact_ids(task.outputs)
-            self._assert_unique_artifact_ids(task.inputs)
+            self._assert_task_artifact_ids(task)
         self._assert_unique_artifact_ids(combined_artifacts)
 
         task_inputs = {t.id: {a.id for a in t.inputs} for t in combined_tasks}
