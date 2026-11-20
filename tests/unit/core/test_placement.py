@@ -277,6 +277,26 @@ class TestPlacementOnWait:
         assert await asyncio.wait_for(waiter, timeout=1)
         assert len(calls) == 1
 
+    async def test_cancelled_waiter_called_once(self) -> None:
+        """A waiter cancelled before its grant reports once, holds nothing."""
+        manager = PlacementManager({"loc": ResourceCapacity(memory_gb=4)})
+        four = ResourceRequest(memory_gb=4)
+        await manager.acquire("holder", "loc", four)
+        calls: list[object] = []
+        waiter = asyncio.ensure_future(
+            manager.acquire(
+                "w", "loc", four, on_wait=lambda *args: calls.append(args)
+            )
+        )
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        await manager.release("loc", four)
+
+        assert len(calls) == 1
+        await asyncio.wait_for(manager.acquire("n", "loc", four), timeout=1)
+
     async def test_not_called_when_it_fits(self) -> None:
         """A request granted at once reports nothing."""
         manager = PlacementManager({"loc": ResourceCapacity(cpus=2)})

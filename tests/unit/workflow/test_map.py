@@ -2819,6 +2819,24 @@ class TestItemSlotNames:
             t.id for t in wf.tasks if t.id.startswith("report[")
         ) == ["report[a]", "report[c]"]
 
+    async def test_a_named_slot_dropped_by_code_stays_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A rerun with the same inputs runs no clone and keeps ``a`` only."""
+        del horus_context
+        contents = {"a.txt": "a", "b.txt": "exit 3"}
+        wf, _map = _drop_code_wf(tmp_path, contents, slot_names="item")
+        await wf.run(trigger_id="split")
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["a"]
+
+        wf, map_task = _drop_code_wf(tmp_path, contents, slot_names="item")
+        await wf.run(trigger_id="split")
+
+        assert map_task.skip_reason == SkipReason.COMPLETE
+        assert not [t for t in wf.tasks if t.runs]
+        assert sorted(p.name for p in scored.iterdir()) == ["a"]
+
     def test_opting_in_changes_the_fingerprint_only_then(self) -> None:
         """The default leaves existing map caches valid."""
         over = FolderArtifact(id="batches", path=Path("batches_in"))
