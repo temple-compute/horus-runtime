@@ -57,7 +57,7 @@ class HorusWorkflow(BaseWorkflow):
     """
 
     @model_validator(mode="after")
-    def check_map_pairing(self) -> Self:  # noqa: PLR0915
+    def check_map_pairing(self) -> Self:  # noqa: PLR0912, PLR0915
         """
         Validate what a map's chain and zip need from its edges: a chained
         or paired input must come from a map over the same items, and a
@@ -73,6 +73,8 @@ class HorusWorkflow(BaseWorkflow):
         for edge in self.edges:
             into.setdefault(edge.target, []).append(edge)
         item_spaces: dict[str, tuple[str | None, str] | None] = {}
+        # The first map up each `over` chain: the one that names the slots.
+        heads: dict[str, MapTask] = {}
 
         def map_source(task: MapTask, input_id: str) -> MapTask | None:
             edge = producers.get((task.id, input_id))
@@ -101,11 +103,14 @@ class HorusWorkflow(BaseWorkflow):
                 source = map_source(current, current.over.input_id)
                 if source is None:
                     item_spaces[current.id] = head_space(current)
+                    heads[current.id] = current
                     break
                 current = source
             found = item_spaces[current.id]
             for task_id in path:
                 item_spaces[task_id] = found
+                if current.id in heads:
+                    heads[task_id] = heads[current.id]
             return found
 
         def over_source(task: MapTask) -> str:
@@ -118,6 +123,16 @@ class HorusWorkflow(BaseWorkflow):
 
         for task in maps.values():
             streamed: set[str] = set()
+            if task.slot_names == "item" and map_source(
+                task, task.over.input_id
+            ):
+                raise MapConfigurationError(
+                    _(
+                        "Map task '%(id)s' maps over another map's items, so "
+                        "it keeps their slot names."
+                    )
+                    % {"id": task.id}
+                )
             if task.chain:
                 source = map_source(task, task.over.input_id)
                 if source is None:
@@ -152,6 +167,22 @@ class HorusWorkflow(BaseWorkflow):
                             "input": entry.input_id,
                             "source": source.id,
                             "over_source": over_source(task),
+                        }
+                    )
+                # Zip pairs by slot name, so both sides must name alike.
+                head, own = heads.get(source.id), heads.get(task.id)
+                if head and own and head.slot_names != own.slot_names:
+                    raise MapConfigurationError(
+                        _(
+                            "Map task '%(id)s' pairs '%(input)s' by item, but "
+                            "'%(source)s' and '%(over_source)s' set "
+                            "slot_names differently."
+                        )
+                        % {
+                            "id": task.id,
+                            "input": entry.input_id,
+                            "source": head.id,
+                            "over_source": own.id,
                         }
                     )
                 if task.chain:

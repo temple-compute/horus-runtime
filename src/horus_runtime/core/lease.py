@@ -35,7 +35,13 @@ import asyncio
 import re
 from abc import abstractmethod
 from collections import deque
-from collections.abc import Collection, Coroutine, Iterator, Mapping
+from collections.abc import (
+    Callable,
+    Collection,
+    Coroutine,
+    Iterator,
+    Mapping,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -69,8 +75,12 @@ EVACUATION_CONCURRENCY = 4
 RELEASE_RETRY_S = 60.0
 """First wait before retrying a failed release; doubles up to an hour."""
 
-_CLONE_ID = re.compile(r"(.+)\[(\d+)\]")
-"""A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``)."""
+_CLONE_ID = re.compile(r"(.+)\[([^\[\]/]+)\]")
+"""
+A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``). A
+plain task id of the same shape (``x[y]``) matches too and shares ``x``'s
+fair ``max_parallel`` group; that only changes queue order.
+"""
 
 
 class Phase(StrEnum):
@@ -426,11 +436,16 @@ class LeaseManager:
 
     # Per-task hooks (``execute_task``)
 
-    async def member_slot(self, task: "BaseTask") -> None:
+    async def member_slot(
+        self,
+        task: "BaseTask",
+        on_wait: Callable[[], None] | None = None,
+    ) -> None:
         """
         Wait for a ``member_cap`` slot on *task*'s machine. A task that
         dispatches its own children (a map) takes none, or a cap of 1 would
-        deadlock it against its clones.
+        deadlock it against its clones. *on_wait* is called once when no
+        slot is free.
         """
         lease = self._open_lease(task.target)
         if (
@@ -438,6 +453,8 @@ class LeaseManager:
             and lease.slots is not None
             and not task.dispatches_children
         ):
+            if on_wait is not None and not lease.slots.free:
+                on_wait()
             clone = _CLONE_ID.fullmatch(task.id)
             await lease.slots.acquire(clone[1] if clone else None)
 

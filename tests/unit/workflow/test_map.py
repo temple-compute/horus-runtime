@@ -32,7 +32,7 @@ import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -172,6 +172,7 @@ def _map_task(
     output_path: str = "scored_out",
     extra_inputs: list[FileArtifact] | None = None,
     max_concurrency: int | None = None,
+    slot_names: Literal["index", "item"] = "index",
 ) -> MapTask:
     """A ``horus_map`` task running *command* once per item."""
     return MapTask(
@@ -184,6 +185,7 @@ def _map_task(
         inputs=[over_artifact, *(extra_inputs or [])],
         outputs=[FolderArtifact(id="scored", path=Path(output_path))],
         max_concurrency=max_concurrency,
+        slot_names=slot_names,
     )
 
 
@@ -1387,6 +1389,52 @@ class TestMapFields:
             [*edges, _edge("split", "out", "c", "batches")],
         )
 
+    def test_v6_zip_slot_names_differ(self) -> None:
+        """Zip pairs by slot name: item names never match index names."""
+        b = _consumer(
+            inputs=("a_out", "c_out"),
+            zip=[MapOver(input_id="c_out", item_id="pair")],
+        )
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' pairs 'c_out' by item, but 'c' and 'a' set "
+                "slot_names differently."
+            ),
+        ):
+            _pairing_wf(
+                b,
+                [
+                    _plain("split"),
+                    _over_map("a"),
+                    _over_map("c", slot_names="item"),
+                ],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("split", "out", "c", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                    _edge("c", "scored", "b", "c_out"),
+                ],
+            )
+
+    def test_slot_names_item_over_a_map_is_rejected(self) -> None:
+        """Over another map's output the slots keep that map's names."""
+        with pytest.raises(
+            ValidationError,
+            match=re.escape(
+                "Map task 'b' maps over another map's items, so it keeps "
+                "their slot names."
+            ),
+        ):
+            _pairing_wf(
+                _consumer(slot_names="item"),
+                [_plain("split"), _over_map("a")],
+                [
+                    _edge("split", "out", "a", "batches"),
+                    _edge("a", "scored", "b", "a_out"),
+                ],
+            )
+
     def test_v6_over_cycle_loads(self) -> None:
         """
         Maps feeding each other's ``over`` skip the pairing check instead
@@ -1847,13 +1895,15 @@ def _report_map() -> MapTask:
     )
 
 
-def _chain(tmp_path: Path, names: list[str]) -> HorusWorkflow:
+def _chain(
+    tmp_path: Path, names: list[str], **kwargs: object
+) -> HorusWorkflow:
     """The chain ``split -> score -> report``, both maps dropping."""
     report = _report_map()
     return _wire(
         tmp_path,
         split=_split_task(tmp_path, names),
-        map_task=_dropping_map(command=_FLAKY),
+        map_task=_dropping_map(command=_FLAKY, **kwargs),
         extra_tasks=[report],
         extra_edges=[
             WorkflowEdge(
@@ -2680,6 +2730,185 @@ class TestSlotNames:
 
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+
+@pytest.mark.unit
+class TestItemSlotNames:
+    """``slot_names: item`` names each slot after its item."""
+
+    async def test_file_items_name_slots_without_suffixes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``s1.fastq.gz`` runs as ``score[s1]`` into ``scored_out/s1``."""
+        del horus_context
+        split = _split_task(tmp_path, ["s1.fastq.gz", "s2.fastq.gz"])
+        map_task = _dropping_map(slot_names="item")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["s1", "s2"]
+        assert (scored / "s1" / "result.txt").read_text() == "s1.fastq.gz"
+        assert {t.id for t in wf.tasks if t.id.startswith("score[")} == {
+            "score[s1]",
+            "score[s2]",
+        }
+
+    @pytest.mark.parametrize(
+        "names",
+        [["a.txt", "a.csv"], ["a.txt", "b c.txt"], ["S1.txt", "s1.txt"]],
+    )
+    async def test_clashing_or_invalid_names_fall_back_to_indices(
+        self, tmp_path: Path, horus_context: HorusContext, names: list[str]
+    ) -> None:
+        """One bad name keeps the whole map on indices, with a warning."""
+        split = _split_task(tmp_path, names)
+        map_task = _dropping_map(slot_names="item")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+        assert any(
+            isinstance(c.args[0], HorusTaskEvent)
+            and c.args[0].level == "WARNING"
+            and "by index" in (c.args[0].message or "")
+            for c in emit.call_args_list
+        )
+
+    async def test_json_list_items_keep_indices(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Values have no name."""
+        del horus_context
+        split = _json_split_task(tmp_path, ["x", "y"])
+        map_task = _map_task(
+            over_artifact=JSONArtifact(
+                id="batches", path=Path("batches_in.json")
+            ),
+            command="echo $batch > $scored/result.txt",
+        )
+        map_task.slot_names = "item"
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+    async def test_a_chained_map_keeps_the_names_and_drops_by_name(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The next map inherits ``a`` and ``c``; dropped ``b`` is gone."""
+        del horus_context
+        wf = _chain(tmp_path, ["a.txt", "b.txt", "c.txt"], slot_names="item")
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        reports = tmp_path / "reports_out"
+        assert sorted(p.name for p in reports.iterdir()) == ["a", "c"]
+        assert sorted(
+            t.id for t in wf.tasks if t.id.startswith("report[")
+        ) == ["report[a]", "report[c]"]
+
+    async def test_a_named_slot_dropped_by_code_stays_dropped(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """A rerun with the same inputs runs no clone and keeps ``a`` only."""
+        del horus_context
+        contents = {"a.txt": "a", "b.txt": "exit 3"}
+        wf, _map = _drop_code_wf(tmp_path, contents, slot_names="item")
+        await wf.run(trigger_id="split")
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["a"]
+
+        wf, map_task = _drop_code_wf(tmp_path, contents, slot_names="item")
+        await wf.run(trigger_id="split")
+
+        assert map_task.skip_reason == SkipReason.COMPLETE
+        assert not [t for t in wf.tasks if t.runs]
+        assert sorted(p.name for p in scored.iterdir()) == ["a"]
+
+    def test_opting_in_changes_the_fingerprint_only_then(self) -> None:
+        """The default leaves existing map caches valid."""
+        over = FolderArtifact(id="batches", path=Path("batches_in"))
+        assert (
+            "slot_names" not in _map_task(over_artifact=over)._config_extra()
+        )
+        named = _map_task(over_artifact=over)
+        named.slot_names = "item"
+        assert named._config_extra()["slot_names"] == "item"
+
+
+@pytest.mark.unit
+class TestSizingWarning:
+    """A map warns when its machine fits fewer items than it would run."""
+
+    async def _warnings(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        memory_gb: int,
+        *runs: list[str],
+    ) -> list[HorusTaskEvent]:
+        """The sizing warnings of the last run; one run per item list."""
+        for names in runs:
+            shutil.rmtree(tmp_path / "batches", ignore_errors=True)
+            split = _split_task(tmp_path, names)
+            map_task = _dropping_map()
+            map_task.resources = ResourceRequest(memory_gb=memory_gb)
+            wf = _wire(tmp_path, split=split, map_task=map_task)
+            wf.capacity = {
+                map_task.target.location_id: ResourceCapacity(memory_gb=64)
+            }
+            with patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit:
+                await wf.run(trigger_id="split")
+            assert wf.status.value == "completed"
+        return [
+            c.args[0]
+            for c in emit.call_args_list
+            if isinstance(c.args[0], HorusTaskEvent)
+            and "sizing" in c.args[0].data
+        ]
+
+    async def test_big_items_warn_how_many_fit(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """56 GB items on a 64 GB machine: one at a time."""
+        (event,) = await self._warnings(
+            tmp_path, horus_context, 56, ["a.txt", "b.txt", "c.txt"]
+        )
+        assert event.level == "WARNING"
+        assert event.data["sizing"]["fits"] == 1
+        assert event.data["sizing"]["items"] == 3
+        assert (event.message or "").startswith("Map score fits 1 of 3 ")
+
+    async def test_items_that_all_fit_do_not_warn(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Three 16 GB items fit at once."""
+        assert not await self._warnings(
+            tmp_path, horus_context, 16, ["a.txt", "b.txt", "c.txt"]
+        )
+
+    async def test_a_rerun_whose_clones_all_skip_does_not_warn(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``d`` is gone, so the map runs again; every clone skips."""
+        names = ["a.txt", "b.txt", "c.txt"]
+        assert not await self._warnings(
+            tmp_path, horus_context, 56, [*names, "d.txt"], names
+        )
 
 
 # Set while the ready callbacks run, like terraform's provisioning context.

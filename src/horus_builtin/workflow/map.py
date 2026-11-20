@@ -26,6 +26,8 @@ output.
 import asyncio
 import contextvars
 import json
+import math
+import re
 import shlex
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
@@ -48,7 +50,11 @@ from horus_builtin.task.horus_task import (
     HorusTask,
     TaskFingerprint,
 )
-from horus_builtin.workflow.scheduler import TargetPool, execute_task
+from horus_builtin.workflow.scheduler import (
+    DEFAULT_MAX_CONCURRENCY,
+    TargetPool,
+    execute_task,
+)
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
@@ -87,6 +93,9 @@ _MAX_EXIT_CODE = 255
 # Characters per `rm -rf` command line. Linux caps one argument at 128 KiB,
 # and sshd passes the whole command as one (`$SHELL -c`).
 _RM_CHARS = 32 * 1024
+
+# A slot named by its item: a plain folder name, never hidden or a path.
+_SLOT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class MapConfigurationError(WorkflowError):
@@ -309,6 +318,17 @@ class MapTask(HorusTask):
     :attr:`on_item_failure` says, and are never retried. The clone ends
     SKIPPED with ``skip_reason: dropped``, and stays dropped on later runs
     until an input, the command or these codes change.
+    """
+
+    slot_names: Literal["index", "item"] = "index"
+    """
+    How slot folders are named. ``"index"`` (the default): zero-padded
+    item numbers. ``"item"``: the item's name, a file's without its
+    suffixes (``s1.fastq.gz`` is ``s1``), when every name is unique and
+    matches ``[A-Za-z0-9][A-Za-z0-9._-]{0,63}``; else indices, with a
+    warning. Only for a folder ``over``; a map over another map's output
+    keeps that map's names and cannot set it. Maps paired by ``zip`` must
+    name their slots alike.
     """
 
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
@@ -674,15 +694,15 @@ class MapTask(HorusTask):
             # indices, so the slots sort the same lexically and numerically.
             width = max(1, len(str(len(items) - 1)))
             inherit = self._over_is_map_output(wf)
-            slots = {
-                (
-                    Path(item.path).name if inherit else f"{index:0{width}d}"
-                ): item
+            keys = (None if inherit else self._item_slot_names(items)) or [
+                Path(item.path).name if inherit else f"{index:0{width}d}"
                 for index, item in enumerate(items)
-            }
+            ]
+            slots = dict(zip(keys, items, strict=True))
             labels = {
                 slot: Path(item.path).name for slot, item in slots.items()
             }
+        warn = self._sizing_warning(wf, len(slots))
         root = Path(self.target.path_on_target(self.outputs[0]))
         await self.target.mkdir(str(root))
 
@@ -856,6 +876,7 @@ class MapTask(HorusTask):
 
         for clone in clones:
             clone._depth = self._depth  # noqa: SLF001
+            clone._after_wait = warn  # noqa: SLF001
         modes = self._consumer_modes(wf)
         run_clone = partial(
             self._run_item,
@@ -1457,7 +1478,98 @@ class MapTask(HorusTask):
             ]
         if self.drop_exit_codes:
             extra["drop_exit_codes"] = self.drop_exit_codes
+        if self.slot_names != "index":
+            extra["slot_names"] = self.slot_names
         return extra
+
+    def _item_slot_names(self, items: list[BaseArtifact]) -> list[str] | None:
+        """
+        One slot name per item when :attr:`slot_names` is ``"item"`` and
+        every name is valid and unique, ignoring case; else ``None`` (indices).
+        """
+        if self.slot_names != "item" or not isinstance(
+            self._over_artifact, FolderArtifact
+        ):
+            return None
+        names = [
+            Path(item.path).name
+            if isinstance(item, FolderArtifact)
+            else Path(item.path).name.split(".", 1)[0]
+            for item in items
+        ]
+        if len({n.casefold() for n in names}) == len(names) and all(
+            _SLOT_NAME.fullmatch(name) for name in names
+        ):
+            return names
+        self._emit_warning(
+            _(
+                "Map %(name)s names its slots by index: its item names are "
+                "not unique or not valid folder names."
+            )
+            % {"name": self.name}
+        )
+        return None
+
+    def _sizing_warning(
+        self, wf: BaseWorkflow, items: int
+    ) -> Callable[[], None] | None:
+        """
+        When the machine fits fewer clones at once than the map would run,
+        a callback that warns once: the first clone that waited for room
+        and runs calls it.
+        """
+        target = self.target
+        capacity = (wf.capacity or {}).get(
+            target.location_id
+        ) or target.node_capacity()
+        if capacity is None or self.resources is None:
+            return None
+        fits = math.inf
+        for dim in ("cpus", "gpus", "memory_gb", "vram_gb"):
+            need = getattr(self.resources, dim)
+            have = getattr(capacity, dim)
+            if need and have is not None:
+                fits = min(fits, have // need)
+        cap = (
+            DEFAULT_MAX_CONCURRENCY
+            if self.max_concurrency is None
+            else self.max_concurrency or math.inf
+        )
+        runs = min(items, cap, target.member_cap or math.inf)
+        if fits >= runs:
+            return None
+        ref = target._ref or target.location_id  # noqa: SLF001
+        warned = False
+
+        def warn() -> None:
+            nonlocal warned
+            if not warned:
+                warned = True
+                self._emit_warning(
+                    _(
+                        "Map %(name)s fits %(k)d of %(n)d items at once on "
+                        "%(ref)s."
+                    )
+                    % {"name": self.name, "k": fits, "n": runs, "ref": ref},
+                    {"sizing": {"fits": fits, "items": runs, "target": ref}},
+                )
+
+        return warn
+
+    def _emit_warning(
+        self, message: str, data: dict[str, Any] | None = None
+    ) -> None:
+        """Log *message* and emit it as a warning event of this map."""
+        horus_logger.log.warning(message)
+        HorusContext.get_context().bus.emit(
+            HorusTaskEvent(
+                task_id=self.id,
+                task_name=self.name,
+                level="WARNING",
+                message=message,
+                data=data or {},
+            )
+        )
 
     async def _fingerprint(
         self, input_digests: Mapping[str, str | None] | None = None

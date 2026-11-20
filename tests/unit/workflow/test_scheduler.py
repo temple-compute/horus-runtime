@@ -2160,8 +2160,8 @@ class TestRetryOnTargetLoss:
         slots: list[_FairSlots] = []
         member_slot = wf.leases.member_slot
 
-        async def record_slot(task: HorusTask) -> None:
-            await member_slot(task)
+        async def record_slot(task: HorusTask, **kwargs: Any) -> None:
+            await member_slot(task, **kwargs)
             lease = wf.leases._lease_for(task.target)
             if lease is not None and lease.slots is not None:
                 slots.append(lease.slots)

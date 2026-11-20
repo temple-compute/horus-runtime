@@ -35,6 +35,7 @@ concurrency governed exactly as before by :class:`TargetPool` and
 import asyncio
 import bisect
 import itertools
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -215,13 +216,19 @@ class PlacementManager:
         location_id: str,
         resources: ResourceRequest | None,
         priority: int = 0,
-    ) -> None:
+        on_wait: Callable[[dict[str, int], dict[str, int]], None]
+        | None = None,
+    ) -> bool:
         """
         Wait until *location_id* has room for *resources*, then reserve it.
 
         When room frees up, the waiting request with the highest *priority*
         (then the earliest) that fits is granted first, so the scheduler can
         order work by its depth in the DAG.
+
+        *on_wait* is called once, with the requested and the free amounts
+        per gated dimension, when the request has to wait. Returns whether
+        it waited.
 
         A no-op whenever *resources* is ``None`` or *location_id* has no
         declared capacity: such tasks are never gated, so behavior stays
@@ -233,13 +240,13 @@ class PlacementManager:
                 never be satisfied even with nothing else running there.
         """
         if resources is None:
-            return
+            return False
         total = self._total.get(location_id)
         if total is None:
-            return
+            return False
         requested = _requested_amounts(resources)
         if not requested:
-            return
+            return False
 
         # Checked against the fixed total (not the current remaining) before
         # ever waiting, so an unsatisfiable request fails fast instead of
@@ -255,7 +262,16 @@ class PlacementManager:
         # that fits now jumps no waiter that could run.
         if self._fits(location_id, requested):
             self._take(location_id, requested)
-            return
+            return False
+        if on_wait is not None:
+            on_wait(
+                {
+                    dim: amount
+                    for dim, amount in requested.items()
+                    if dim in self._remaining[location_id]
+                },
+                dict(self._remaining[location_id]),
+            )
         future: asyncio.Future[None] = (
             asyncio.get_running_loop().create_future()
         )
@@ -271,6 +287,7 @@ class PlacementManager:
             if future.done() and not future.cancelled():
                 self._give(location_id, requested)
             raise
+        return True
 
     async def release(
         self,

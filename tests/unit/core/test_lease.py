@@ -1269,6 +1269,75 @@ class TestSlotsAndCapacity:
 
         assert peak[0] == 1
 
+    async def test_waiting_members_report_why(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A member blocked on ``max_parallel`` or on the machine's size
+        emits a wait event with its reason.
+        """
+        del evacuator
+        node = FakeNode(
+            working_directory=tmp_path.as_posix(),
+            max_parallel=2,
+            capacity=ResourceCapacity(cpus=4),
+        )
+
+        class _Sleeps(_Step):
+            async def _run(self) -> None:
+                await asyncio.sleep(0.05)
+
+        # Two take the slots, one of them waits for cpus; the third waits
+        # for a slot.
+        tasks = [
+            _Sleeps(
+                id=f"t{i}",
+                name=f"t{i}",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                target=node,
+                resources=ResourceRequest(cpus=4),
+            )
+            for i in range(3)
+        ]
+        start = _step("start", LocalTarget(), tmp_path)
+        wf = _workflow(
+            tmp_path,
+            [start, *tasks],
+            [WorkflowEdge(source="start", target=t.id) for t in tasks],
+        )
+        events: list[Any] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            await wf.run(trigger_id="start")
+
+        waits = [e.data["wait"] for e in events if "wait" in e.data]
+        assert {w["reason"] for w in waits} == {"max_parallel", "resources"}
+        resources = next(w for w in waits if w["reason"] == "resources")
+        assert resources["needs"] == {"cpus": 4}
+        assert resources["free"] == {"cpus": 0}
+        assert resources["target"] == node.location_id
+
+    @pytest.mark.parametrize(
+        ("task_id", "groups"),
+        [
+            ("score[07]", ("score", "07")),
+            ("score[s1.v2]", ("score", "s1.v2")),
+            ("sub/score[a-b]", ("sub/score", "a-b")),
+            ("loop#1", None),
+        ],
+    )
+    def test_clone_ids_with_named_slots_group_by_map(
+        self, task_id: str, groups: tuple[str, str] | None
+    ) -> None:
+        """A slot named by its item still reads as that map's clone."""
+        match = lease_module._CLONE_ID.fullmatch(task_id)
+        assert (match.groups() if match else None) == groups
+
     async def test_declare_keeps_an_existing_capacity(self) -> None:
         """``declare`` never overrides capacity the workflow declared."""
         placement = PlacementManager({"loc": ResourceCapacity(cpus=2)})
