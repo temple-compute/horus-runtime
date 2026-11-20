@@ -35,7 +35,13 @@ import asyncio
 import re
 from abc import abstractmethod
 from collections import deque
-from collections.abc import Collection, Coroutine, Iterator, Mapping
+from collections.abc import (
+    Callable,
+    Collection,
+    Coroutine,
+    Iterator,
+    Mapping,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -426,11 +432,16 @@ class LeaseManager:
 
     # Per-task hooks (``execute_task``)
 
-    async def member_slot(self, task: "BaseTask") -> None:
+    async def member_slot(
+        self,
+        task: "BaseTask",
+        on_wait: Callable[[], None] | None = None,
+    ) -> None:
         """
         Wait for a ``member_cap`` slot on *task*'s machine. A task that
         dispatches its own children (a map) takes none, or a cap of 1 would
-        deadlock it against its clones.
+        deadlock it against its clones. *on_wait* is called once when no
+        slot is free.
         """
         lease = self._open_lease(task.target)
         if (
@@ -438,6 +449,8 @@ class LeaseManager:
             and lease.slots is not None
             and not task.dispatches_children
         ):
+            if on_wait is not None and not lease.slots.free:
+                on_wait()
             clone = _CLONE_ID.fullmatch(task.id)
             await lease.slots.acquire(clone[1] if clone else None)
 

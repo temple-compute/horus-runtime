@@ -1269,6 +1269,59 @@ class TestSlotsAndCapacity:
 
         assert peak[0] == 1
 
+    async def test_waiting_members_report_why(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        evacuator: type[_RecordingEvacuator],
+    ) -> None:
+        """
+        A member blocked on ``max_parallel`` or on the machine's size
+        emits a wait event with its reason.
+        """
+        del evacuator
+        node = FakeNode(
+            working_directory=tmp_path.as_posix(),
+            max_parallel=2,
+            capacity=ResourceCapacity(cpus=4),
+        )
+
+        class _Sleeps(_Step):
+            async def _run(self) -> None:
+                await asyncio.sleep(0.05)
+
+        # Two take the slots, one of them waits for cpus; the third waits
+        # for a slot.
+        tasks = [
+            _Sleeps(
+                id=f"t{i}",
+                name=f"t{i}",
+                runtime=CommandRuntime(command="true"),
+                executor=ShellExecutor(),
+                target=node,
+                resources=ResourceRequest(cpus=4),
+            )
+            for i in range(3)
+        ]
+        start = _step("start", LocalTarget(), tmp_path)
+        wf = _workflow(
+            tmp_path,
+            [start, *tasks],
+            [WorkflowEdge(source="start", target=t.id) for t in tasks],
+        )
+        events: list[Any] = []
+        with patch.object(
+            horus_context.bus, "emit", side_effect=events.append
+        ):
+            await wf.run(trigger_id="start")
+
+        waits = [e.data["wait"] for e in events if "wait" in e.data]
+        assert {w["reason"] for w in waits} == {"max_parallel", "resources"}
+        resources = next(w for w in waits if w["reason"] == "resources")
+        assert resources["needs"] == {"cpus": 4}
+        assert resources["free"] == {"cpus": 0}
+        assert resources["target"] == node.location_id
+
     async def test_declare_keeps_an_existing_capacity(self) -> None:
         """``declare`` never overrides capacity the workflow declared."""
         placement = PlacementManager({"loc": ResourceCapacity(cpus=2)})

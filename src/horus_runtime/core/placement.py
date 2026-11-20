@@ -35,6 +35,7 @@ concurrency governed exactly as before by :class:`TargetPool` and
 import asyncio
 import bisect
 import itertools
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -215,6 +216,8 @@ class PlacementManager:
         location_id: str,
         resources: ResourceRequest | None,
         priority: int = 0,
+        on_wait: Callable[[dict[str, int], dict[str, int]], None]
+        | None = None,
     ) -> None:
         """
         Wait until *location_id* has room for *resources*, then reserve it.
@@ -222,6 +225,9 @@ class PlacementManager:
         When room frees up, the waiting request with the highest *priority*
         (then the earliest) that fits is granted first, so the scheduler can
         order work by its depth in the DAG.
+
+        *on_wait* is called once, with the requested and the free amounts
+        per gated dimension, when the request has to wait.
 
         A no-op whenever *resources* is ``None`` or *location_id* has no
         declared capacity: such tasks are never gated, so behavior stays
@@ -256,6 +262,15 @@ class PlacementManager:
         if self._fits(location_id, requested):
             self._take(location_id, requested)
             return
+        if on_wait is not None:
+            on_wait(
+                {
+                    dim: amount
+                    for dim, amount in requested.items()
+                    if dim in self._remaining[location_id]
+                },
+                dict(self._remaining[location_id]),
+            )
         future: asyncio.Future[None] = (
             asyncio.get_running_loop().create_future()
         )

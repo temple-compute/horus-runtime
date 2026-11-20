@@ -245,3 +245,46 @@ class TestPlacementPriority:
         await asyncio.wait_for(nxt, timeout=1)
         with pytest.raises(asyncio.CancelledError):
             await doomed
+
+
+@pytest.mark.unit
+class TestPlacementOnWait:
+    """``on_wait`` reports a request that has to wait, once."""
+
+    async def test_called_once_with_needs_and_free(self) -> None:
+        """A blocked request reports its gated needs and the free room."""
+        manager = PlacementManager(
+            {"loc": ResourceCapacity(cpus=8, memory_gb=64)}
+        )
+        await manager.acquire(
+            "holder", "loc", ResourceRequest(cpus=2, memory_gb=56)
+        )
+        calls: list[tuple[dict[str, int], dict[str, int]]] = []
+        waiter = asyncio.ensure_future(
+            manager.acquire(
+                "w",
+                "loc",
+                ResourceRequest(cpus=2, gpus=1, memory_gb=56),
+                on_wait=lambda needs, free: calls.append((needs, free)),
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert calls == [
+            ({"cpus": 2, "memory_gb": 56}, {"cpus": 6, "memory_gb": 8})
+        ]
+        await manager.release("loc", ResourceRequest(cpus=2, memory_gb=56))
+        await asyncio.wait_for(waiter, timeout=1)
+        assert len(calls) == 1
+
+    async def test_not_called_when_it_fits(self) -> None:
+        """A request granted at once reports nothing."""
+        manager = PlacementManager({"loc": ResourceCapacity(cpus=2)})
+        calls: list[object] = []
+        await manager.acquire(
+            "t",
+            "loc",
+            ResourceRequest(cpus=2),
+            on_wait=lambda *args: calls.append(args),
+        )
+        assert calls == []

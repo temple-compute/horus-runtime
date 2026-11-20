@@ -28,7 +28,7 @@ import asyncio
 from collections.abc import Collection
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from horus_builtin.event.task_event import HorusTaskEvent, HorusTaskRetryEvent
 from horus_builtin.workflow.condition import compute_liveness
@@ -221,7 +221,12 @@ async def execute_task(
         return
 
     leases = workflow.leases
-    await leases.member_slot(task)
+    await leases.member_slot(
+        task,
+        on_wait=partial(
+            _emit_wait, task, "max_parallel", {"slots": 1}, {"slots": 0}
+        ),
+    )
     try:
         await _execute_on_target(
             workflow,
@@ -237,6 +242,65 @@ async def execute_task(
 
 async def _noop() -> None:
     """The end of the task-skip middleware chain: nothing to wrap."""
+
+
+def _emit_wait(
+    task: "BaseTask",
+    reason: Literal["resources", "max_parallel"],
+    needs: dict[str, int],
+    free: dict[str, int],
+) -> None:
+    """
+    Report that *task* waits for room on its machine.
+
+    The :class:`HorusTaskEvent` carries ``data``::
+
+        {"wait": {
+            "reason": "resources" | "max_parallel",
+            "target": str,           # target ref, else its location_id
+            "needs": {str: int},     # what the task asks for
+            "free": {str: int},      # what is free now
+        }}
+
+    ``resources``: placement is short of a declared dimension (``cpus``,
+    ``gpus``, ``memory_gb``, ``vram_gb``). ``max_parallel``: every slot of
+    the machine's ``max_parallel`` is taken (``{"slots": 1}`` needed,
+    ``{"slots": 0}`` free). Emitted once per wait; the task stays queued
+    until it starts or ends.
+    """
+    target = task.target._ref or task.target.location_id  # noqa: SLF001
+    if reason == "resources":
+        message = _(
+            "Waiting for room on %(target)s: needs %(needs)s, free %(free)s."
+        ) % {
+            "target": target,
+            "needs": _amounts(needs),
+            "free": _amounts(free),
+        }
+    else:
+        message = _(
+            "Waiting for a slot on %(target)s: max_parallel reached."
+        ) % {"target": target}
+    HorusContext.get_context().bus.emit(
+        HorusTaskEvent(
+            task_id=task.id,
+            task_name=task.name,
+            message=message,
+            data={
+                "wait": {
+                    "reason": reason,
+                    "target": target,
+                    "needs": needs,
+                    "free": free,
+                }
+            },
+        )
+    )
+
+
+def _amounts(amounts: dict[str, int]) -> str:
+    """``{"cpus": 4, "memory_gb": 8}`` as ``cpus=4, memory_gb=8``."""
+    return ", ".join(f"{dim}={amount}" for dim, amount in amounts.items())
 
 
 async def _execute_on_target(
@@ -272,6 +336,7 @@ async def _execute_on_target(
             resources,
             # Shallowest first: see `_run_ready_set`.
             priority=-task._depth,  # noqa: SLF001
+            on_wait=partial(_emit_wait, task, "resources"),
         )
         # `transfer_artifacts` and `dispatch` both operate off `task.target`,
         # so point it at the target we actually acquired for the duration of
