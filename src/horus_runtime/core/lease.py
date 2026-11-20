@@ -76,7 +76,11 @@ RELEASE_RETRY_S = 60.0
 """First wait before retrying a failed release; doubles up to an hour."""
 
 _CLONE_ID = re.compile(r"(.+)\[([^\[\]/]+)\]")
-"""A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``)."""
+"""
+A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``). A
+plain task id of the same shape (``x[y]``) matches too and shares ``x``'s
+fair ``max_parallel`` group; that only changes queue order.
+"""
 
 
 class Phase(StrEnum):
