@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: horus-runtime 0.0.1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-19 23:18+0100\n"
+"POT-Creation-Date: 2026-11-20 01:39+0100\n"
 "PO-Revision-Date: 2026-07-20 13:50+0200\n"
 "Last-Translator: Christian Domínguez "
 "<christian.dominguez@templecompute.com>\n"
@@ -111,32 +111,32 @@ msgstr "Los nombres que empiezan por HORUS_ están reservados."
 msgid "%(name)s is reserved."
 msgstr "%(name)s está reservado."
 
-#: src/horus_runtime/core/lease.py:233
+#: src/horus_runtime/core/lease.py:239
 #, python-format
 msgid "Cannot evacuate '%(out)s': no orchestrator target is set."
 msgstr "No se puede evacuar '%(out)s': no hay destino del orquestador."
 
-#: src/horus_runtime/core/lease.py:781
+#: src/horus_runtime/core/lease.py:794
 #, python-format
 msgid "Releasing machine '%(key)s' failed: %(error)s"
 msgstr "No se pudo liberar la máquina '%(key)s': %(error)s"
 
-#: src/horus_runtime/core/lease.py:824 src/horus_runtime/core/lease.py:858
+#: src/horus_runtime/core/lease.py:837 src/horus_runtime/core/lease.py:871
 #, python-format
 msgid "Evacuating from machine '%(key)s' failed: %(error)s"
 msgstr "No se pudo evacuar la máquina '%(key)s': %(error)s"
 
-#: src/horus_runtime/core/lease.py:893
+#: src/horus_runtime/core/lease.py:906
 #, python-format
 msgid "Keepalive of machine '%(key)s' failed: %(e)s"
 msgstr "Falló el keepalive de la máquina '%(key)s': %(e)s"
 
-#: src/horus_runtime/core/lease.py:943
+#: src/horus_runtime/core/lease.py:956
 #, python-format
 msgid "Releasing a machine at run end failed: %(error)s"
 msgstr "No se pudo liberar una máquina al final de la ejecución: %(error)s"
 
-#: src/horus_runtime/core/placement.py:94
+#: src/horus_runtime/core/placement.py:95
 #, python-format
 msgid ""
 "Task '%(task_name)s' requests %(requested)s %(dimension)s at location "

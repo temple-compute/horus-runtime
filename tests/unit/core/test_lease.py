@@ -1322,6 +1322,22 @@ class TestSlotsAndCapacity:
         assert resources["free"] == {"cpus": 0}
         assert resources["target"] == node.location_id
 
+    @pytest.mark.parametrize(
+        ("task_id", "groups"),
+        [
+            ("score[07]", ("score", "07")),
+            ("score[s1.v2]", ("score", "s1.v2")),
+            ("sub/score[a-b]", ("sub/score", "a-b")),
+            ("loop#1", None),
+        ],
+    )
+    def test_clone_ids_with_named_slots_group_by_map(
+        self, task_id: str, groups: tuple[str, str] | None
+    ) -> None:
+        """A slot named by its item still reads as that map's clone."""
+        match = lease_module._CLONE_ID.fullmatch(task_id)
+        assert (match.groups() if match else None) == groups
+
     async def test_declare_keeps_an_existing_capacity(self) -> None:
         """``declare`` never overrides capacity the workflow declared."""
         placement = PlacementManager({"loc": ResourceCapacity(cpus=2)})

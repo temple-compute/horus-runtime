@@ -75,7 +75,7 @@ EVACUATION_CONCURRENCY = 4
 RELEASE_RETRY_S = 60.0
 """First wait before retrying a failed release; doubles up to an hour."""
 
-_CLONE_ID = re.compile(r"(.+)\[(\d+)\]")
+_CLONE_ID = re.compile(r"(.+)\[([^\[\]/]+)\]")
 """A map clone's id, ``<map id>[<slot>]`` (see ``BaseWorkflow.expand``)."""
 
 

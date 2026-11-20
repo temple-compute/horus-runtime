@@ -363,7 +363,7 @@ class TestExpand:
         emits (nested ones too) and their edges, but keeps a user task whose
         id merely starts like a clone.
         """
-        lookalike = _task("m[x]")
+        lookalike = _task("m[x]y")
         wf = HorusWorkflow(name="wf", tasks=[_task("m"), lookalike])
         clones = [_task(f"m[{i}]") for i in range(3)]
         wf.expand(
@@ -376,7 +376,7 @@ class TestExpand:
         fresh_edge = WorkflowEdge(source="m", target="m[0]")
         wf.expand(tasks=[fresh], edges=[fresh_edge], owner="m")
 
-        assert [t.id for t in wf.tasks] == ["m", "m[x]", "m[0]"]
+        assert [t.id for t in wf.tasks] == ["m", "m[x]y", "m[0]"]
         assert wf.tasks[2] is fresh
         assert wf.edges == [fresh_edge]
 

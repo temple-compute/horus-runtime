@@ -32,7 +32,7 @@ import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -172,6 +172,7 @@ def _map_task(
     output_path: str = "scored_out",
     extra_inputs: list[FileArtifact] | None = None,
     max_concurrency: int | None = None,
+    slot_names: Literal["index", "item"] = "index",
 ) -> MapTask:
     """A ``horus_map`` task running *command* once per item."""
     return MapTask(
@@ -184,6 +185,7 @@ def _map_task(
         inputs=[over_artifact, *(extra_inputs or [])],
         outputs=[FolderArtifact(id="scored", path=Path(output_path))],
         max_concurrency=max_concurrency,
+        slot_names=slot_names,
     )
 
 
@@ -1847,13 +1849,15 @@ def _report_map() -> MapTask:
     )
 
 
-def _chain(tmp_path: Path, names: list[str]) -> HorusWorkflow:
+def _chain(
+    tmp_path: Path, names: list[str], **kwargs: object
+) -> HorusWorkflow:
     """The chain ``split -> score -> report``, both maps dropping."""
     report = _report_map()
     return _wire(
         tmp_path,
         split=_split_task(tmp_path, names),
-        map_task=_dropping_map(command=_FLAKY),
+        map_task=_dropping_map(command=_FLAKY, **kwargs),
         extra_tasks=[report],
         extra_edges=[
             WorkflowEdge(
@@ -2680,6 +2684,103 @@ class TestSlotNames:
 
         scored = tmp_path / "scored_out"
         assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+
+@pytest.mark.unit
+class TestItemSlotNames:
+    """``slot_names: item`` names each slot after its item."""
+
+    async def test_file_items_name_slots_without_suffixes(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``s1.fastq.gz`` runs as ``score[s1]`` into ``scored_out/s1``."""
+        del horus_context
+        split = _split_task(tmp_path, ["s1.fastq.gz", "s2.fastq.gz"])
+        map_task = _dropping_map(slot_names="item")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["s1", "s2"]
+        assert (scored / "s1" / "result.txt").read_text() == "s1.fastq.gz"
+        assert {t.id for t in wf.tasks if t.id.startswith("score[")} == {
+            "score[s1]",
+            "score[s2]",
+        }
+
+    @pytest.mark.parametrize(
+        "names", [["a.txt", "a.csv"], ["a.txt", "b c.txt"]]
+    )
+    async def test_clashing_or_invalid_names_fall_back_to_indices(
+        self, tmp_path: Path, horus_context: HorusContext, names: list[str]
+    ) -> None:
+        """One bad name keeps the whole map on indices, with a warning."""
+        split = _split_task(tmp_path, names)
+        map_task = _dropping_map(slot_names="item")
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+        assert any(
+            isinstance(c.args[0], HorusTaskEvent)
+            and c.args[0].level == "WARNING"
+            and "by index" in (c.args[0].message or "")
+            for c in emit.call_args_list
+        )
+
+    async def test_json_list_items_keep_indices(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Values have no name."""
+        del horus_context
+        split = _json_split_task(tmp_path, ["x", "y"])
+        map_task = _map_task(
+            over_artifact=JSONArtifact(
+                id="batches", path=Path("batches_in.json")
+            ),
+            command="echo $batch > $scored/result.txt",
+        )
+        map_task.slot_names = "item"
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+
+        await wf.run(trigger_id="split")
+
+        scored = tmp_path / "scored_out"
+        assert sorted(p.name for p in scored.iterdir()) == ["0", "1"]
+
+    async def test_a_chained_map_keeps_the_names_and_drops_by_name(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """The next map inherits ``a`` and ``c``; dropped ``b`` is gone."""
+        del horus_context
+        wf = _chain(tmp_path, ["a.txt", "b.txt", "c.txt"], slot_names="item")
+        (tmp_path / "batches" / "b.txt").write_text("bad")
+
+        await wf.run(trigger_id="split")
+
+        assert wf.status.value == "completed"
+        reports = tmp_path / "reports_out"
+        assert sorted(p.name for p in reports.iterdir()) == ["a", "c"]
+        assert sorted(
+            t.id for t in wf.tasks if t.id.startswith("report[")
+        ) == ["report[a]", "report[c]"]
+
+    def test_opting_in_changes_the_fingerprint_only_then(self) -> None:
+        """The default leaves existing map caches valid."""
+        over = FolderArtifact(id="batches", path=Path("batches_in"))
+        assert (
+            "slot_names" not in _map_task(over_artifact=over)._config_extra()
+        )
+        named = _map_task(over_artifact=over)
+        named.slot_names = "item"
+        assert named._config_extra()["slot_names"] == "item"
 
 
 # Set while the ready callbacks run, like terraform's provisioning context.

@@ -1248,9 +1248,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         Superseding by id alone never removes a clone the batch no longer
         emits, so a map that shrinks from three items to one would keep
         ``map[1]`` and ``map[2]``. Passing *owner* makes the batch replace the
-        owner's whole previous expansion: every existing ``owner[n]`` clone
-        (and anything nested under one, ``owner[n]/...``) is dropped with its
-        edges, whether or not the batch re-emits it.
+        owner's whole previous expansion: every existing ``owner[<slot>]``
+        clone (and anything nested under one, ``owner[<slot>]/...``) is
+        dropped with its edges, whether or not the batch re-emits it.
 
         Validates, in order: task id uniqueness (kept + new), per-task
         input/output id uniqueness for each new task, root artifact id
@@ -1289,7 +1289,7 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
         # a superseded id is one this batch is about to re-state.
         superseded_tasks = {task.id for task in new_tasks}
         if owner is not None:
-            clone_id = re.compile(rf"{re.escape(owner)}\[\d+\](?:/.*)?")
+            clone_id = re.compile(rf"{re.escape(owner)}\[[^\[\]/]+\](?:/.*)?")
             superseded_tasks |= {
                 t.id for t in self.tasks if clone_id.fullmatch(t.id)
             }
