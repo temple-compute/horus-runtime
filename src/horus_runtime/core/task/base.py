@@ -419,6 +419,12 @@ class BaseTask(AutoRegistry, entry_point="task"):
     first.
     """
 
+    _after_wait: Callable[[], None] | None = PrivateAttr(default=None)
+    """
+    Set by a map on its clones: called when the task waited for room on its
+    machine and is not skipped (the map's sizing warning).
+    """
+
     @property
     def streamed_inputs(self) -> frozenset[str]:
         """

@@ -702,7 +702,7 @@ class MapTask(HorusTask):
             labels = {
                 slot: Path(item.path).name for slot, item in slots.items()
             }
-        self._warn_if_oversized(wf, len(slots))
+        warn = self._sizing_warning(wf, len(slots))
         root = Path(self.target.path_on_target(self.outputs[0]))
         await self.target.mkdir(str(root))
 
@@ -876,6 +876,7 @@ class MapTask(HorusTask):
 
         for clone in clones:
             clone._depth = self._depth  # noqa: SLF001
+            clone._after_wait = warn  # noqa: SLF001
         modes = self._consumer_modes(wf)
         run_clone = partial(
             self._run_item,
@@ -1509,17 +1510,20 @@ class MapTask(HorusTask):
         )
         return None
 
-    def _warn_if_oversized(self, wf: BaseWorkflow, items: int) -> None:
+    def _sizing_warning(
+        self, wf: BaseWorkflow, items: int
+    ) -> Callable[[], None] | None:
         """
-        Warn when the machine fits fewer clones at once than the map would
-        run, so they wait for room instead of running side by side.
+        When the machine fits fewer clones at once than the map would run,
+        a callback that warns once: the first clone that waited for room
+        and runs calls it.
         """
         target = self.target
         capacity = (wf.capacity or {}).get(
             target.location_id
         ) or target.node_capacity()
         if capacity is None or self.resources is None:
-            return
+            return None
         fits = math.inf
         for dim in ("cpus", "gpus", "memory_gb", "vram_gb"):
             need = getattr(self.resources, dim)
@@ -1533,13 +1537,24 @@ class MapTask(HorusTask):
         )
         runs = min(items, cap, target.member_cap or math.inf)
         if fits >= runs:
-            return
+            return None
         ref = target._ref or target.location_id  # noqa: SLF001
-        self._emit_warning(
-            _("Map %(name)s fits %(k)d of %(n)d items at once on %(ref)s.")
-            % {"name": self.name, "k": fits, "n": runs, "ref": ref},
-            {"sizing": {"fits": fits, "items": runs, "target": ref}},
-        )
+        warned = False
+
+        def warn() -> None:
+            nonlocal warned
+            if not warned:
+                warned = True
+                self._emit_warning(
+                    _(
+                        "Map %(name)s fits %(k)d of %(n)d items at once on "
+                        "%(ref)s."
+                    )
+                    % {"name": self.name, "k": fits, "n": runs, "ref": ref},
+                    {"sizing": {"fits": fits, "items": runs, "target": ref}},
+                )
+
+        return warn
 
     def _emit_warning(
         self, message: str, data: dict[str, Any] | None = None

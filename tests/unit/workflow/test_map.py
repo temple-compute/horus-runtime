@@ -2839,20 +2839,23 @@ class TestSizingWarning:
         tmp_path: Path,
         horus_context: HorusContext,
         memory_gb: int,
-        names: list[str],
+        *runs: list[str],
     ) -> list[HorusTaskEvent]:
-        split = _split_task(tmp_path, names)
-        map_task = _dropping_map()
-        map_task.resources = ResourceRequest(memory_gb=memory_gb)
-        wf = _wire(tmp_path, split=split, map_task=map_task)
-        wf.capacity = {
-            map_task.target.location_id: ResourceCapacity(memory_gb=64)
-        }
-        with patch.object(
-            horus_context.bus, "emit", wraps=horus_context.bus.emit
-        ) as emit:
-            await wf.run(trigger_id="split")
-        assert wf.status.value == "completed"
+        """The sizing warnings of the last run; one run per item list."""
+        for names in runs:
+            shutil.rmtree(tmp_path / "batches", ignore_errors=True)
+            split = _split_task(tmp_path, names)
+            map_task = _dropping_map()
+            map_task.resources = ResourceRequest(memory_gb=memory_gb)
+            wf = _wire(tmp_path, split=split, map_task=map_task)
+            wf.capacity = {
+                map_task.target.location_id: ResourceCapacity(memory_gb=64)
+            }
+            with patch.object(
+                horus_context.bus, "emit", wraps=horus_context.bus.emit
+            ) as emit:
+                await wf.run(trigger_id="split")
+            assert wf.status.value == "completed"
         return [
             c.args[0]
             for c in emit.call_args_list
@@ -2878,6 +2881,15 @@ class TestSizingWarning:
         """Three 16 GB items fit at once."""
         assert not await self._warnings(
             tmp_path, horus_context, 16, ["a.txt", "b.txt", "c.txt"]
+        )
+
+    async def test_a_rerun_whose_clones_all_skip_does_not_warn(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """``d`` is gone, so the map runs again; every clone skips."""
+        names = ["a.txt", "b.txt", "c.txt"]
+        assert not await self._warnings(
+            tmp_path, horus_context, 56, [*names, "d.txt"], names
         )
 
 

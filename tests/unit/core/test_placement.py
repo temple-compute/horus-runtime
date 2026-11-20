@@ -274,14 +274,14 @@ class TestPlacementOnWait:
             ({"cpus": 2, "memory_gb": 56}, {"cpus": 6, "memory_gb": 8})
         ]
         await manager.release("loc", ResourceRequest(cpus=2, memory_gb=56))
-        await asyncio.wait_for(waiter, timeout=1)
+        assert await asyncio.wait_for(waiter, timeout=1)
         assert len(calls) == 1
 
     async def test_not_called_when_it_fits(self) -> None:
         """A request granted at once reports nothing."""
         manager = PlacementManager({"loc": ResourceCapacity(cpus=2)})
         calls: list[object] = []
-        await manager.acquire(
+        assert not await manager.acquire(
             "t",
             "loc",
             ResourceRequest(cpus=2),

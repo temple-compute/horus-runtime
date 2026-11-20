@@ -330,7 +330,7 @@ async def _execute_on_target(
     # another map's ready work could use.
     target = await pool.acquire(declared_target, gated=gated)
     try:
-        await placement.acquire(
+        waited = await placement.acquire(
             task.name,
             location_id,
             resources,
@@ -380,6 +380,7 @@ async def _execute_on_target(
                             target,
                             source_map,
                             input_digests,
+                            waited=waited,
                         ),
                     )
                     break
@@ -529,8 +530,13 @@ async def _skip_or_run(
     target: BaseTarget,
     source_map: dict[tuple[str, str], EdgeSource],
     input_digests: "_Once",
+    *,
+    waited: bool = False,
 ) -> None:
-    """Skip *task* if already complete, else transfer and run it."""
+    """
+    Skip *task* if already complete, else transfer and run it. *waited*:
+    placement made it wait for room.
+    """
     # Its completion check, input digests and staging serve *task* too.
     with serving_task(task.id):
         # A task already complete is skipped before any of its inputs is
@@ -542,6 +548,8 @@ async def _skip_or_run(
             workflow.adopt_values(task, source_map)
             task.mark_skipped_complete()
             return
+        if waited and task._after_wait is not None:  # noqa: SLF001
+            task._after_wait()  # noqa: SLF001
         await _transfer_and_run(
             workflow, task, target, source_map, input_digests
         )
