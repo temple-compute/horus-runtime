@@ -2757,7 +2757,8 @@ class TestItemSlotNames:
         }
 
     @pytest.mark.parametrize(
-        "names", [["a.txt", "a.csv"], ["a.txt", "b c.txt"]]
+        "names",
+        [["a.txt", "a.csv"], ["a.txt", "b c.txt"], ["S1.txt", "s1.txt"]],
     )
     async def test_clashing_or_invalid_names_fall_back_to_indices(
         self, tmp_path: Path, horus_context: HorusContext, names: list[str]

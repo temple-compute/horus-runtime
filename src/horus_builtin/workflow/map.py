@@ -1484,7 +1484,7 @@ class MapTask(HorusTask):
     def _item_slot_names(self, items: list[BaseArtifact]) -> list[str] | None:
         """
         One slot name per item when :attr:`slot_names` is ``"item"`` and
-        every name is valid and unique; else ``None`` (indices).
+        every name is valid and unique, ignoring case; else ``None`` (indices).
         """
         if self.slot_names != "item" or not isinstance(
             self._over_artifact, FolderArtifact
@@ -1496,7 +1496,7 @@ class MapTask(HorusTask):
             else Path(item.path).name.split(".", 1)[0]
             for item in items
         ]
-        if len(set(names)) == len(names) and all(
+        if len({n.casefold() for n in names}) == len(names) and all(
             _SLOT_NAME.fullmatch(name) for name in names
         ):
             return names
