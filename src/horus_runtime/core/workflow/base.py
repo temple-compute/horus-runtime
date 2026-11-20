@@ -1297,7 +1297,9 @@ class BaseWorkflow(AutoRegistry, entry_point="workflow"):
                 for e in self.edges
                 if e.source == owner and e.target_input is None
             }
-            clone_id = re.compile(rf"({re.escape(owner)}\[[^\[\]/]+\])(?:/.*)?")
+            clone_id = re.compile(
+                rf"({re.escape(owner)}\[[^\[\]/]+\])(?:/.*)?"
+            )
             superseded_tasks |= {
                 t.id
                 for t in self.tasks

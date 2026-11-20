@@ -326,8 +326,9 @@ class MapTask(HorusTask):
     item numbers. ``"item"``: the item's name, a file's without its
     suffixes (``s1.fastq.gz`` is ``s1``), when every name is unique and
     matches ``[A-Za-z0-9][A-Za-z0-9._-]{0,63}``; else indices, with a
-    warning. Only for a folder ``over``; over another map's output the
-    slots keep that map's names.
+    warning. Only for a folder ``over``; a map over another map's output
+    keeps that map's names and cannot set it. Maps paired by ``zip`` must
+    name their slots alike.
     """
 
     _dropped_slots: list[str] = PrivateAttr(default_factory=list)
