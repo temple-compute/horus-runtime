@@ -2783,6 +2783,57 @@ class TestItemSlotNames:
         assert named._config_extra()["slot_names"] == "item"
 
 
+@pytest.mark.unit
+class TestSizingWarning:
+    """A map warns when its machine fits fewer items than it would run."""
+
+    async def _warnings(
+        self,
+        tmp_path: Path,
+        horus_context: HorusContext,
+        memory_gb: int,
+        names: list[str],
+    ) -> list[HorusTaskEvent]:
+        split = _split_task(tmp_path, names)
+        map_task = _dropping_map()
+        map_task.resources = ResourceRequest(memory_gb=memory_gb)
+        wf = _wire(tmp_path, split=split, map_task=map_task)
+        wf.capacity = {
+            map_task.target.location_id: ResourceCapacity(memory_gb=64)
+        }
+        with patch.object(
+            horus_context.bus, "emit", wraps=horus_context.bus.emit
+        ) as emit:
+            await wf.run(trigger_id="split")
+        assert wf.status.value == "completed"
+        return [
+            c.args[0]
+            for c in emit.call_args_list
+            if isinstance(c.args[0], HorusTaskEvent)
+            and "sizing" in c.args[0].data
+        ]
+
+    async def test_big_items_warn_how_many_fit(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """56 GB items on a 64 GB machine: one at a time."""
+        (event,) = await self._warnings(
+            tmp_path, horus_context, 56, ["a.txt", "b.txt", "c.txt"]
+        )
+        assert event.level == "WARNING"
+        assert event.data["sizing"]["fits"] == 1
+        assert event.data["sizing"]["items"] == 3
+        assert (event.message or "").startswith("Map score fits 1 of 3 ")
+
+    async def test_items_that_all_fit_do_not_warn(
+        self, tmp_path: Path, horus_context: HorusContext
+    ) -> None:
+        """Three 16 GB items fit at once."""
+        assert not await self._warnings(
+            tmp_path, horus_context, 16, ["a.txt", "b.txt", "c.txt"]
+        )
+
+
 # Set while the ready callbacks run, like terraform's provisioning context.
 _READY: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_READY", default=False

@@ -26,6 +26,7 @@ output.
 import asyncio
 import contextvars
 import json
+import math
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
@@ -49,7 +50,11 @@ from horus_builtin.task.horus_task import (
     HorusTask,
     TaskFingerprint,
 )
-from horus_builtin.workflow.scheduler import TargetPool, execute_task
+from horus_builtin.workflow.scheduler import (
+    DEFAULT_MAX_CONCURRENCY,
+    TargetPool,
+    execute_task,
+)
 from horus_runtime.context import HorusContext
 from horus_runtime.core.artifact.base import BaseArtifact
 from horus_runtime.core.artifact.iterable import IterableArtifact
@@ -696,6 +701,7 @@ class MapTask(HorusTask):
             labels = {
                 slot: Path(item.path).name for slot, item in slots.items()
             }
+        self._warn_if_oversized(wf, len(slots))
         root = Path(self.target.path_on_target(self.outputs[0]))
         await self.target.mkdir(str(root))
 
@@ -1501,6 +1507,38 @@ class MapTask(HorusTask):
             % {"name": self.name}
         )
         return None
+
+    def _warn_if_oversized(self, wf: BaseWorkflow, items: int) -> None:
+        """
+        Warn when the machine fits fewer clones at once than the map would
+        run, so they wait for room instead of running side by side.
+        """
+        target = self.target
+        capacity = (wf.capacity or {}).get(
+            target.location_id
+        ) or target.node_capacity()
+        if capacity is None or self.resources is None:
+            return
+        fits = math.inf
+        for dim in ("cpus", "gpus", "memory_gb", "vram_gb"):
+            need = getattr(self.resources, dim)
+            have = getattr(capacity, dim)
+            if need and have is not None:
+                fits = min(fits, have // need)
+        cap = (
+            DEFAULT_MAX_CONCURRENCY
+            if self.max_concurrency is None
+            else self.max_concurrency or math.inf
+        )
+        runs = min(items, cap, target.member_cap or math.inf)
+        if fits >= runs:
+            return
+        ref = target._ref or target.location_id  # noqa: SLF001
+        self._emit_warning(
+            _("Map %(name)s fits %(k)d of %(n)d items at once on %(ref)s.")
+            % {"name": self.name, "k": fits, "n": runs, "ref": ref},
+            {"sizing": {"fits": fits, "items": runs, "target": ref}},
+        )
 
     def _emit_warning(
         self, message: str, data: dict[str, Any] | None = None
